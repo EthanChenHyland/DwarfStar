@@ -1,0 +1,18 @@
+{
+  "name": "dwarfstar-agent-tools",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Workspace-confined DwarfStar development and browser utilities",
+  "scripts": {
+    "validate": "node tests/validate.mjs",
+    "capabilities": "node bin/capabilities.mjs"
+  },
+  "engines": {
+    "node": ">=22.15"
+  },
+  "dependencies": {
+    "playwright": "1.64.1",
+    "puppeteer": "25.14.0"
+  }
+}
