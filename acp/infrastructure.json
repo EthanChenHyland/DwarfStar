@@ -1,0 +1,8 @@
+{
+  "recovery_enabled": true,
+  "telemetry_enabled": true,
+  "tool_result_hygiene_enabled": true,
+  "finish_nudge_enabled": true,
+  "timing_summary_enabled": true,
+  "benchmark_observability_enabled": true
+}
