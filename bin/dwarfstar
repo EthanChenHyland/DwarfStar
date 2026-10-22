@@ -1,0 +1,2 @@
+#!/bin/sh
+exec $LOCAL_AI_SETUP/v6/.venv/bin/python -B $LOCAL_AI_SETUP/challengers/dwarfstar-paperniuk/task_infrastructure.py "$@"
