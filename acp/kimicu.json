@@ -1,0 +1,11 @@
+{
+  "enabled": true,
+  "name": "kimicu",
+  "command": "/Applications/KimiCU.app/Contents/MacOS/kimi-cu",
+  "args": [
+    "mcp"
+  ],
+  "namespace": "mcp__kimicu_",
+  "transport": "stdio",
+  "description": "Direct local macOS computer use; independent of Pi. Tool definitions come from live MCP discovery."
+}
