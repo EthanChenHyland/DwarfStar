@@ -4,11 +4,11 @@ import {dlopen,FFIType,ptr} from 'bun:ffi';
 import {Latency,RECOVERY,INFRA} from './latency.ts';
 import {API,guardedStream} from './transport.ts';
 import {Lifecycle,infrastructureSettings,observe,activeProfile} from './lifecycle.ts';
-const ROOT='$LOCAL_AI_SETUP/challengers/dwarfstar-paperniuk';
+const ROOT='$LOCAL_AI_SETUP/challengers/dwarfstar-swift15';
 export function installInfrastructure(pi:any,options:any={}){
  const settings=infrastructureSettings(options.settings),l=new Latency({...options,enabled:settings.telemetry_enabled});
  const core=new Lifecycle((name,data)=>observe(()=>l.event(name,data)));(l as any).control=core;(l as any).settings=settings;
- const source=options.provider??Bun.YAML.parse(readFileSync(ROOT+'/acp/models.yml','utf8')).providers['dwarfstar-local'];
+ const source=options.provider??Bun.YAML.parse(readFileSync(ROOT+'/'+(activeProfile().provider_config??'acp/models.yml'),'utf8')).providers['dwarfstar-local'];
  pi.registerProvider('dwarfstar-local',{...source,authHeader:false,apiKey:'none',api:API,models:source.models.map((m:any)=>({...m,api:API})),streamSimple:(model:any,context:any,opts:any)=>guardedStream(model,context,opts,l,{...options.transport,lifecycle:core,recoveryEnabled:settings.recovery_enabled})});
  let ctx:any,recoveryUsed=false,queued=false,recovering=false,freshUser=false,recoveryCause:any=null;
  const on=(name:string,fn:any)=>pi.on(name,(e:any,c:any)=>{ctx=c;const failed=()=>observe(()=>l.event('collection_error',{component:name,control_action:'none'}));try{const v=fn(e,c);return v?.catch?v.catch(failed):v;}catch{failed();}});
