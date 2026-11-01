@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "purpose": "Read-only conversation lookup; no active or hidden agent registrations",
-  "active_profile": "DwarfStar Scope Coding 128K",
+  "active_profile": "DwarfStar Swift 1.5 128K",
   "retired_agent_ids": {
     "DwarfStar Coding 128K": {
       "read_only": true,
@@ -35,6 +35,7 @@
     "scope-v1-5-finish": "DwarfStar Scope v1.5 Finish Coding 128K",
     "scope-v1-6": "DwarfStar Scope v1.6 Coding 128K",
     "scope-v2": "DwarfStar Scope v2 Coding 128K",
-    "sandbox": "DwarfStar Sandbox 128K"
+    "sandbox": "DwarfStar Sandbox 128K",
+    "swift15": "DwarfStar Swift 1.5 128K"
   }
 }
