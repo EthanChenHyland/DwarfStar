@@ -24,7 +24,7 @@ def owned():
     return {**row,**current}
 def health():
     try:
-        with urllib.request.urlopen('http://127.0.0.1:8030/v1/models',timeout=1) as stream:value=json.load(stream)
+        with urllib.request.urlopen('http://127.0.0.1:8031/v1/models',timeout=1) as stream:value=json.load(stream)
         item=next(v for v in value['data'] if v['id']=='qwen3.8-flash-next')
         return {'ok':item['context_length']==131072 and item['top_provider']['max_completion_tokens']==81920,'model':item}
     except Exception:return {'ok':False}
@@ -40,12 +40,13 @@ def exclude_other_models():
         exe=cmd.split(None,1)[0]
         if (Path(exe).name=='moespresso' and ' serve ' in cmd) or Path(exe).name=='llama-server' or (Path(exe).name.startswith('python') and ' -m mtplx.server.openai ' in cmd) or Path(exe).name=='ds4-server':
             raise RuntimeError(f'Another heavyweight runtime is running (PID {pid}). Stop it in its own application first; DwarfStar changed nothing.')
-    for port in (8000,8010,8020,8021,8030):
+    for port in (8000,8010,8020,8021,8030,8031):
         if occupied(port):raise RuntimeError(f'Local port {port} is occupied. No process was stopped.')
 def pinned():
-    c=config();head=run(['/usr/bin/git','-C',str(ROOT),'rev-parse','HEAD']).stdout.strip()
+    c=config();head=run(['/usr/bin/git','-C',str(ROOT/'runtime-src'),'rev-parse','HEAD']).stdout.strip()
     if head!=c['source']['commit']:raise RuntimeError('Source revision changed; refusing a moving/unreviewed build.')
-    if run(['/usr/bin/git','-C',str(ROOT),'diff','--quiet','HEAD','--']).returncode:raise RuntimeError('Tracked native source/shaders changed; review/rebuild before starting.')
+    if run(['/usr/bin/git','-C',str(ROOT/'runtime-src'),'diff','--quiet','HEAD','--','.',':(exclude)ds4.c']).returncode:raise RuntimeError('Tracked native source/shaders changed; review/rebuild before starting.')
+    if hashlib.sha256((ROOT/'runtime-src/ds4.c').read_bytes()).hexdigest()!=c['tokenizer_adapter_sha256']:raise RuntimeError('Reviewed Swift tokenizer adapter changed.')
     if hashlib.sha256((ROOT/'ds4-server').read_bytes()).hexdigest()!=c['server_sha256']:raise RuntimeError('DwarfStar binary changed; rebuild/review before starting.')
     assets=read(ROOT/'installation-evidence/assets.json')
     if not assets or not assets.get('verified'):raise RuntimeError('Complete verified DwarfStar assets are required.')
@@ -80,7 +81,7 @@ def start():
     while time.monotonic()<deadline:
         if p.poll() is not None:
             tail=log.read_text(errors='replace')[-2200:]
-            raise RuntimeError(f'DwarfStar startup exited {p.returncode}. Endpoint 127.0.0.1:8030.\n{tail}\nLog: {log}')
+            raise RuntimeError(f'DwarfStar startup exited {p.returncode}. Endpoint 127.0.0.1:8031.\n{tail}\nLog: {log}')
         current=identity(p.pid)
         if current and current['command'].startswith(str(ROOT/'ds4-server')+' '):
             ledger={**current,'log':str(log),'started_at':started_at}
@@ -142,12 +143,12 @@ def stop():
     row=owned()
     if not row:return {'ok':True,'already_offline':True}
     if any(r.get('active') or r.get('tool_execution_active') for r in requests(row)):raise RuntimeError('DwarfStar request/tool is active; finish/cancel it first. Nothing stopped.')
-    connections=run(['/usr/sbin/lsof','-nP','-a','-p',str(row['pid']),'-iTCP:8030','-sTCP:ESTABLISHED'])
+    connections=run(['/usr/sbin/lsof','-nP','-a','-p',str(row['pid']),'-iTCP:8031','-sTCP:ESTABLISHED'])
     if connections.returncode not in (0,1):raise RuntimeError('Cannot verify client connections; refusing stop.')
     if connections.returncode==0 and connections.stdout.strip():raise RuntimeError('A client is connected. Finish the turn before stopping.')
     owned();os.kill(row['pid'],signal.SIGTERM);deadline=time.monotonic()+60
     while time.monotonic()<deadline and identity(row['pid']):time.sleep(.2)
-    if identity(row['pid']) or occupied(8030):raise RuntimeError('Shutdown pending; no forced kill attempted.')
+    if identity(row['pid']) or occupied(8031):raise RuntimeError('Shutdown pending; no forced kill attempted.')
     save(STATE/'last-stopped.json',{**row,'stopped_at':time.time()});(STATE/'server.json').unlink()
     return {'ok':True,'stopped':row['pid']}
 def launch_workspace(kind,folder=None):
