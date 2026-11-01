@@ -7,7 +7,7 @@ import {join} from 'node:path';
 import {connectToServer,listTools,disconnectServer} from '$HOME/.bun/install/global/node_modules/@oh-my-pi/pi-coding-agent/src/mcp/client.ts';
 import {MCPTool} from '$HOME/.bun/install/global/node_modules/@oh-my-pi/pi-coding-agent/src/mcp/tool-bridge.ts';
 import {imageFacts} from './image-content.ts';
-const ROOT='$LOCAL_AI_SETUP/challengers/dwarfstar-paperniuk';
+const ROOT='$LOCAL_AI_SETUP/challengers/dwarfstar-swift15';
 const PY='$LOCAL_AI_SETUP/v6/.venv/bin/python';
 const STATENAME='vision-kimicu.json';
 function scalar(event:string,facts:any={}){try{const path=process.env.DWARFSTAR_LATENCY_FILE;if(path){appendFileSync(path,JSON.stringify({schema:1,event,timestamp:Date.now()/1000,...facts})+'\n',{mode:0o600});}}catch{}}

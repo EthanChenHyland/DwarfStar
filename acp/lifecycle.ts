@@ -1,7 +1,7 @@
 // Execution facts are independent of the optional timing collector. No watchdogs.
 import {readFileSync,lstatSync,realpathSync} from 'node:fs';
 import {resolve,relative,dirname,isAbsolute} from 'node:path';
-const ROOT='$LOCAL_AI_SETUP/challengers/dwarfstar-paperniuk';
+const ROOT='$LOCAL_AI_SETUP/challengers/dwarfstar-swift15';
 export function activeProfile(){
  const registry=JSON.parse(readFileSync(ROOT+'/acp/profiles.json','utf8')),id=process.env.DWARFSTAR_PROFILE_ID??registry.default;
  const profile=registry.profiles[id];if(!profile)throw Error('Unknown DwarfStar profile');return {id,...profile};

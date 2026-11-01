@@ -5,7 +5,7 @@ import {infrastructureSettings} from './lifecycle.ts';
 export const contentBytes=(content:any[])=>content.reduce((n,b)=>n+(b.type==='text'?Buffer.byteLength(b.text??''):b.type==='image'?Buffer.byteLength(b.data??''):0),0);
 export function browserCommand(command:string){
  const binary=command.trim().split(/\s+/,1)[0];
- if(!['dwarf-browser','$LOCAL_AI_SETUP/challengers/dwarfstar-paperniuk/agent-tools/bin/dwarf-browser'].includes(binary))return null;
+ if(!['dwarf-browser','$LOCAL_AI_SETUP/challengers/dwarfstar-swift15/agent-tools/bin/dwarf-browser'].includes(binary))return null;
  const m=command.trim().match(/^(?:dwarf-browser|\/[^\s;|&`$<>]*\/dwarf-browser)\s+(?:(--full)\s+)?(?:"([^"\n$`]+)"|'([^'\n]+)'|([^\s;&|`$<>]+))$/);
  return m?{full:!!m[1],input:m[2]??m[3]??m[4]}:null;
 }

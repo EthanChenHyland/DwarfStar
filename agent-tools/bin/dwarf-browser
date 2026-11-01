@@ -1,2 +1,2 @@
 #!/bin/sh
-exec /opt/homebrew/bin/node $LOCAL_AI_SETUP/challengers/dwarfstar-paperniuk/agent-tools/bin/browser.mjs "$@"
+exec /opt/homebrew/bin/node $LOCAL_AI_SETUP/challengers/dwarfstar-swift15/agent-tools/bin/browser.mjs "$@"
