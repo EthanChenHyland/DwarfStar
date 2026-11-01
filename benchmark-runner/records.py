@@ -7,7 +7,7 @@ import sys
 sys.path.insert(0,str(ROOT))
 from approval_policy import mode as approval_mode, counters as permission_counters
 STORE = ROOT / 'benchmarks'
-WORKSPACES = Path.home() / 'Library/Application Support/DwarfStar Workstation/benchmarks/workspaces'
+WORKSPACES = ROOT / 'scratch/benchmarks/workspaces'
 NE = 'Not exposed'
 ORDER = ['vanilla', 'scope-vanilla', 'scope']
 TERMINAL = {'COMPLETE', 'FAILED', 'CANCELLED'}
