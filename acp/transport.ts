@@ -1,3 +1,4 @@
+import {appendFileSync} from "node:fs";
 // Request-local transport facts; optional telemetry never decides execution.
 import {streamOpenAICompletions} from '$HOME/.bun/install/global/node_modules/@oh-my-pi/pi-ai/src/providers/register-builtins.ts';
 import {AssistantMessageEventStream} from '$HOME/.bun/install/global/node_modules/@oh-my-pi/pi-ai/src/utils/event-stream.ts';
@@ -41,6 +42,20 @@ export function guardedStream(model:any,context:any,options:any={},latency:any,d
  const record:any=observe(()=>latency.start(),{start:performance.now()/1000});observe(()=>latency.nextRequest(record));
  const event=(type:string,data:any={})=>observe(()=>latency.event(type,{...core?.facts(request),...data}));
  const controlledFetch=async(input:any,init:any)=>{
+  // Record request configuration without altering messages, payload, or response.
+  try {
+   const receipt=process.env.DWARFSTAR_MEDIUM_WIRE;
+   if(receipt && typeof init?.body==='string') {
+    const payload=JSON.parse(init.body);
+    if(payload.model==='qwen3.8-flash-next') appendFileSync(receipt,JSON.stringify({
+     model:payload.model,reasoning_effort:payload.reasoning_effort,chat_template_kwargs:payload.chat_template_kwargs,
+     temperature:payload.temperature,top_p:payload.top_p,top_k:payload.top_k,min_p:payload.min_p,
+     max_tokens:payload.max_tokens,max_completion_tokens:payload.max_completion_tokens,
+     tool_count:payload.tools?.length??0,stream:payload.stream
+    })+'\n');
+   }
+  } catch {}
+
   let response:Response;
   try{response=await originalFetch(input,init);}catch(error){if(options.signal?.aborted)throw error;wire.fail('MODEL_STREAM_INTERRUPTED','transport_exception',error);if(recoveryEnabled)return holdResponse();throw error;}
   record.headers=observe(()=>latency.clock(),performance.now()/1000);wire.status=response.status;event('response_headers',{status:response.status,request_to_headers_s:record.headers-record.start});
