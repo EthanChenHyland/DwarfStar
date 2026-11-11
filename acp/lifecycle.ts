@@ -4,7 +4,8 @@ import {resolve,relative,dirname,isAbsolute} from 'node:path';
 const ROOT='$LOCAL_AI_SETUP/challengers/dwarfstar-swift15';
 export function activeProfile(){
  const registry=JSON.parse(readFileSync(ROOT+'/acp/profiles.json','utf8')),id=process.env.DWARFSTAR_PROFILE_ID??registry.default;
- const profile=registry.profiles[id];if(!profile)throw Error('Unknown DwarfStar profile');return {id,...profile};
+ if(id!=="swift15") throw Error("MEDIUM is Swift-only");
+ const profile={...registry.profiles[id],...JSON.parse(readFileSync('$LOCAL_AI_SETUP/challengers/dwarfstar-swift15/profiles/medium/effective-profile.json',"utf8"))};if(!profile)throw Error('Unknown DwarfStar profile');return {id,...profile};
 }
 export function infrastructureSettings(overrides:any={}){
  let value:any={recovery_enabled:true,telemetry_enabled:true};
