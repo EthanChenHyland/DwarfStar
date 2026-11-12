@@ -5,8 +5,8 @@ import {restoreShellOutput,browserCommand} from '../acp/result-hygiene.ts';
 import {resolve} from 'node:path';
 import {forTextRedaction,restoreImageContent} from '../acp/image-content.ts';
 import {infrastructureSettings,activeProfile} from '../acp/lifecycle.ts';
-const ROOT='$LOCAL_AI_SETUP/challengers/dwarfstar-swift15/agent-tools';
-const PY='$LOCAL_AI_SETUP/v6/.venv/bin/python';
+const ROOT='$LOCAL_AI_SETUP/challengers/dwarfstar-cyber/agent-tools';
+const PY='$LOCAL_AI_SETUP/challengers/dwarfstar-cyber/.venv/bin/python';
 // Reuse the shared local policy for approvals and shell enforcement. Missing
 // policy facts require confirmation; never fall back to unconditional approval.
 export function permission(command:string){

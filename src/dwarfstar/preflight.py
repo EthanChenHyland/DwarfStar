@@ -77,10 +77,10 @@ def check(workspace,profile='scope',require_model=True,browser_required=False,in
         checks.append({'name':name,'status':'Ready' if ok else 'Failed' if required else 'Warning','required':required,'detail':detail})
     c=runtime.config();profiles=registry()['profiles']
     add('Profile',lambda:profile in profiles)
-    add('Model',lambda:{'ok':bool(runtime.owned()) and runtime.health()['ok'],'detail':'Expected owned qwen3.8-flash-next endpoint 127.0.0.1:8031, 131072/81920; offline/mismatch blocks admission'},require_model)
+    add('Model',lambda:{'ok':bool(runtime.owned()) and runtime.health()['ok'],'detail':'Expected owned '+c['model_id']+' endpoint '+c['endpoint']+', '+str(c['context'])+'/'+str(c['max_output'])+'; offline/mismatch blocks admission'},require_model)
     add('Model path',lambda:all(Path(p).is_file() for p in [c['argv'][c['argv'].index('-m')+1],*c['environment'].values()] if '/' in str(p) and str(p).endswith('.gguf')))
     add('Runtime',lambda:Path(c['argv'][0]).is_file() and c['runtime']=='Paperniuk DwarfStar')
-    add('Context/output',lambda:c['context']==131072 and c['max_output']==81920)
+    add('Context/output',lambda:4096<=c['context']<=262144 and 0<c['max_output']<c['context'])
     add('ACP',lambda:Path.home().joinpath('.bun/bin/omp').exists() and Path.home().joinpath('.bun/bin/bun').exists())
     def permission():
         v=read(ROOT/'acp/permission-runtime.json');return v['policy']=='dwarfstar-approval-v2' and hashlib.sha256(Path(v['cli']).read_bytes()).hexdigest()==v['cli_sha256']

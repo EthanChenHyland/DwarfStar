@@ -2,7 +2,7 @@ import {activeProfile} from './lifecycle.ts';
 // Bounded local reads only. No subprocesses, network, model/tokenizer or cache writes.
 import {readFileSync,statSync,openSync,readSync,closeSync} from 'node:fs';
 import {createHash} from 'node:crypto';
-export const ROOT='$LOCAL_AI_SETUP/challengers/dwarfstar-swift15';
+export const ROOT='$LOCAL_AI_SETUP/challengers/dwarfstar-cyber';
 export const NE='Not exposed';
 const canonical=(x:any):any=>Array.isArray(x)?x.map(canonical):x&&typeof x==='object'?Object.fromEntries(Object.keys(x).sort().filter(k=>x[k]!==undefined).map(k=>[k,canonical(x[k])])):x;
 export const hash=(x:any)=>createHash('sha256').update(typeof x==='string'||Buffer.isBuffer(x)?x:JSON.stringify(canonical(x))).digest('hex');

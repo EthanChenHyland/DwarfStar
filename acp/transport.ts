@@ -44,7 +44,7 @@ export function guardedStream(model:any,context:any,options:any={},latency:any,d
  const controlledFetch=async(input:any,init:any)=>{
   // Record request configuration without altering messages, payload, or response.
   try {
-   const receipt=process.env.DWARFSTAR_MEDIUM_WIRE;
+   const receipt=process.env.DWARFSTAR_WIRE_RECEIPT;
    if(receipt && typeof init?.body==='string') {
     const payload=JSON.parse(init.body);
     if(payload.model==='qwen3.8-flash-next') appendFileSync(receipt,JSON.stringify({

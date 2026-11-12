@@ -25,7 +25,7 @@ def browser_target(workspace, task_id=None, artifact=None):
             # server launch, inference request or arbitrary localhost guessing.
             store.observe_ports(task_id);row=store.get(task_id)
             candidates=[p for p in row.get('ports',[]) if not p.get('released_at') and matches(p.get('process'))
-                        and p.get('port') not in (8000,8010,8020,8021,8030)]
+                        and p.get('port') not in (8000,8010,8020,8021,8030,8031,8032)]
             # 8000 is a legitimate task development port too; the model endpoints
             # above are excluded, but an explicitly owned 8000 listener is safe.
             candidates += [p for p in row.get('ports',[]) if p.get('port')==8000 and not p.get('released_at') and matches(p.get('process'))]

@@ -1,4 +1,4 @@
-#!$LOCAL_AI_SETUP/v6/.venv/bin/python
+#!$LOCAL_AI_SETUP/challengers/dwarfstar-cyber/.venv/bin/python
 """Independent pinned DwarfStar controller. Never operates another runtime."""
 from pathlib import Path
 import argparse,datetime,fcntl,hashlib,json,os,re,signal,socket,subprocess,sys,time,urllib.request,shutil,uuid
@@ -24,9 +24,10 @@ def owned():
     return {**row,**current}
 def health():
     try:
-        with urllib.request.urlopen('http://127.0.0.1:8031/v1/models',timeout=1) as stream:value=json.load(stream)
-        item=next(v for v in value['data'] if v['id']=='qwen3.8-flash-next')
-        return {'ok':item['context_length']==131072 and item['top_provider']['max_completion_tokens']==81920,'model':item}
+        c=config()
+        with urllib.request.urlopen(c['endpoint']+'/models',timeout=1) as stream:value=json.load(stream)
+        item=next(v for v in value['data'] if v['id']==c['model_id'])
+        return {'ok':item['context_length']==c['context'] and item['top_provider']['max_completion_tokens']==c['max_output'],'model':item}
     except Exception:return {'ok':False}
 def occupied(port):
     with socket.socket() as s:s.settimeout(.15);return s.connect_ex(('127.0.0.1',port))==0
@@ -39,21 +40,28 @@ def exclude_other_models():
         if pid==os.getpid():continue
         exe=cmd.split(None,1)[0]
         if (Path(exe).name=='moespresso' and ' serve ' in cmd) or Path(exe).name=='llama-server' or (Path(exe).name.startswith('python') and ' -m mtplx.server.openai ' in cmd) or Path(exe).name=='ds4-server':
-            raise RuntimeError(f'Another heavyweight runtime is running (PID {pid}). Stop it in its own application first; DwarfStar changed nothing.')
-    for port in (8000,8010,8020,8021,8030,8031):
+            raise RuntimeError(f'Another heavyweight runtime is running (PID {pid}). Stop it in its own application first; DwarfStar Cyber changed nothing.')
+    for port in (8000,8010,8020,8021,8030,8031,8032):
         if occupied(port):raise RuntimeError(f'Local port {port} is occupied. No process was stopped.')
+def model_files(c):
+    return {'main':c['argv'][c['argv'].index('-m')+1],'ngram':c['environment']['DS4_QWEN_NGRAM_GGUF'],'mtp':c['environment']['DS4_QWEN_MTP_GGUF'],'vision':c['argv'][c['argv'].index('--vision')+1]}
 def pinned():
-    c=config();head=run(['/usr/bin/git','-C',str(ROOT/'runtime-src'),'rev-parse','HEAD']).stdout.strip()
-    if head!=c['source']['commit']:raise RuntimeError('Source revision changed; refusing a moving/unreviewed build.')
-    if run(['/usr/bin/git','-C',str(ROOT/'runtime-src'),'diff','--quiet','HEAD','--','.',':(exclude)ds4.c']).returncode:raise RuntimeError('Tracked native source/shaders changed; review/rebuild before starting.')
-    if hashlib.sha256((ROOT/'runtime-src/ds4.c').read_bytes()).hexdigest()!=c['tokenizer_adapter_sha256']:raise RuntimeError('Reviewed Swift tokenizer adapter changed.')
+    c=config()
+    if c.get('unset_fields'):raise RuntimeError('DwarfStar Cyber is not configured yet ('+', '.join(c['unset_fields'])+'); set them with tools/installation/configure_cyber.py. Nothing was started.')
+    missing=[k+': '+p for k,p in model_files(c).items() if not Path(p).is_file()]
+    if missing:raise RuntimeError('DwarfStar Cyber model files are missing; nothing was started: '+'; '.join(missing))
+    sys.path.insert(0,str(ROOT/'tools/installation'));import configure_cyber
+    if c['argv']!=configure_cyber.argv_for(c) or c['environment']!=configure_cyber.environment_for(c):raise RuntimeError('runtime.json argv/environment differ from its own fields; rerun configure_cyber.py.')
     if hashlib.sha256((ROOT/'ds4-server').read_bytes()).hexdigest()!=c['server_sha256']:raise RuntimeError('DwarfStar binary changed; rebuild/review before starting.')
-    assets=read(ROOT/'installation-evidence/assets.json')
-    if not assets or not assets.get('verified'):raise RuntimeError('Complete verified DwarfStar assets are required.')
+    shaders={p.name for p in (ROOT/'metal').iterdir()}
+    if shaders!=set(c['shader_sha256']) or any(hashlib.sha256((ROOT/'metal'/n).read_bytes()).hexdigest()!=h for n,h in c['shader_sha256'].items()):raise RuntimeError('Shader sources changed; review before starting.')
+    assets=read(ROOT/'manifests/installation/assets.json')
+    if not assets or not assets.get('verified'):raise RuntimeError('Model files exist but are not verified (manifests/installation/assets.json); nothing was started.')
+    if sorted(a['path'] for a in assets['files'])!=sorted(model_files(c).values()):raise RuntimeError('Verified asset list differs from the configured model files.')
     for asset in assets['files']:
         info=Path(asset['path']).stat()
         if info.st_size!=asset['bytes'] or info.st_mtime_ns!=asset['mtime_ns']:raise RuntimeError('Asset identity changed; verify checksums before loading.')
-    if c['context']!=131072 or c['max_output']!=81920:raise RuntimeError('The pinned 131072/81920 baseline was changed.')
+    if not (4096<=c['context']<=262144) or not (0<c['max_output']<c['context']):raise RuntimeError('Invalid context/output configuration.')
     return c
 def serve_owned():
     # Read-only existing exclusion lock: bytes/config/state of Qwen Workstation are never written.
@@ -81,7 +89,7 @@ def start():
     while time.monotonic()<deadline:
         if p.poll() is not None:
             tail=log.read_text(errors='replace')[-2200:]
-            raise RuntimeError(f'DwarfStar startup exited {p.returncode}. Endpoint 127.0.0.1:8031.\n{tail}\nLog: {log}')
+            raise RuntimeError(f'DwarfStar startup exited {p.returncode}. Endpoint 127.0.0.1:8032.\n{tail}\nLog: {log}')
         current=identity(p.pid)
         if current and current['command'].startswith(str(ROOT/'ds4-server')+' '):
             ledger={**current,'log':str(log),'started_at':started_at}
@@ -143,12 +151,12 @@ def stop():
     row=owned()
     if not row:return {'ok':True,'already_offline':True}
     if any(r.get('active') or r.get('tool_execution_active') for r in requests(row)):raise RuntimeError('DwarfStar request/tool is active; finish/cancel it first. Nothing stopped.')
-    connections=run(['/usr/sbin/lsof','-nP','-a','-p',str(row['pid']),'-iTCP:8031','-sTCP:ESTABLISHED'])
+    connections=run(['/usr/sbin/lsof','-nP','-a','-p',str(row['pid']),'-iTCP:8032','-sTCP:ESTABLISHED'])
     if connections.returncode not in (0,1):raise RuntimeError('Cannot verify client connections; refusing stop.')
     if connections.returncode==0 and connections.stdout.strip():raise RuntimeError('A client is connected. Finish the turn before stopping.')
     owned();os.kill(row['pid'],signal.SIGTERM);deadline=time.monotonic()+60
     while time.monotonic()<deadline and identity(row['pid']):time.sleep(.2)
-    if identity(row['pid']) or occupied(8031):raise RuntimeError('Shutdown pending; no forced kill attempted.')
+    if identity(row['pid']) or occupied(8032):raise RuntimeError('Shutdown pending; no forced kill attempted.')
     save(STATE/'last-stopped.json',{**row,'stopped_at':time.time()});(STATE/'server.json').unlink()
     return {'ok':True,'stopped':row['pid']}
 def launch_workspace(kind,folder=None):

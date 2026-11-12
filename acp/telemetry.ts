@@ -4,7 +4,7 @@ import {infrastructureSettings,activeProfile} from './lifecycle.ts';
 import {installEfficiency} from './efficiency.ts';
 import {readFileSync,writeFileSync,renameSync} from 'node:fs';
 import {join} from 'node:path';
-const ROOT='$LOCAL_AI_SETUP/challengers/dwarfstar-swift15';
+const ROOT='$LOCAL_AI_SETUP/challengers/dwarfstar-cyber';
 export default function installTelemetry(pi:any,options:any={}){
  const timing=installInfrastructure(pi,options.infrastructure??{});
  installEfficiency(pi,timing,{settings:options.infrastructure?.settings,...options.efficiency});

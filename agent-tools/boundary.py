@@ -44,7 +44,7 @@ def check_workspace(workspace):
 def tooling_policy(workspace, read_extra=()):
     if mode()=='full_auto':return '(version 1)\n(allow default)\n'
     # Retain workspace/symlink checks, private-home reads and file-write denial.
-    rules = policy(workspace, [8030], read_extra=[ROOT, *read_extra])
+    rules = policy(workspace, [8032], read_extra=[ROOT, *read_extra])
     rules = rules.replace('(deny network*)', '''(deny network*)
 (allow network-outbound)
 (allow network-bind (local tcp "localhost:*"))
