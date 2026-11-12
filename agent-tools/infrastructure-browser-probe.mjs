@@ -1,6 +1,6 @@
 // Cached preflight only; a local blank page, one tiny screenshot, one HEAD.
 // Existing browser library owns profile cleanup. No inference or model context.
-import {launchBrowser} from './agent-tools/lib/browser.mjs';
+import {launchBrowser} from './lib/browser.mjs';
 const b=await launchBrowser();
 try {
   await b.page.setContent('<!doctype html><title>Infrastructure preflight</title>');

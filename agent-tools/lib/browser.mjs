@@ -32,7 +32,7 @@ export async function launchBrowser({engine='playwright',headed=false,viewport={
     // Failure is an observability warning, never a reason to switch user profiles.
     let ownership={ok:false,error:'No registered task owner'};
     if(process.env.DWARFSTAR_TASK_ID){
-      try{const r=spawnSync('$LOCAL_AI_SETUP/challengers/dwarfstar-cyber/.venv/bin/python',['-B',join(tools,'../browser_ownership.py')],{input:JSON.stringify({task_id:process.env.DWARFSTAR_TASK_ID,parent:process.pid,profile,engine,headed}),env:process.env,encoding:'utf8',timeout:12000,maxBuffer:262144});ownership=JSON.parse(r.stdout||'{}');}catch(e){ownership={ok:false,error:String(e)};}
+      try{const r=spawnSync(process.env.DWARFSTAR_PYTHON??'python3',['-B','-m','dwarfstar.browser_ownership'],{input:JSON.stringify({task_id:process.env.DWARFSTAR_TASK_ID,parent:process.pid,profile,engine,headed}),env:process.env,encoding:'utf8',timeout:12000,maxBuffer:262144});ownership=JSON.parse(r.stdout||'{}');}catch(e){ownership={ok:false,error:String(e)};}
     }
     let closed=false;
     const close=async()=>{if(closed)return;closed=true;try{await (context??browser).close();}finally{rmSync(profile,{recursive:true,force:true});}};

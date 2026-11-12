@@ -1,2 +1,4 @@
 #!/bin/sh
-exec /opt/homebrew/bin/node $LOCAL_AI_SETUP/challengers/dwarfstar-cyber/agent-tools/bin/node.mjs "$@"
+# Resolve this script through symlinks, then run the tool beside it with the Node on PATH.
+here="$(cd "$(dirname "$0")" && pwd -P)"
+exec node "$here/node.mjs" "$@"

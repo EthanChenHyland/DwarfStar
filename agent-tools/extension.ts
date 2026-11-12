@@ -5,12 +5,12 @@ import {restoreShellOutput,browserCommand} from '../acp/result-hygiene.ts';
 import {resolve} from 'node:path';
 import {forTextRedaction,restoreImageContent} from '../acp/image-content.ts';
 import {infrastructureSettings,activeProfile} from '../acp/lifecycle.ts';
-const ROOT='$LOCAL_AI_SETUP/challengers/dwarfstar-cyber/agent-tools';
-const PY='$LOCAL_AI_SETUP/challengers/dwarfstar-cyber/.venv/bin/python';
+import {HOME,PY,PYENV} from '../acp/paths.ts';
+const ROOT=HOME+'/agent-tools';
 // Reuse the shared local policy for approvals and shell enforcement. Missing
 // policy facts require confirmation; never fall back to unconditional approval.
 export function permission(command:string){
- try{const q=spawnSync(PY,['-B',ROOT+'/permissions.py'],{input:JSON.stringify({command,workspace:process.env.DWARFSTAR_WORKSPACE??process.cwd(),approval_mode:process.env.DWARFSTAR_APPROVAL_MODE}),encoding:'utf8',timeout:2000,maxBuffer:8192,env:{PATH:'/usr/bin:/bin',PYTHONDONTWRITEBYTECODE:'1'}});if(q.status!==0)throw Error('Policy unavailable');return JSON.parse(q.stdout);}catch{return {tier:4,category:'policy_unavailable',policy:'prompt',sandbox_blocked:true};}
+ try{const q=spawnSync(PY,['-B',ROOT+'/permissions.py'],{input:JSON.stringify({command,workspace:process.env.DWARFSTAR_WORKSPACE??process.cwd(),approval_mode:process.env.DWARFSTAR_APPROVAL_MODE}),encoding:'utf8',timeout:2000,maxBuffer:8192,env:{PATH:'/usr/bin:/bin',...PYENV}});if(q.status!==0)throw Error('Policy unavailable');return JSON.parse(q.stdout);}catch{return {tier:4,category:'policy_unavailable',policy:'prompt',sandbox_blocked:true};}
 }
 export function protectedFile(input:any){
  const paths=[input?.path,input?.oldPath,input?.newPath].filter((p:any)=>typeof p==='string');
@@ -30,7 +30,7 @@ export default function(pi:any){
     // Optional expansion from the existing shell log stays BEFORE redaction.
     // Any expansion failure returns the original result; security redaction is unchanged.
     e=restoreShellOutput(e,ctx,hygieneEnabled);
-    const q=spawnSync(PY,['$LOCAL_AI_SETUP/v7/tools/redact_stdin_v2.py',ctx.cwd],{input:JSON.stringify({content:forTextRedaction(e.content),details:e.details}),encoding:'utf8',timeout:10000,maxBuffer:4000000,env:{PATH:'/usr/bin:/bin',HOME:process.env.HOME!,PYTHONDONTWRITEBYTECODE:'1'}});
+    const q=spawnSync(PY,['-B',ROOT+'/policy/redact_stdin.py',ctx.cwd],{input:JSON.stringify({content:forTextRedaction(e.content),details:e.details}),encoding:'utf8',timeout:10000,maxBuffer:4000000,env:{PATH:'/usr/bin:/bin',HOME:process.env.HOME!,...PYENV}});
     try{const value=JSON.parse(q.stdout);return {...value,content:restoreImageContent(e.content,value.content),isError:e.isError};}catch{return {content:[{type:'text',text:'{"status":"error","error":"Redaction failed closed"}'}],details:{redaction_failed:true},isError:true};}
   });
   // Identical sampling defaults formerly provided by aci_safe.ts.
