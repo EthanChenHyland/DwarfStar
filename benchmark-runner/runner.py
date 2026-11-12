@@ -6,7 +6,7 @@ import signal, subprocess, sys, threading, time, uuid
 from records import ROOT, STORE, ORDER, NE, TERMINAL, registry, profiles, profile_id, create_run
 from records import now, read, save, event, sha, manifest, records, metrics, summary, index_update, comparison, local, workspace_root
 
-PYTHON = str(ROOT / '.venv/bin/python')
+PYTHON = '$LOCAL_AI_SETUP/challengers/dwarfstar-cyber/.venv/bin/python'
 sys.path.insert(0,str(ROOT))
 import runtime_control as runtime
 import task_infrastructure as infra
@@ -62,7 +62,7 @@ def runtime_idle():
     if not row:return
     if any(r.get('active') or r.get('tool_execution_active') for r in runtime.requests(row)):
         raise RuntimeError('A user task is active; benchmark did not touch it. Start explicitly after it finishes.')
-    r=runtime.run(['/usr/sbin/lsof','-nP','-a','-p',str(row['pid']),'-iTCP:8031','-sTCP:ESTABLISHED'])
+    r=runtime.run(['/usr/sbin/lsof','-nP','-a','-p',str(row['pid']),'-iTCP:8032','-sTCP:ESTABLISHED'])
     if r.returncode not in [0,1] or r.returncode==0 and r.stdout.strip():raise RuntimeError('Model has a connected client; benchmark admission refused without interrupting it.')
 def ensure_runtime():
     runtime_idle();warm=bool(runtime.owned())
