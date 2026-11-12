@@ -1,0 +1,42 @@
+{
+  "schema": 2,
+  "default": "scope-low",
+  "naming": "A profile is a model plus a reasoning effort. Context is a property of the model, never a profile dimension.",
+  "profiles": [
+    {
+      "id": "scope-low",
+      "model": "scope",
+      "reasoning_effort": "low"
+    },
+    {
+      "id": "swift-low",
+      "model": "swift",
+      "reasoning_effort": "low"
+    },
+    {
+      "id": "swift-medium",
+      "model": "swift",
+      "reasoning_effort": "medium"
+    },
+    {
+      "id": "cyber-off",
+      "model": "cyber",
+      "reasoning_effort": "off"
+    },
+    {
+      "id": "cyber-low",
+      "model": "cyber",
+      "reasoning_effort": "low"
+    },
+    {
+      "id": "cyber-medium",
+      "model": "cyber",
+      "reasoning_effort": "medium"
+    },
+    {
+      "id": "cyber-xhigh",
+      "model": "cyber",
+      "reasoning_effort": "xhigh"
+    }
+  ]
+}
