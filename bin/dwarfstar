@@ -1,2 +1,14 @@
 #!/bin/sh
-exec $LOCAL_AI_SETUP/v6/.venv/bin/python -B $LOCAL_AI_SETUP/challengers/dwarfstar-paperniuk/task_infrastructure.py "$@"
+# DwarfStar command-line entry point. Finds a Python 3.10+ interpreter and runs the package from this checkout.
+here="$(cd "$(dirname "$0")" && pwd -P)"
+home="$(dirname "$here")"
+if [ -n "$DWARFSTAR_PYTHON" ] && [ -x "$DWARFSTAR_PYTHON" ]; then
+  python="$DWARFSTAR_PYTHON"
+else
+  python=""
+  for candidate in /opt/homebrew/bin/python3.13 /opt/homebrew/bin/python3.12 /opt/homebrew/bin/python3.11 /opt/homebrew/bin/python3 /usr/local/bin/python3; do
+    if [ -x "$candidate" ]; then python="$candidate"; break; fi
+  done
+  [ -n "$python" ] || python="$(command -v python3)"
+fi
+PYTHONPATH="$home/src${PYTHONPATH:+:$PYTHONPATH}" PYTHONDONTWRITEBYTECODE=1 exec "$python" -B -m dwarfstar "$@"

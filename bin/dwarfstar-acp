@@ -1,0 +1,4 @@
+#!/bin/sh
+# ACP agent launcher for editors:  dwarfstar-acp --profile <profile-id>
+here="$(cd "$(dirname "$0")" && pwd -P)"
+exec "$here/dwarfstar" acp "$@"
