@@ -1,10 +1,10 @@
-import {appendFileSync} from "node:fs";
+import {appendFileSync,writeFileSync} from "node:fs";
 // Request-local transport facts; optional telemetry never decides execution.
-import {streamOpenAICompletions} from '$HOME/.bun/install/global/node_modules/@oh-my-pi/pi-ai/src/providers/register-builtins.ts';
-import {AssistantMessageEventStream} from '$HOME/.bun/install/global/node_modules/@oh-my-pi/pi-ai/src/utils/event-stream.ts';
+import {streamOpenAICompletions} from './vendor/omp/pi-ai/src/providers/register-builtins.ts';
+import {AssistantMessageEventStream} from './vendor/omp/pi-ai/src/utils/event-stream.ts';
 import {classify} from './latency.ts';
 import {observe} from './lifecycle.ts';
-import {getOpenAIStreamIdleTimeoutMs,getOpenAIStreamFirstEventTimeoutMs} from '$HOME/.bun/install/global/node_modules/@oh-my-pi/pi-ai/src/utils/idle-iterator.ts';
+import {getOpenAIStreamIdleTimeoutMs,getOpenAIStreamFirstEventTimeoutMs} from './vendor/omp/pi-ai/src/utils/idle-iterator.ts';
 export const API='dwarfstar-infrastructure-completions';
 export class Wire {
  buffer='';dataLines:string[]=[];decoder=new TextDecoder();calls=new Map<any,any>();finish:any=null;done=false;failure:any=null;normal=false;bytes=0;status:any=null;usage_observed=false;
@@ -54,6 +54,11 @@ export function guardedStream(model:any,context:any,options:any={},latency:any,d
      tool_count:payload.tools?.length??0,stream:payload.stream
     })+'\n');
    }
+  } catch {}
+  // Opt-in test aid: save complete request bodies for exact replay. Off unless the directory is named.
+  try {
+   const dump=process.env.DWARFSTAR_WIRE_DUMP_DIR;
+   if(dump && typeof init?.body==='string') writeFileSync(dump+'/request-'+Date.now()+'-'+Math.random().toString(36).slice(2,8)+'.json',init.body,{mode:0o600});
   } catch {}
 
   let response:Response;
