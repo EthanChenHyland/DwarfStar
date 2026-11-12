@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "source": {
+    "url": "https://github.com/paperniuk/ds4",
+    "branch": "m1-flash-next",
+    "commit": "6ea598155f7ac1a27dad3cda5b8fc9123fdef79a"
+  },
+  "name": "Paperniuk DwarfStar",
+  "runtimes": {
+    "ds4-reference": {
+      "description": "Pinned upstream build, unmodified",
+      "patches": [],
+      "binary_sha256": "76a0aa5dc8eff126d67d4bbefe6ff9407be3937fd06416e483aeeea609742d44",
+      "directory": "runtime/ds4-reference"
+    },
+    "ds4-swift-tokenizer": {
+      "description": "Pinned upstream plus the Swift tokenizer adapter (active only for tokenizer.ggml.pre=qwen2)",
+      "patches": [
+        "native/patches/swift-tokenizer.patch"
+      ],
+      "binary_sha256": "0ce36bbd18c772d0a4e48a88d7ee51c445e35017d5fc05c321084576eb922114",
+      "directory": "runtime/ds4-swift-tokenizer"
+    },
+    "ds4-unified": {
+      "description": "Pinned upstream plus the Swift tokenizer adapter (active only for tokenizer.ggml.pre=qwen2) and the optional telemetry/calibration hooks (inactive unless enabled by environment)",
+      "patches": [
+        "native/patches/swift-tokenizer.patch",
+        "native/apply_hooks.py",
+        "native/telemetry/ds4_telemetry.c",
+        "native/telemetry/ds4_telemetry.h"
+      ],
+      "binary_sha256": "f270b43196aeccaefdc740369f3dff08d1c1c21fa8741334025e2d731bac41ca",
+      "directory": "runtime/ds4-unified"
+    }
+  }
+}
