@@ -12,7 +12,7 @@ const close=async()=>{await session?.close();};
 for(const signal of ['SIGINT','SIGTERM'])process.once(signal,async()=>{await close();process.exit(130);});
 try{
   const url=new URL(plan.url);
-  if(!['127.0.0.1','localhost'].includes(url.hostname)||['8000','8010','8020','8021','8030','8031','8032'].includes(url.port))throw Error('Evaluator URL must be its workspace HTTP server');
+  if(!['127.0.0.1','localhost'].includes(url.hostname)||['8000','8010','8020','8021','8030','8031','8032','8037','8038','8039'].includes(url.port))throw Error('Evaluator URL must be its workspace HTTP server');
   session=await launchBrowser({viewport:{width:1280,height:800}});
   const page=session.page;result.events=capture(page);
   const response=await page.goto(plan.url,{waitUntil:'load',timeout:45000});
