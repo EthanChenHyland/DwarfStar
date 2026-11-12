@@ -4,7 +4,7 @@ import {dlopen,FFIType,ptr} from 'bun:ffi';
 import {Latency,RECOVERY,INFRA} from './latency.ts';
 import {API,guardedStream} from './transport.ts';
 import {Lifecycle,infrastructureSettings,observe,activeProfile} from './lifecycle.ts';
-const ROOT='$LOCAL_AI_SETUP/challengers/dwarfstar-cyber';
+import {ROOT,endpoint} from './paths.ts';
 export function installInfrastructure(pi:any,options:any={}){
  const settings=infrastructureSettings(options.settings),l=new Latency({...options,enabled:settings.telemetry_enabled});
  const core=new Lifecycle((name,data)=>observe(()=>l.event(name,data)));(l as any).control=core;(l as any).settings=settings;
@@ -67,5 +67,5 @@ async function sameRuntime(){
  const lib=dlopen('/usr/lib/libproc.dylib',{proc_pidinfo:{args:[FFIType.i32,FFIType.i32,FFIType.u64,FFIType.ptr,FFIType.i32],returns:FFIType.i32}});
  let birth:number;try{const info=Buffer.alloc(136);if(lib.symbols.proc_pidinfo(before.pid,3,0,ptr(info),136)!==136)return false;birth=Number(info.readBigUInt64LE(120));}finally{lib.close();}
  if(birth!==Math.floor(Date.parse(before.birth)/1000))return false;
- const r=await fetch('http://127.0.0.1:8032/v1/models',{signal:AbortSignal.timeout(2000)});const after=JSON.parse(readFileSync(ROOT+'/state/server.json','utf8'));return r.ok&&before.pid===after.pid&&before.birth===after.birth&&before.argv_sha256===after.argv_sha256;
+ const r=await fetch(endpoint()+'/models',{signal:AbortSignal.timeout(2000)});const after=JSON.parse(readFileSync(ROOT+'/state/server.json','utf8'));return r.ok&&before.pid===after.pid&&before.birth===after.birth&&before.argv_sha256===after.argv_sha256;
 }

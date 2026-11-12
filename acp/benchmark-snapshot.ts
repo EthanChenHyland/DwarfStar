@@ -2,21 +2,22 @@ import {activeProfile} from './lifecycle.ts';
 // Bounded local reads only. No subprocesses, network, model/tokenizer or cache writes.
 import {readFileSync,statSync,openSync,readSync,closeSync} from 'node:fs';
 import {createHash} from 'node:crypto';
-export const ROOT='$LOCAL_AI_SETUP/challengers/dwarfstar-cyber';
+import {ROOT,locate} from './paths.ts';
+export {ROOT};
 export const NE='Not exposed';
 const canonical=(x:any):any=>Array.isArray(x)?x.map(canonical):x&&typeof x==='object'?Object.fromEntries(Object.keys(x).sort().filter(k=>x[k]!==undefined).map(k=>[k,canonical(x[k])])):x;
 export const hash=(x:any)=>createHash('sha256').update(typeof x==='string'||Buffer.isBuffer(x)?x:JSON.stringify(canonical(x))).digest('hex');
 export const smallRead=(path:string)=>{if(statSync(path).size>2*1024*1024)throw Error('Observation size bound');return readFileSync(path,'utf8');};
 const attempt=(fn:()=>any)=>{try{return fn()??NE;}catch{return NE;}};
-export const CODE_FILES=['approval_policy.py','acp/approval.json','acp/permission-policy.ts','acp/permission-runtime.json','acp/profiles.json','profiles.py','agent-tools/permissions.py','acp/benchmark-observability.ts','acp/benchmark-snapshot.ts','acp/efficiency.ts','acp/task-summary.ts','acp/finish-nudge.ts','acp/result-hygiene.ts','acp/telemetry.ts','acp/latency.ts','acp/transport.ts','acp/infrastructure.ts','acp/lifecycle.ts','acp/infrastructure.json','acp/models.yml','scope_agent.py','agent-tools/extension.ts','agent-tools/shell.py','agent-tools/boundary.py','agent-tools/bin/browser.mjs','agent-tools/bin/dwarf-browser'];
+export const CODE_FILES=['src/dwarfstar/approval_policy.py','acp/approval.json','acp/permission-policy.ts','acp/permission-runtime.json','acp/profiles.json','src/dwarfstar/profiles.py','agent-tools/permissions.py','acp/benchmark-observability.ts','acp/benchmark-snapshot.ts','acp/efficiency.ts','acp/task-summary.ts','acp/finish-nudge.ts','acp/result-hygiene.ts','acp/telemetry.ts','acp/latency.ts','acp/transport.ts','acp/infrastructure.ts','acp/lifecycle.ts','acp/infrastructure.json','acp/models.yml','src/dwarfstar/agent.py','agent-tools/extension.ts','agent-tools/shell.py','agent-tools/boundary.py','agent-tools/bin/browser.mjs','agent-tools/bin/dwarf-browser'];
 export function configSnapshot(flags:any,root=ROOT,read=smallRead){
- const json=(p:string)=>JSON.parse(read(root+'/'+p)),sha=(p:string)=>attempt(()=>hash(read(root+'/'+p)));
+ const json=(p:string)=>JSON.parse(read(locate(p,root))),sha=(p:string)=>attempt(()=>hash(read(locate(p,root))));
  const r=json('runtime.json'),cap=attempt(()=>json('agent-tools/state/capabilities.json')),pkg=attempt(()=>json('agent-tools/package.json'));
  const installed=(name:string)=>attempt(()=>json('agent-tools/node_modules/'+name+'/package.json').version);
  return {profile:activeProfile().name,model_id:r.model_id,model:r.model,quant:r.quant,model_path:r.argv?.[r.argv.indexOf('-m')+1]??NE,
   runtime:{name:r.runtime,version:NE,build_commit:r.source?.commit??NE,branch:r.source?.branch??NE,configured_binary_sha256:r.server_sha256??NE},
   inference:{context:r.context,max_output:r.max_output,thinking:r.thinking,reasoning_effort:activeProfile().reasoning_effort??r.reasoning_effort,mtp:r.mtp,mtp_depth:NE,sampling:r.sampling,endpoint:r.endpoint},
-  chat_template:{identity:'Embedded Qwen chat renderer in ds4_server.c',configured_binary_sha256:r.server_sha256??NE,source_file_sha256:sha('ds4_server.c'),note:'Whole renderer source / pinned binary identity; no standalone runtime template hash exposed'},
+  chat_template:{identity:'Embedded Qwen chat renderer in ds4_server.c',configured_binary_sha256:r.server_sha256??NE,source_file_sha256:NE,note:'Whole renderer source / pinned binary identity; no standalone runtime template hash exposed'},
   scope_prompt_sha256:sha('prompts/scope-first-system-prompt.md'),scope_prompt_applied:activeProfile().prompt==='prompts/scope-first-system-prompt.md',system_prompt:{identity:activeProfile().prompt,mode:activeProfile().prompt_mode,sha256:sha(activeProfile().prompt)},policy:activeProfile().policy,provider_config_sha256:sha(activeProfile().provider_config??'acp/models.yml'),capability_inventory_sha256:sha('agent-tools/state/capabilities.json'),
   approval_mode:process.env.DWARFSTAR_APPROVAL_MODE??attempt(()=>json('acp/approval.json').approval_mode),permission_runtime:attempt(()=>json('acp/permission-runtime.json')),feature_flags:{...flags},versions:{source:'Installed package metadata when readable; otherwise cached inventory, not a fresh executable probe',inventory_detected_at:cap.detected_at??NE,playwright:installed('playwright')===NE?(cap.playwright??NE):installed('playwright'),puppeteer:installed('puppeteer')===NE?(cap.puppeteer??NE):installed('puppeteer'),chrome:cap.browser_version??NE,chrome_path:cap.browser_executable??NE,node:cap.node??NE,acp_bun:process.versions.bun??NE},
   agent_tools:{name:pkg.name??NE,version:pkg.version??NE,package_sha256:sha('agent-tools/package.json'),lock_sha256:sha('agent-tools/package-lock.json')},

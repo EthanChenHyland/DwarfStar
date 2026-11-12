@@ -4,30 +4,29 @@
 import {readFileSync,writeFileSync,renameSync,mkdirSync,appendFileSync} from 'node:fs';
 import {spawnSync} from 'node:child_process';
 import {join} from 'node:path';
-import {connectToServer,listTools,disconnectServer} from '$HOME/.bun/install/global/node_modules/@oh-my-pi/pi-coding-agent/src/mcp/client.ts';
-import {MCPTool} from '$HOME/.bun/install/global/node_modules/@oh-my-pi/pi-coding-agent/src/mcp/tool-bridge.ts';
+import {connectToServer,listTools,disconnectServer} from './vendor/omp/pi-coding-agent/src/mcp/client.ts';
+import {MCPTool} from './vendor/omp/pi-coding-agent/src/mcp/tool-bridge.ts';
 import {imageFacts} from './image-content.ts';
-const ROOT='$LOCAL_AI_SETUP/challengers/dwarfstar-cyber';
-const PY='$LOCAL_AI_SETUP/challengers/dwarfstar-cyber/.venv/bin/python';
+import {HOME,PY,PYENV} from './paths.ts';
 const STATENAME='vision-kimicu.json';
 function scalar(event:string,facts:any={}){try{const path=process.env.DWARFSTAR_LATENCY_FILE;if(path){appendFileSync(path,JSON.stringify({schema:1,event,timestamp:Date.now()/1000,...facts})+'\n',{mode:0o600});}}catch{}}
 function registerOwnedChildren(){
  const key=process.env.DWARFSTAR_TASK_ID;if(!key)return;
  const script=`import sys,subprocess,json
-sys.path.insert(0,sys.argv[1]);import task_infrastructure as i
+sys.path.insert(0,sys.argv[1]);import dwarfstar.task_infrastructure as i
 pid=int(sys.argv[2]);key=sys.argv[3];parent=i.fingerprint(pid);rows=[]
 for line in subprocess.check_output(['/bin/ps','-axo','pid=,ppid=,command='],text=True).splitlines():
  v=line.strip().split(None,2)
  if len(v)==3 and int(v[1])==pid and v[2].startswith('/Applications/KimiCU.app/Contents/MacOS/kimi-cu mcp'):
   rows.append(i.Store().register(key,int(v[0]),'mcp-kimicu',parent=parent))
 print(json.dumps(rows))`;
- const result=spawnSync(PY,['-B','-c',script,ROOT,String(process.pid),key],{encoding:'utf8',timeout:5000});
+ const result=spawnSync(PY,['-B','-c',script,HOME+'/src',String(process.pid),key],{encoding:'utf8',timeout:5000,env:{...process.env,...PYENV}});
  if(result.status!==0)throw Error('Cannot register owned KimiCU child');
  return JSON.parse(result.stdout);
 }
 export default async function installKimiCU(pi:any, dependencies:any={}){
  const connect=dependencies.connect??connectToServer,discover=dependencies.discover??listTools,disconnect=dependencies.disconnect??disconnectServer,bridge=dependencies.bridge??((connection:any,definitions:any)=>MCPTool.fromTools(connection,definitions)),own=dependencies.own??registerOwnedChildren;
- const config=JSON.parse(readFileSync(ROOT+'/acp/kimicu.json','utf8'));if(!config.enabled)return;
+ const config=JSON.parse(readFileSync(HOME+'/acp/kimicu.json','utf8'));if(!config.enabled)return;
  let connection:any;let closed=false;let status:any={connected:false,tool_count:0,image_request_count:0,image_session:false};
  const publish=()=>{try{const dir=process.env.PI_CODING_AGENT_DIR;if(!dir)return;mkdirSync(dir,{recursive:true});const path=join(dir,STATENAME);writeFileSync(path+'.tmp',JSON.stringify(status)+'\n',{mode:0o600});renameSync(path+'.tmp',path);}catch{}};
  const close=async()=>{if(closed)return;closed=true;try{if(connection)await disconnect(connection);}finally{status.connected=false;publish();scalar('kimicu_disconnected');}};

@@ -2,6 +2,7 @@
 import {appendFileSync} from 'node:fs';
 import {browserCommand,contentBytes} from './result-hygiene.ts';
 import {configSnapshot,hash,latestNative,apiCacheMetrics,NE,ROOT} from './benchmark-snapshot.ts';
+import {HOME} from './paths.ts';
 const iso=(n:number)=>new Date(n*1000).toISOString();
 const parse=(s:any)=>{try{return JSON.parse(s);}catch{return null;}};
 const texts=(c:any)=>typeof c==='string'?[c]:(c??[]).filter((b:any)=>b.type==='text').map((b:any)=>b.text);
@@ -56,7 +57,7 @@ export class BenchmarkObserver {
   this.systemPromptHashes.add(hash((payload.messages??[]).filter((m:any)=>m.role==='system'||m.role==='developer').map((m:any)=>m.content)));
   for(const m of payload.messages??[])for(const s of texts(m.content)){
    if(typeof s!=='string'||!s.includes('"environment"')||!s.includes('"agent_tools"'))continue;
-   const p=parse(s);if(p?.environment?.agent_tools===ROOT+'/agent-tools'&&typeof p.usage==='string')this.capabilityHashes.add(hash(s));
+   const p=parse(s);if(p?.environment?.agent_tools===HOME+'/agent-tools'&&typeof p.usage==='string')this.capabilityHashes.add(hash(s));
   }
  }
  result(e:any,shaped:any,requestId:any,requestNumber:any,now:number){

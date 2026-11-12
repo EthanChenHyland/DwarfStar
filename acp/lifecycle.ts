@@ -1,14 +1,14 @@
 // Execution facts are independent of the optional timing collector. No watchdogs.
 import {readFileSync,lstatSync,realpathSync} from 'node:fs';
 import {resolve,relative,dirname,isAbsolute} from 'node:path';
-const ROOT='$LOCAL_AI_SETUP/challengers/dwarfstar-cyber';
+import {ROOT,HOME} from './paths.ts';
 export function activeProfile(){
  const registry=JSON.parse(readFileSync(ROOT+'/acp/profiles.json','utf8')),id=process.env.DWARFSTAR_PROFILE_ID??registry.default;
  const profile=registry.profiles[id];if(!profile)throw Error('Unknown DwarfStar profile');return {id,...profile};
 }
 export function infrastructureSettings(overrides:any={}){
  let value:any={recovery_enabled:true,telemetry_enabled:true};
- try{value={...value,...JSON.parse(readFileSync(ROOT+'/acp/infrastructure.json','utf8'))};}
+ try{value={...value,...JSON.parse(readFileSync(HOME+'/acp/infrastructure.json','utf8'))};}
  catch{value={recovery_enabled:false,telemetry_enabled:true};}
  return {...value,...activeProfile().features,...overrides};
 }
