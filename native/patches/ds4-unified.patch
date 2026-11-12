@@ -1,0 +1,444 @@
+diff --git a/Makefile b/Makefile
+index 7afc3fb..6b6c060 100644
+--- a/Makefile
++++ b/Makefile
+@@ -25,8 +25,8 @@ DS4_DSPARK_MODEL ?= $(DS4_TEST_MODEL)
+ DS4_DSPARK_SUPPORT ?= gguf/DeepSeek-V4-Flash-DSpark-support-0731.gguf
+ 
+ ifeq ($(UNAME_S),Darwin)
+-METAL_LDLIBS := $(LDLIBS) -framework Foundation -framework Metal -framework IOSurface
+-CORE_OBJS = ds4.o ds4_image.o ds4_distributed.o ds4_tp.o ds4_ssd.o ds4_metal.o ds4_layer_pack.o ds4_engram.o ds4_quants.o
++METAL_LDLIBS := $(LDLIBS) -framework Foundation -framework Metal -framework IOSurface -framework Accelerate
++CORE_OBJS = ds4_telemetry.o ds4.o ds4_image.o ds4_distributed.o ds4_tp.o ds4_ssd.o ds4_metal.o ds4_layer_pack.o ds4_engram.o ds4_quants.o
+ CPU_CORE_OBJS = ds4_cpu.o ds4_image.o ds4_distributed.o ds4_tp.o ds4_ssd.o ds4_layer_pack.o ds4_quants.o
+ else
+ CFLAGS += -D_GNU_SOURCE -fno-finite-math-only
+@@ -551,7 +551,10 @@ ds4_prompt_prefix.o: ds4_prompt_prefix.c ds4_prompt_prefix.h ds4.h
+ ds4_gpu_args.o: ds4_gpu_args.c ds4_gpu_args.h ds4_gpu_mgpu.h
+ 	$(CC) $(CFLAGS) -c -o $@ ds4_gpu_args.c
+ 
+-ds4_server.o: ds4_server.c ds4.h ds4_ssd.h ds4_distributed.h ds4_help.h ds4_kvstore.h rax.h
++ds4_telemetry.o: ds4_telemetry.c ds4_telemetry.h
++	$(CC) $(CFLAGS) -c -o $@ ds4_telemetry.c
++
++ds4_server.o: ds4_server.c ds4_telemetry.h ds4.h ds4_ssd.h ds4_distributed.h ds4_help.h ds4_kvstore.h rax.h
+ 	$(CC) $(CFLAGS) -c -o $@ ds4_server.c
+ 
+ ds4_bench.o: ds4_bench.c ds4.h ds4_ssd.h ds4_distributed.h ds4_help.h
+diff --git a/ds4.c b/ds4.c
+index da71440..8e14e37 100644
+--- a/ds4.c
++++ b/ds4.c
+@@ -14,6 +14,9 @@
+  * no-copy MTLBuffers.
+  */
+ 
++#ifdef __APPLE__
++#include <CoreFoundation/CoreFoundation.h>
++#endif
+ #include <errno.h>
+ #include <fcntl.h>
+ #include <float.h>
+@@ -42,6 +45,7 @@
+ #include <unistd.h>
+ 
+ #include "ds4.h"
++#include "ds4_telemetry.h"
+ #include "ds4_tool_text.h"
+ #include "ds4_distributed.h"
+ #include "ds4_image.h"
+@@ -42536,6 +42540,7 @@ static bool ds41_graph_short_prefill(ds41_gpu_graph *g, const ds4_model *m,
+ #endif
+ 
+ struct ds4_vocab {
++    bool qwen2_fast_nfc; /* selected only by tokenizer.ggml.pre=qwen2 */
+     ds4_str *token;
+     int n_vocab;
+     int bos_id;
+@@ -43539,6 +43544,147 @@ static void bpe_tokenize_text_qwen35(const ds4_vocab *vocab, const char *text, t
+     }
+ }
+ 
++/* Swift's shipped tokenizer.json uses NFC plus Qwen2's no-Mark regex. */
++static qwen4_char_info qwen4_char_nomarks_at(const char *s, uint64_t len, uint64_t pos) {
++    qwen4_char_info c = qwen4_char_at(s, len, pos);
++    c.mark = false;
++    return c;
++}
++static char *qwen4_swift_nfc(const char *text) {
++#ifdef __APPLE__
++    CFStringRef in = CFStringCreateWithBytes(kCFAllocatorDefault, (const UInt8 *)text,
++                                            (CFIndex)strlen(text), kCFStringEncodingUTF8, false);
++    if (!in) ds4_die("Swift tokenizer requires valid UTF-8");
++    CFMutableStringRef normalized = CFStringCreateMutableCopy(kCFAllocatorDefault, 0, in);
++    CFRelease(in);
++    if (!normalized) ds4_die("Swift tokenizer NFC allocation failed");
++    CFStringNormalize(normalized, kCFStringNormalizationFormC);
++    const CFIndex cap = CFStringGetMaximumSizeForEncoding(CFStringGetLength(normalized), kCFStringEncodingUTF8) + 1;
++    char *out = xmalloc((size_t)cap);
++    if (!CFStringGetCString(normalized, out, cap, kCFStringEncodingUTF8))
++        ds4_die("Swift tokenizer NFC UTF-8 conversion failed");
++    CFRelease(normalized);
++    return out;
++#else
++    ds4_die("Swift tokenizer NFC path requires the pinned macOS build");
++    return NULL;
++#endif
++}
++static void bpe_tokenize_text_qwen2_core(const ds4_vocab *vocab, const char *text, token_vec *out) {
++    const uint64_t len = strlen(text);
++    uint64_t pos = 0;
++
++    while (pos < len) {
++        const uint64_t start = pos;
++        qwen4_char_info cur = qwen4_char_nomarks_at(text, len, pos);
++        if (!cur.valid) break;
++
++        if (cur.cp == '\'' && cur.next < len) {
++            qwen4_char_info n1 = qwen4_char_nomarks_at(text, len, cur.next);
++            const uint32_t c1 = ascii_tolower_cp(n1.cp);
++            if (c1 == 's' || c1 == 't' || c1 == 'm' || c1 == 'd') {
++                pos = n1.next;
++                bpe_emit_piece(vocab, (ds4_str){ text + start, pos - start }, out);
++                continue;
++            }
++            if (n1.valid && n1.next < len) {
++                qwen4_char_info n2 = qwen4_char_nomarks_at(text, len, n1.next);
++                const uint32_t c2 = ascii_tolower_cp(n2.cp);
++                if ((c1 == 'r' && c2 == 'e') || (c1 == 'v' && c2 == 'e') || (c1 == 'l' && c2 == 'l')) {
++                    pos = n2.next;
++                    bpe_emit_piece(vocab, (ds4_str){ text + start, pos - start }, out);
++                    continue;
++                }
++            }
++        }
++
++        /* an optional non-letter prefix, then a run of letters and marks */
++        {
++            uint64_t run = UINT64_MAX;
++            if (cur.letter || cur.mark) {
++                run = cur.next;
++            } else if (cur.cp != '\r' && cur.cp != '\n' && !cur.number) {
++                qwen4_char_info n1 = qwen4_char_nomarks_at(text, len, cur.next);
++                if (n1.valid && (n1.letter || n1.mark)) run = n1.next;
++            }
++            if (run != UINT64_MAX) {
++                pos = run;
++                while (pos < len) {
++                    qwen4_char_info scan = qwen4_char_nomarks_at(text, len, pos);
++                    if (!scan.valid || !(scan.letter || scan.mark)) break;
++                    pos = scan.next;
++                }
++                bpe_emit_piece(vocab, (ds4_str){ text + start, pos - start }, out);
++                continue;
++            }
++        }
++
++        if (cur.number) {
++            pos = cur.next;
++            bpe_emit_piece(vocab, (ds4_str){ text + start, pos - start }, out);
++            continue;
++        }
++
++        {
++            qwen4_char_info punct = cur;
++            uint64_t punct_pos = pos;
++            if (cur.cp == ' ') {
++                punct_pos = cur.next;
++                punct = qwen4_char_nomarks_at(text, len, punct_pos);
++            }
++            if (punct.valid && !punct.space && !punct.letter && !punct.mark && !punct.number) {
++                pos = punct_pos;
++                while (pos < len) {
++                    qwen4_char_info scan = qwen4_char_nomarks_at(text, len, pos);
++                    if (!scan.valid || scan.space || scan.letter || scan.mark || scan.number) break;
++                    pos = scan.next;
++                }
++                while (pos < len) {
++                    qwen4_char_info scan = qwen4_char_nomarks_at(text, len, pos);
++                    if (!scan.valid || !(scan.cp == '\r' || scan.cp == '\n')) break;
++                    pos = scan.next;
++                }
++                bpe_emit_piece(vocab, (ds4_str){ text + start, pos - start }, out);
++                continue;
++            }
++        }
++
++        if (cur.space) {
++            uint64_t p = pos;
++            uint64_t last_newline_end = 0;
++            uint64_t last_ws_start = pos;
++            int nspace = 0;
++            while (p < len) {
++                qwen4_char_info scan = qwen4_char_nomarks_at(text, len, p);
++                if (!scan.valid || !scan.space) break;
++                last_ws_start = p;
++                if (scan.cp == '\r' || scan.cp == '\n') last_newline_end = scan.next;
++                p = scan.next;
++                nspace++;
++            }
++            if (last_newline_end) {
++                pos = last_newline_end;
++            } else if (nspace > 1 && p < len) {
++                pos = last_ws_start;
++            } else {
++                pos = p;
++            }
++            bpe_emit_piece(vocab, (ds4_str){ text + start, pos - start }, out);
++            continue;
++        }
++
++        pos = cur.next;
++        if (pos == start) pos = next_utf8_char(text, len, pos);
++        bpe_emit_piece(vocab, (ds4_str){ text + start, pos - start }, out);
++    }
++}
++
++static void bpe_tokenize_text_qwen2(const ds4_vocab *vocab, const char *text, token_vec *out) {
++    char *normalized = qwen4_swift_nfc(text);
++    bpe_tokenize_text_qwen2_core(vocab, normalized, out);
++    free(normalized);
++}
++
+ /*
+  * DeepSeek V4 Flash declares tokenizer.ggml.pre = "joyai-llm".  The split
+  * below mirrors the JoyAI BPE pre-tokenizer for the cases this model
+@@ -43563,7 +43709,8 @@ static void bpe_tokenize_text(const ds4_vocab *vocab, const char *text, token_ve
+         return;
+     }
+     if (ds4_model_is_qwen4()) {
+-        bpe_tokenize_text_qwen35(vocab, text, out);
++        if (vocab->qwen2_fast_nfc) bpe_tokenize_text_qwen2(vocab, text, out);
++        else bpe_tokenize_text_qwen35(vocab, text, out);
+         return;
+     }
+ 
+@@ -43655,6 +43802,19 @@ static int vocab_lookup_optional(const ds4_vocab *vocab, const char *text) {
+ 
+ static void vocab_load(ds4_vocab *vocab, const ds4_model *model) {
+     memset(vocab, 0, sizeof(*vocab));
++    if (ds4_model_is_qwen4()) {
++        ds4_str pre;
++        if (model_get_string(model, "tokenizer.ggml.pre", &pre)) {
++            if (pre.len == 5 && !memcmp(pre.ptr, "qwen2", 5)) {
++                ds4_str norm;
++                if (!model_get_string(model, "tokenizer.ds4.normalizer", &norm) || norm.len != 3 || memcmp(norm.ptr, "NFC", 3))
++                    ds4_die("Swift qwen2 tokenizer requires explicit NFC metadata");
++                vocab->qwen2_fast_nfc = true;
++            }
++            else if (!(pre.len == 6 && !memcmp(pre.ptr, "qwen35", 6)))
++                ds4_die("Unrecognized Qwen tokenizer.ggml.pre; refuse silent fallback");
++        }
++    }
+ 
+     ds4_array_ref tokens;
+     ds4_array_ref merges;
+@@ -43926,6 +44086,52 @@ void ds4_tokenize_text(ds4_engine *e, const char *text, ds4_tokens *out) {
+ }
+ 
+ static bool special_token_at(const ds4_vocab *vocab, const char *p, int *token, size_t *len) {
++
++    if (vocab->qwen2_fast_nfc) {
++        /* All 33 verbatim Swift added tokens have no strip/single-word behavior. */
++        static const char *const added[] = {
++            "<|endoftext|>",
++            "<|im_start|>",
++            "<|im_end|>",
++            "<|object_ref_start|>",
++            "<|object_ref_end|>",
++            "<|box_start|>",
++            "<|box_end|>",
++            "<|quad_start|>",
++            "<|quad_end|>",
++            "<|vision_start|>",
++            "<|vision_end|>",
++            "<|vision_pad|>",
++            "<|image_pad|>",
++            "<|video_pad|>",
++            "<tool_call>",
++            "</tool_call>",
++            "<|fim_prefix|>",
++            "<|fim_middle|>",
++            "<|fim_suffix|>",
++            "<|fim_pad|>",
++            "<|repo_name|>",
++            "<|file_sep|>",
++            "<tool_response>",
++            "</tool_response>",
++            "<think>",
++            "</think>",
++            "<|audio_start|>",
++            "<|audio_end|>",
++            "<tts_pad>",
++            "<tts_text_bos>",
++            "<tts_text_eod>",
++            "<tts_text_bos_single>",
++            "<|audio_pad|>"
++        };
++        for (size_t i = 0; i < sizeof(added)/sizeof(added[0]); ++i) {
++            const size_t n = strlen(added[i]);
++            int id;
++            if (!strncmp(p, added[i], n) && table_get(&vocab->token_to_id, added[i], n, &id)) {
++                *token = id; *len = n; return true;
++            }
++        }
++    }
+     struct special {
+         const char *text;
+         int token;
+@@ -57823,6 +58029,7 @@ static bool qwen4_ngram_row(const ds4_model *m, uint32_t row, float *out) {
+         }
+         done += (uint32_t)n;
+     }
++    ds4_tm_ple_read(bytes);
+     if (iq4_nl) {
+         qwen4_ngram_iq4_nl_row(raw, (uint32_t)t->dim[0], out);
+         return true;
+@@ -59429,6 +59636,34 @@ static bool qwen4_graph_attention(ds4_qwen4_gpu_graph *g, const ds4_model *m, co
+                             : qwen4_gemv(g->blk, m, l->attn_output, g->attn_o, T));
+ }
+ 
++/* Telemetry: per-layer views that receive the router's top-k output for the
++ * first rows of a decode step.  The kernels and their inputs are unchanged;
++ * only the buffer the router writes and the expert kernels read differs. */
++static struct {
++    ds4_gpu_tensor *sel, *wts;
++    ds4_gpu_tensor *sel_view[DS4_TM_MAX_LAYER], *wts_view[DS4_TM_MAX_LAYER];
++    uint64_t mask[DS4_TM_MAX_LAYER / 64u];
++    int ready;            /* 0 untried, 1 usable, -1 unavailable */
++    uint32_t mid_slots;   /* layout of g->mid after the last per-token expert pass; 0 = not per token */
++} g_qwen4_tm;
++
++static bool qwen4_tm_ready(void) {
++    if (g_qwen4_tm.ready) return g_qwen4_tm.ready > 0;
++    g_qwen4_tm.ready = -1;
++    if (DS4_N_LAYER > DS4_TM_MAX_LAYER || DS4_N_EXPERT_USED > DS4_TM_MAX_USED) return false;
++    const uint64_t per_layer = (uint64_t)DS4_TM_ROWS * DS4_TM_MAX_USED;
++    g_qwen4_tm.sel = qwen4_graph_alloc_f32((uint64_t)DS4_N_LAYER * per_layer);
++    g_qwen4_tm.wts = qwen4_graph_alloc_f32((uint64_t)DS4_N_LAYER * per_layer);
++    if (!g_qwen4_tm.sel || !g_qwen4_tm.wts) return false;
++    for (uint32_t il = 0; il < DS4_N_LAYER; il++) {
++        g_qwen4_tm.sel_view[il] = ds4_gpu_tensor_view(g_qwen4_tm.sel, il * per_layer * sizeof(float), per_layer * sizeof(float));
++        g_qwen4_tm.wts_view[il] = ds4_gpu_tensor_view(g_qwen4_tm.wts, il * per_layer * sizeof(float), per_layer * sizeof(float));
++        if (!g_qwen4_tm.sel_view[il] || !g_qwen4_tm.wts_view[il]) return false;
++    }
++    g_qwen4_tm.ready = 1;
++    return true;
++}
++
+ /* router GEMV, top-k (+ shared gate logit), experts with the shared expert as
+  * an extra slot, weighted reduce with the hc combine folded in */
+ static bool qwen4_moe_profile_boundary(bool enabled, double *last, double *elapsed) {
+@@ -59442,6 +59677,7 @@ static bool qwen4_moe_profile_boundary(bool enabled, double *last, double *elaps
+ 
+ static bool qwen4_graph_moe(ds4_qwen4_gpu_graph *g, const ds4_model *m, const ds4_layer_weights *l, uint32_t T) {
+     const bool profile = T > 8u && getenv("DS4_QWEN4_MOE_PROFILE") != NULL;
++    g_qwen4_tm.mid_slots = 0u;
+     double elapsed[7] = {0}, last = 0;
+     if (!qwen4_moe_profile_boundary(profile, &last, &elapsed[0])) return false;
+     const bool ane_sh = qwen4_ane_shexp(T);
+@@ -59550,6 +59786,7 @@ static bool qwen4_graph_moe(ds4_qwen4_gpu_graph *g, const ds4_model *m, const ds
+     } else
+ #endif
+     if (ok) {
++        g_qwen4_tm.mid_slots = DS4_N_EXPERT_USED + (shared_dense ? 0u : 1u);
+         ok = ds4_gpu_qwen4_moe_mid_tensor(g->mid, g->mixed, g->selected, m->map, m->size, l->ffn_gate_exps->abs_offset,
+                                           l->ffn_up_exps->abs_offset, l->ffn_gate_exps->type, DS4_N_EXPERT, T,
+                                           DS4_N_EXPERT_USED, DS4_N_EMBD, DS4_N_FF_EXP,
+@@ -59686,10 +59923,33 @@ static bool qwen4_layer_ffn_mix(ds4_qwen4_gpu_graph *g, const ds4_model *m, cons
+            qwen4_graph_hc_mix(g, m, l->hc_ffn_norm, l->hc_ffn_down, l->hc_ffn_up, l->hc_ffn_inject, T);
+ }
+ 
++/* Offline calibration capture: wait for this layer's kernels, then accumulate
++ * second moments of the expert inputs on the host.  Slow by design. */
++static bool qwen4_calib_capture(ds4_qwen4_gpu_graph *g, uint32_t il, uint32_t T) {
++    if (!ds4_gpu_end_commands()) return false;
++    ds4_calib_moe(il, DS4_N_LAYER, ds4_gpu_tensor_contents(g->mixed), T, DS4_N_EMBD,
++                  g_qwen4_tm.mid_slots ? ds4_gpu_tensor_contents(g->mid) : NULL, g_qwen4_tm.mid_slots,
++                  DS4_N_EXPERT_USED, DS4_N_FF_EXP, ds4_gpu_tensor_contents(g->selected), DS4_N_EXPERT);
++    return glm_graph_begin_commands_if_needed();
++}
++
+ static bool qwen4_layer_moe(ds4_qwen4_gpu_graph *g, const ds4_model *m, const ds4_layer_weights *l,
+                             uint32_t il, uint32_t pos0, uint32_t T) {
+     qwen4_ane_set_moe_layer((int)il);
++    ds4_gpu_tensor *const tm_sel = g->selected, *const tm_wts = g->weights;
++    const bool tm_capture = T <= DS4_TM_ROWS && ds4_tm_level() >= 2 && qwen4_tm_ready() &&
++        !((g_qwen4_tm.mask[il / 64u] >> (il % 64u)) & 1u);
++    if (tm_capture) {
++        g->selected = g_qwen4_tm.sel_view[il];
++        g->weights = g_qwen4_tm.wts_view[il];
++    }
+     bool ok = qwen4_graph_moe(g, m, l, T);   /* the reduce folds the combine in */
++    if (tm_capture) {
++        g->selected = tm_sel;
++        g->weights = tm_wts;
++        if (ok) g_qwen4_tm.mask[il / 64u] |= 1ull << (il % 64u);
++    }
++    if (ok && ds4_calib_enabled()) ok = qwen4_calib_capture(g, il, T);
+     qwen4_ane_set_moe_layer(-1);
+     if (ok && g->dump_prompt_rows)
+         metal_graph_debug_dump_tensor("qwen_router", g->router, (uint64_t)T * DS4_N_EXPERT, il, pos0);
+@@ -75377,10 +75637,36 @@ static void qwen4_spec_note_first_draft(ds4_session *s, bool accepted_first) {
+  * it is the target argmax; exact sampling treats it as a point-mass proposal
+  * (accept with p(draft), else replay a residual sample) and always runs at
+  * depth 2. */
++static int ds4_session_qwen4_spec_cycle_run(ds4_session *s, int first_token, float temperature, int top_k,
++                                            float top_p, float min_p, uint64_t *rng, bool exact_sampling,
++                                            int *accepted, int accepted_cap,
++                                            char *err, size_t errlen);
++
++/* Telemetry wrapper: one event per verify cycle. It only reads what the cycle computed. */
+ static int ds4_session_qwen4_spec_cycle(ds4_session *s, int first_token, float temperature, int top_k,
+                                         float top_p, float min_p, uint64_t *rng, bool exact_sampling,
+                                         int *accepted, int accepted_cap,
+                                         char *err, size_t errlen) {
++    if (ds4_tm_level() < 1) {
++        return ds4_session_qwen4_spec_cycle_run(s, first_token, temperature, top_k, top_p, min_p, rng,
++                                                exact_sampling, accepted, accepted_cap, err, errlen);
++    }
++    const uint32_t tm_pos = s->qwen4_graph.pos;
++    memset(g_qwen4_tm.mask, 0, sizeof(g_qwen4_tm.mask));
++    ds4_tm_cycle_begin();
++    const int rc = ds4_session_qwen4_spec_cycle_run(s, first_token, temperature, top_k, top_p, min_p, rng,
++                                                    exact_sampling, accepted, accepted_cap, err, errlen);
++    ds4_tm_cycle_end(tm_pos, rc,
++                     g_qwen4_tm.sel ? ds4_gpu_tensor_contents(g_qwen4_tm.sel) : NULL,
++                     g_qwen4_tm.wts ? ds4_gpu_tensor_contents(g_qwen4_tm.wts) : NULL,
++                     DS4_N_LAYER, DS4_N_EXPERT_USED, g_qwen4_tm.mask);
++    return rc;
++}
++
++static int ds4_session_qwen4_spec_cycle_run(ds4_session *s, int first_token, float temperature, int top_k,
++                                            float top_p, float min_p, uint64_t *rng, bool exact_sampling,
++                                            int *accepted, int accepted_cap,
++                                            char *err, size_t errlen) {
+     ds4_engine *e = s->engine;
+     ds4_qwen4_gpu_graph *g = &s->qwen4_graph;
+     const ds4_model *m = &e->model;
+@@ -75494,6 +75780,7 @@ static int ds4_session_qwen4_spec_cycle(ds4_session *s, int first_token, float t
+         }
+     }
+     qwen4_spec_note_first_draft(s, accept);
++    ds4_tm_cycle_drafts(deep ? 2 : 1, (accept ? 1 : 0) + ((deep && accept && accept2) ? 1 : 0));
+     if (deep) {
+         if (accept2) s->qwen4_reject2_streak = 0u;
+         else if (accept) s->qwen4_reject2_streak++;
+diff --git a/ds4_server.c b/ds4_server.c
+index 0d780cd..e3641a5 100644
+--- a/ds4_server.c
++++ b/ds4_server.c
+@@ -1,4 +1,5 @@
+ #include "ds4.h"
++#include "ds4_telemetry.h"
+ #include "ds4_tool_text.h"
+ #include "ds4_distributed.h"
+ #include "ds4_gpu_args.h"
+@@ -9932,6 +9933,7 @@ static void server_log(ds4_log_type type, const char *fmt, ...) {
+         char *line = xmalloc((size_t)n + 1);
+         vsnprintf(line, (size_t)n + 1, fmt, ap);
+         ds4_log(stderr, type, "%s", line);
++        ds4_tm_log_line(type == DS4_LOG_PREFILL ? "prefill" : type == DS4_LOG_GENERATION ? "generation" : "server", line);
+         free(line);
+     }
+     va_end(ap);
