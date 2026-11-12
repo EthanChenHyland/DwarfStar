@@ -1,7 +1,6 @@
 {
-  "schema": 1,
-  "purpose": "Read-only conversation lookup; no active or hidden agent registrations",
-  "active_profile": "DwarfStar Cyber LOW",
+  "schema": 2,
+  "purpose": "Read-only lookup of saved conversations from retired profile names. Current profiles are added from the catalog.",
   "retired_agent_ids": {
     "DwarfStar Coding 128K": {
       "read_only": true,
@@ -36,9 +35,8 @@
     "scope-v1-6": "DwarfStar Scope v1.6 Coding 128K",
     "scope-v2": "DwarfStar Scope v2 Coding 128K",
     "sandbox": "DwarfStar Sandbox 128K",
-    "cyber-off": "DwarfStar Cyber OFF",
-    "cyber-low": "DwarfStar Cyber LOW",
-    "cyber-medium": "DwarfStar Cyber MEDIUM",
-    "cyber-xhigh": "DwarfStar Cyber XHIGH"
+    "scope-vanilla": "DwarfStar Scope Vanilla 128K",
+    "vanilla": "DwarfStar Vanilla 128K",
+    "swift15": "DwarfStar Swift 1.5 128K"
   }
 }
