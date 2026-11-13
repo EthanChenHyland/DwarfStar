@@ -76,6 +76,7 @@ class Hub:
         self.last_router_record = 0.0
         self.live = self._fresh_live()
         self.stopped_at: dict[str, float] = {}
+        self.stopped_models: set[str] = set()
         self.router_heat: dict[str, list[list[int]]] = {}
         self.counts = collections.Counter()
         self.started = time.time()
@@ -208,9 +209,11 @@ class Hub:
         self.live["runtime"] = {k: event.get(k) for k in ("phase", "pid", "load_s", "memory_plan", "admission") if k in event}
         if phase in ("stopped", "start_failed"):
             self.stopped_at[event.get("model") or ""] = float(event.get("t") or time.time())
+            self.stopped_models.add(event.get("model") or "")
             self._close_session()
         elif phase in ("starting", "running"):
             self.stopped_at.pop(event.get("model") or "", None)
+            self.stopped_models.discard(event.get("model") or "")
 
     def _from_native_record(self, event: dict) -> list[dict]:
         line = ANSI.sub("", event.get("line", ""))
@@ -237,7 +240,9 @@ class Hub:
             reused, prompt, new = int(match[2]), int(match[3]), int(match[4])
             live["request_count"] += 1
             # Native log lines can arrive after the controller reported the stop; they must not reopen a session.
-            if float(event.get("t") or 0) > self.stopped_at.get(event.get("model") or "", -1):
+            # A stopped model produces nothing new until it reports starting again; anything later is a delayed record.
+            model = event.get("model") or ""
+            if model not in self.stopped_models and float(event.get("t") or 0) > self.stopped_at.get(model, -1):
                 self._open_session(event.get("model"))
             live["request"] = request = {
                 "phase": "PREFILL", "active": True, "sequence": live["request_count"], "started": event.get("t"),

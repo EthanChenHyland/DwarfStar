@@ -36,8 +36,25 @@ class HubTests(unittest.TestCase):
         late["t"] = 9.5  # written by the runtime before it exited, delivered after the stop
         hub.ingest(late)
         self.assertEqual(opened, [])
+        hub.ingest({"kind": "runtime", "src": "controller", "model": "cyber", "t": 10.5, "phase": "starting"})
         fresh = native("chat ctx=0..41:41 prompt start")
         fresh["t"] = 11.0
+        hub.ingest(fresh)
+        self.assertEqual(opened, ["cyber"])
+        hub.stop()
+
+    def test_nothing_reopens_a_session_for_a_stopped_model_until_it_starts(self):
+        hub = Hub(record=True)
+        opened = []
+        hub._open_session = lambda model: opened.append(model)
+        hub.ingest({"kind": "runtime", "src": "service", "model": "cyber", "t": 10.0, "phase": "stopped"})
+        late = native("chat ctx=0..41:41 prompt start")
+        late["t"] = 12.0  # stamped on arrival, after the stop
+        hub.ingest(late)
+        self.assertEqual(opened, [])
+        hub.ingest({"kind": "runtime", "src": "controller", "model": "cyber", "t": 13.0, "phase": "running"})
+        fresh = native("chat ctx=0..41:41 prompt start")
+        fresh["t"] = 14.0
         hub.ingest(fresh)
         self.assertEqual(opened, ["cyber"])
         hub.stop()
