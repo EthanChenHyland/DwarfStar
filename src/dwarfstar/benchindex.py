@@ -7,8 +7,9 @@ evidence reproduces the same file.
 
     dwarfstar bench-index [--evidence-root DIR] [--check]
 
-The evidence root defaults to ``legacy_root`` in ``config/local.json``. A
-report that is missing is listed under ``missing`` and its rows are omitted.
+The evidence root defaults to ``<assets>/Manifests/evidence/legacy``, which keeps the reports of every earlier
+benchmark review under their original relative paths. A report that is missing is listed under ``missing`` and its
+rows are omitted.
 """
 from __future__ import annotations
 
@@ -16,7 +17,7 @@ import json
 import sys
 from pathlib import Path
 
-from dwarfstar.paths import CODE, DATA, local_config
+from dwarfstar.paths import CODE, EVIDENCE
 
 OUTPUT = CODE / "research" / "benchmark-index.json"
 SWIFT = "challengers/dwarfstar-swift15/benchmarks/reviews/"
@@ -194,9 +195,9 @@ def build(evidence_root: Path) -> dict:
             continue
         entries += rows
         sources.append({"report": relative, "rows": len(rows)})
-    for name, function, target in (("runtime-parity", runtime_parity, DATA / "evidence/runtime-parity"),
-                                   ("opening-probe", opening_probe, DATA / "evidence/opening-probe/opening-probe-20261112.json"),
-                                   ("production-validation", production_validation, DATA / "evidence/production-validation/validation.json")):
+    for name, function, target in (("runtime-parity", runtime_parity, EVIDENCE / "runtime-parity"),
+                                   ("opening-probe", opening_probe, EVIDENCE / "opening-probe/opening-probe-20261112.json"),
+                                   ("production-validation", production_validation, EVIDENCE / "production-validation/validation.json")):
         if target.exists():
             rows = function(target)
             entries += rows
@@ -224,7 +225,7 @@ def main(argv: list[str]) -> int:
     root = None
     if "--evidence-root" in argv:
         root = Path(argv[argv.index("--evidence-root") + 1])
-    root = root or Path(local_config().get("legacy_root", DATA))
+    root = root or EVIDENCE / "legacy"
     index = build(root)
     text = json.dumps(index, indent=1) + "\n"
     if "--check" in argv:

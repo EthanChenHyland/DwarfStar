@@ -1,7 +1,9 @@
 {
-  "data_root": "/path/to/dwarfstar-data",
+  "_comment": "Optional. Every key may be omitted; the defaults are the standard macOS locations (see src/dwarfstar/paths.py).",
+  "assets_root": "~/AI/DwarfStar",
+  "data_root": "~/Library/Application Support/DwarfStar",
+  "cache_root": "~/Library/Caches/DwarfStar",
+  "logs_root": "~/Library/Logs/DwarfStar",
   "extra_tool_paths": [],
-  "extra_read_paths": [],
-  "admission_lock": null,
-  "legacy_root": "/path/to/local/evidence (optional; used only to regenerate the benchmark index)"
+  "extra_read_paths": []
 }
