@@ -385,6 +385,15 @@ def status() -> dict:
         errors.append("ACP telemetry collection error")
     if request.get("active") and time.time() - request.get("observed_at", 0) > 8:
         errors.append("ACP metadata collection error: stale receipt; no model stall or completion inferred")
+    live = {}
+    if row and h["ok"]:
+        from dwarfstar.server_metrics import splash_live
+
+        try:
+            with urllib.request.urlopen(c["endpoint"].removesuffix("/v1") + "/status", timeout=2) as stream:
+                live = splash_live(json.load(stream))
+        except Exception as error:
+            errors.append("Splash status collection error: " + type(error).__name__)
     tooling = read(paths.CODE / "agent-tools/state/capabilities.json", {})
     last = read(STATE / "last-stopped.json", {}) or {}
     return {
@@ -398,6 +407,7 @@ def status() -> dict:
         "endpoint": c["endpoint"],
         "configuration": c,
         "speculative": c["speculative"],
+        "splash": live,
         "request": request,
         "phase": phase,
         "resources": resource,

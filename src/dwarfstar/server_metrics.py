@@ -103,3 +103,26 @@ def assemble(config: dict, row: dict | None, clients: list[dict], now: float | N
         request["phase"] = "TOOL_CALL"
     request["active_client_count"] = sum(bool(x.get("active")) for x in clients)
     return request, request.get("phase", "IDLE")
+
+
+def splash_live(status: dict) -> dict:
+    """What Splash measured itself, from one read of /status (about 2 ms, 17 KB). Rates are Splash's cumulative values
+    since the server started; nothing is estimated here, and a missing field stays missing."""
+    if not isinstance(status, dict) or not status.get("ready"):
+        return {}
+    metrics, cache = status.get("metrics") or {}, status.get("cache") or {}
+    pick = lambda d, *keys: {k: d[k] for k in keys if isinstance(d, dict) and k in d}  # noqa: E731
+    return {
+        "source": f"splash /status schema {status.get('schema_version')}",
+        "requests": pick(status.get("requests") or {}, "submitted", "completed", "cancelled", "failed"),
+        "active_requests": len(status.get("active_requests") or []),
+        "ttft_ms": pick(metrics.get("ttft_ms") or {}, "p50", "p95", "samples"),
+        "inter_token_ms": pick(metrics.get("itl_ms") or {}, "p50", "p95", "samples"),
+        "since_start": pick(metrics, "prefill_input_tokens", "prefill_tokens_per_second", "decode_output_tokens",
+                            "decode_tokens_per_second", "drafted_tokens", "accepted_draft_tokens", "draft_acceptance_rate"),
+        "prefix_cache": pick(cache, "hits", "cold_misses", "hit_rate", "reused_tokens", "kv_hit_tokens"),
+        "scheduler": pick(status.get("scheduler") or {}, "queued", "prefilling", "decoding"),
+        "memory_bytes": pick(status.get("memory_actual") or {}, "current_bytes", "peak_bytes"),
+        "memory_pressure": status.get("memory_pressure"),
+        "thermal_state": status.get("thermal_state"),
+    }
