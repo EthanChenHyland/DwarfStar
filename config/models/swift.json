@@ -1,0 +1,118 @@
+{
+  "id": "swift",
+  "order": 2,
+  "family": "Swift",
+  "display_name": "DwarfStar Swift 1.5",
+  "short_name": "Swift 1.5",
+  "summary": "Swift 1.5 fine-tune of Qwen3.8-Flash-Next, built with the GSQ-RCO Q2_0 recipe and Swift's own routers, MTP block and tokenizer.",
+  "default": false,
+  "architecture": {
+    "name": "Qwen3.8-Flash-Next (Swift 1.5 fine-tune)",
+    "gguf_architecture": "qwen4exp",
+    "type": "Mixture-of-experts transformer with linear-attention layers, n-gram per-layer embeddings (PLE) and a multi-token-prediction head",
+    "layers": 48,
+    "experts_per_layer": 512,
+    "experts_active": 10
+  },
+  "source": {
+    "repository": "ukisai/Swift1.5-Qwen3.8-Flash-Next",
+    "revision": "0bd4fe22431372cdad1979267d3ab45aa7e6150a",
+    "derivation": "GSQ-RCO Q2_0 expert payloads, 96 router tensors restored from Swift BF16, Swift MTP block and tokenizer"
+  },
+  "quantization": {
+    "label": "GSQ-RCO Q2_0",
+    "experts": "Q2_0 (2.25 bits per weight)",
+    "dense": "mixed (BF16 routers, Q3_K to Q6_K, IQ4_XS)",
+    "ple": "IQ4_NL, disk-backed",
+    "mtp": "Q4_K + MXFP4 experts",
+    "vision": "Q8_0 + F16 (shared with Scope)"
+  },
+  "assets": {
+    "main": {
+      "path": "models/swift/Swift1.5-GSQ-RCO-Q2_0-main.gguf",
+      "bytes": 37623739744,
+      "sha256": "565806f355e0246046a14db6d51ba9c6667716a17a01ab066481eae2cd4601c0"
+    },
+    "ple": {
+      "path": "models/swift/Swift1.5-PLE-IQ4_NL.gguf",
+      "bytes": 28800138496,
+      "sha256": "a3755824b9931b70ea2a33fa8054f3c1f445835e61266733ac5a9ebefb596b1f"
+    },
+    "mtp": {
+      "path": "models/swift/Swift1.5-MTP-block.gguf",
+      "bytes": 1519038144,
+      "sha256": "00f0579a09ead1d0c9d975fe39c0a354a07c95f6eecaafb805eb22e23fca4486"
+    },
+    "vision": {
+      "path": "models/scope/mmproj-Qwen3.8-Flash-Next-Q8_0.gguf",
+      "bytes": 616703104,
+      "sha256": "b2e9b5e4a44c107f8867e67dbf09b607fd99ae33c1a97a60a6720aeb252a9dad",
+      "shared_with": "scope"
+    }
+  },
+  "port": 8031,
+  "served_model_id": "qwen3.8-flash-next",
+  "reasoning_efforts": [
+    "low",
+    "medium"
+  ],
+  "memory": {
+    "resident_model_gib": 36.43,
+    "routed_experts_gib": 31.64,
+    "kv_gib": 4.17,
+    "buffers_gib": 2.56,
+    "projector_gib": 0.57,
+    "note": "Inputs to the shared formula in config/runtime-policy.json. Resident model is the main file plus the MTP head; KV and buffers are the runtime's own plan at 131072 tokens and this model's prefill chunk. Routed experts are 48 layers x 512 experts of Q2_0, the same size for every model."
+  },
+  "state_namespaces": {
+    "low": "swift15",
+    "medium": "swift-medium"
+  },
+  "provenance": {
+    "build_manifest": "legacy: dwarfstar-swift15/builder/BUILD-MANIFEST.json",
+    "notes": "Tokenizer uses tokenizer.ggml.pre=qwen2 with NFC normalization; requires the tokenizer-adapter runtime patch."
+  },
+  "measured": {
+    "cold_load_s": 15.6,
+    "warm_load_s": 1.6,
+    "ttft_s": 0.54,
+    "prefill_tok_s": 282,
+    "decode_tok_s": 40.8,
+    "decode_long_tok_s": null,
+    "mtp_acceptance_pct": 88.6,
+    "mtp_benefit": null,
+    "tested_context_tokens": null,
+    "peak_wired_gib": null,
+    "evidence": {
+      "load, TTFT, prefill, decode": "runtime parity run 2026-11-12",
+      "mtp": "Swift 1.5 build report 2026-11-01 (matched session 88.6 %, first session 90.2 %)"
+    },
+    "quality": [
+      {
+        "name": "Frozen low-risk suite, LOW",
+        "result": "6 of 8 accepted (75 %)",
+        "note": "One natural attempt per task, no repair (2026-11-02). Median wall 160.1 s, 4,237 generated tokens"
+      },
+      {
+        "name": "Frozen rematch, MEDIUM",
+        "result": "8 of 8 accepted (100 %)",
+        "note": "Fixed both LOW failures with no new failures (2026-11-11). Median wall 159.7 s, 4,034 generated tokens"
+      },
+      {
+        "name": "MEDIUM against Scope, three matched tasks",
+        "result": "139.7 s against 144.9 s median wall",
+        "note": "Reasoning 77.3 s against 83.9 s; 3,251 against 3,754 tokens. Scope sample is historical"
+      },
+      {
+        "name": "MEDIUM cost",
+        "result": "+6.9 % total wall over LOW",
+        "note": "Help bullets +28.3 %, mechanical edit +71.2 %"
+      },
+      {
+        "name": "Opening-token probe (2026-11-12)",
+        "result": "80 of 80 clean",
+        "note": "Same 8.3K-token agent request, production sampling, 24 tokens each"
+      }
+    ]
+  }
+}

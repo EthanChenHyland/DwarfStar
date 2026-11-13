@@ -1,0 +1,87 @@
+{
+  "schema": 1,
+  "version": "2026.11.2",
+  "description": "The one runtime policy every DwarfStar model uses. A model file in config/models may override a model_defaults key only with a reason in its override_reasons; repeating a default is rejected.",
+  "model_defaults": {
+    "runtime": "ds4-unified",
+    "context": 131072,
+    "max_output": 81920,
+    "prefill_chunk": 2048,
+    "sampling": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.0
+    },
+    "cache": {
+      "k_cache_dtype": "F16",
+      "v_cache_dtype": "F16",
+      "indexer_key_dtype": "F32",
+      "block_key_dtype": "F16",
+      "kv_bytes_per_token": 34176,
+      "policy": "fixed by the runtime's Qwen4Exp graph (K/V allocated and read as F16; no quantized KV path). Q8 KV is future runtime and kernel work.",
+      "disk_checkpoints": {
+        "budget_mb": 12288,
+        "continued_interval_tokens": 10000
+      }
+    },
+    "capabilities": [
+      "acp",
+      "full_auto",
+      "native_tool_calls",
+      "workspace",
+      "shell",
+      "browser",
+      "computer_use",
+      "vision",
+      "mtp",
+      "compaction",
+      "recovery",
+      "telemetry",
+      "chats"
+    ],
+    "agent": {
+      "policy": "Scope v1 only",
+      "prompt": "prompts/scope-first-system-prompt.md",
+      "prompt_mode": "template",
+      "features": {
+        "recovery_enabled": false,
+        "tool_result_hygiene_enabled": false,
+        "finish_nudge_enabled": false
+      }
+    }
+  },
+  "runtime": {
+    "binding": "127.0.0.1 only; one port per model",
+    "attention": "the runtime's fused Metal attention kernels; always on (no switch exists)",
+    "weights": "memory-mapped GGUF with Metal residency requested at load; no mlock flag in the runtime",
+    "gpu_offload": "full: every layer, the MTP head and the vision projector run on the Metal GPU",
+    "ple": "n-gram table read from disk row by row, never resident",
+    "threads": "runtime default (GPU-bound; no CPU thread tuning)",
+    "mtp": "native multi-token prediction on, adaptive depth, per-request timing",
+    "vision": "projector loaded at start and resident",
+    "batch": "one request at a time per model; prefill in chunks of prefill_chunk tokens",
+    "output_reservation": "the server budgets decode against the exact remaining context; max_output is the per-request ceiling",
+    "environment": {
+      "DS4_QWEN4_MOE_TAILS": "1"
+    },
+    "telemetry": "optional hooks; nothing is produced unless a Workstation subscriber asks (UDP 8039 events, 8037 detail heartbeats)",
+    "logging": "one server log per start in the model's state directory; lifecycle journal in <data>/logs/lifecycle.jsonl"
+  },
+  "lifecycle": {
+    "models_running_at_once": 1,
+    "startup_timeout_s": 600,
+    "stop_timeout_s": 60,
+    "port_close_timeout_s": 90,
+    "health_attempts_after_start": 3,
+    "reasoning_change": "same model: no restart; the effort is carried per request by the agent's provider file",
+    "ownership": "the controller records pid, process birth and argv hash; it signals only that exact process"
+  },
+  "memory": {
+    "formula": "planned = resident model (main file + MTP head) + KV cache at the configured context + graph buffers at the prefill chunk + vision projector; required = planned + system reserve",
+    "system_reserve_gib": 1.5,
+    "metal_working_set": "the GPU's recommendedMaxWorkingSetSize, read from Metal on this machine; a model whose plan exceeds it fails at depth even when unified memory is free",
+    "metal_working_set_reference_gib": 51.84,
+    "switching": "a switch stops the running model first, so its planned memory counts as available for the target"
+  }
+}

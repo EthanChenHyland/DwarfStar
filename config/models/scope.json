@@ -1,0 +1,118 @@
+{
+  "id": "scope",
+  "order": 1,
+  "family": "Scope",
+  "display_name": "DwarfStar Scope Vanilla",
+  "short_name": "Scope Vanilla",
+  "summary": "Production default. The published GSQ-RCO 2-bit build of Qwen3.8-Flash-Next.",
+  "default": true,
+  "architecture": {
+    "name": "Qwen3.8-Flash-Next",
+    "gguf_architecture": "qwen4exp",
+    "type": "Mixture-of-experts transformer with linear-attention layers, n-gram per-layer embeddings (PLE) and a multi-token-prediction head",
+    "layers": 48,
+    "experts_per_layer": 512,
+    "experts_active": 10
+  },
+  "source": {
+    "repository": "ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF",
+    "revision": "ed59f92082b1e93c0e96d60a8b11aab089b52f09",
+    "derivation": "Published GGUF, used byte for byte"
+  },
+  "quantization": {
+    "label": "GSQ-RCO Q2_0",
+    "experts": "Q2_0 (2.25 bits per weight)",
+    "dense": "mixed (BF16 routers, Q3_K to Q6_K, IQ4_XS)",
+    "ple": "IQ4_NL, disk-backed",
+    "mtp": "Q4_K + MXFP4 experts",
+    "vision": "Q8_0 + F16"
+  },
+  "assets": {
+    "main": {
+      "path": "models/scope/Q2_0/Qwen3.8-Flash-Next-GSQ-RCO-Q2_0-00001-of-00002.gguf",
+      "bytes": 37623740192,
+      "sha256": "69820c02ec7d0b45ef2ebb19d6620299db749fe2aded7f39f93c6b88b199b720"
+    },
+    "ple": {
+      "path": "models/scope/Q2_0/Qwen3.8-Flash-Next-GSQ-RCO-Q2_0-00002-of-00002.gguf",
+      "bytes": 28800138432,
+      "sha256": "316b46f3a2dbd68c900f43136ab9449f9dcc3725dfd8c794847c204bc161e113"
+    },
+    "mtp": {
+      "path": "models/scope/Qwen3.8-Flash-Next-MTP-block.gguf",
+      "bytes": 1519036352,
+      "sha256": "bbb435d7ba548ddd5b2d6f660863bf56836e76f2b7d7ef98fa2c983fd0fefae1",
+      "source": "paperniuk/Qwen3.8-Flash-Next-MTP-block@d98c24aabe795ada199e6e84b4fb41e1a07b317c"
+    },
+    "vision": {
+      "path": "models/scope/mmproj-Qwen3.8-Flash-Next-Q8_0.gguf",
+      "bytes": 616703104,
+      "sha256": "b2e9b5e4a44c107f8867e67dbf09b607fd99ae33c1a97a60a6720aeb252a9dad"
+    }
+  },
+  "port": 8030,
+  "served_model_id": "qwen3.8-flash-next",
+  "reasoning_efforts": [
+    "low"
+  ],
+  "memory": {
+    "resident_model_gib": 36.43,
+    "routed_experts_gib": 31.64,
+    "kv_gib": 4.17,
+    "buffers_gib": 2.56,
+    "projector_gib": 0.57,
+    "note": "Inputs to the shared formula in config/runtime-policy.json. Resident model is the main file plus the MTP head; KV and buffers are the runtime's own plan at 131072 tokens and this model's prefill chunk. Routed experts are 48 layers x 512 experts of Q2_0, the same size for every model."
+  },
+  "state_namespaces": {
+    "low": "scope-vanilla"
+  },
+  "provenance": {
+    "build_manifest": "legacy: dwarfstar-paperniuk/installation-evidence/assets.json",
+    "notes": "Weights are the upstream files; SHA-256 verified against Hugging Face LFS metadata at install."
+  },
+  "measured": {
+    "cold_load_s": 15.5,
+    "warm_load_s": 1.6,
+    "ttft_s": 0.55,
+    "prefill_tok_s": 283,
+    "decode_tok_s": 40.9,
+    "decode_long_tok_s": 32.4,
+    "decode_long_context": "synthetic paired decode, MTP on (median)",
+    "mtp_acceptance_pct": 86.8,
+    "mtp_benefit": "+5.34 % median paired decode (20 of 25 parity-qualified synthetic pairs)",
+    "tested_context_tokens": 65680,
+    "peak_wired_gib": null,
+    "evidence": {
+      "load, TTFT, prefill, decode": "runtime parity run 2026-11-12 (5 short prompts and one 8.3K-token agent request, temperature 0)",
+      "mtp": "Scope decode and MTP audit 2026-11-11; Swift build matched microcheck",
+      "context": "Scope decode and MTP audit 2026-11-11"
+    },
+    "quality": [
+      {
+        "name": "Matched comparison against Swift LOW",
+        "result": "Scope wins on quality",
+        "note": "Aggregate quality 8.76; Swift LOW was faster but missed critical Ledger behaviour (2026-11-01)"
+      },
+      {
+        "name": "Latency decomposition",
+        "result": "Model-compute bound",
+        "note": "Native inference is about 95 % of warm task time; decode 36 to 37 tok/s on real coding (2026-11-03)"
+      },
+      {
+        "name": "Stable-prefix restore",
+        "result": "Partial success, not adopted",
+        "note": "Median first-token saving 21.1 s, median paired task-wall saving 5.65 % against a 15 % target"
+      },
+      {
+        "name": "Native adaptive MTP",
+        "result": "+5.34 % decode",
+        "note": "Median ON 32.35 tok/s against OFF 30.96 tok/s; real coding with MTP 37.95 tok/s median"
+      },
+      {
+        "name": "Opening-token probe (2026-11-12)",
+        "result": "80 of 80 clean",
+        "note": "Same 8.3K-token agent request, production sampling, 24 tokens each"
+      }
+    ]
+  }
+}
