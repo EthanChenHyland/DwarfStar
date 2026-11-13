@@ -213,11 +213,10 @@ class LifecycleTests(unittest.TestCase):
 
         os.environ.setdefault("DWARFSTAR_MODEL", "scope")
         from dwarfstar import runtime_control
-        from tests.native_controller import native_controller
 
-        with native_controller(runtime_control), tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory:
             state = Path(directory)
-            row = {"pid": 4242, "birth": "b", "argv_sha256": "a", "command": str(runtime_control.SERVER) + " -m x"}
+            row = {"pid": 4242, "birth": "b", "argv_sha256": "a", "command": str(runtime_control.SERVER) + " -u -P -m server.server"}
             (state / "server.json").write_text(json.dumps(row))
             alive = {"n": 2}
 

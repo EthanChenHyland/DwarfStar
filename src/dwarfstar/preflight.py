@@ -3,7 +3,7 @@
 from pathlib import Path
 import concurrent.futures, hashlib, json, os, shutil, socket, subprocess, tempfile, time, signal, sys
 from dwarfstar.task_infrastructure import CODE, ROOT, STATE, atomic, read, lock
-from dwarfstar import paths
+from dwarfstar import catalog, paths
 from dwarfstar.approval_policy import mode as approval_mode
 
 
@@ -161,7 +161,7 @@ def check(workspace, profile="scope", require_model=True, browser_required=False
         "Model path",
         lambda: all(Path(p).is_file() for p in c["model_files"].values()),  # every backend lists its files here
     )
-    add("Runtime", lambda: Path(c["argv"][0]).is_file() and c["runtime"] == "Paperniuk DwarfStar")
+    add("Runtime", lambda: Path(c["argv"][0]).is_file() and c["runtime_build"] == catalog.runtime_pin(c["model_key"])["id"])
     add("Context/output", lambda: 4096 <= c["context"] <= 262144 and 0 < c["max_output"] < c["context"])
     add("ACP", lambda: paths.omp().exists() and paths.bun().exists())
 

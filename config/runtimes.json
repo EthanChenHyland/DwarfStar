@@ -1,57 +1,19 @@
 {
   "schema": 1,
+  "name": "DwarfStar runtime",
   "source": {
-    "url": "https://github.com/paperniuk/ds4",
-    "branch": "m1-flash-next",
-    "commit": "6ea598155f7ac1a27dad3cda5b8fc9123fdef79a"
+    "url": "https://github.com/paperniuk/splash",
+    "tag": "1.6.1-m1",
+    "commit": "5312c54",
+    "patches": "backends/splash-m1/patches"
   },
-  "name": "Paperniuk DwarfStar",
+  "retired": {
+    "native ds4": "The Paperniuk ds4 runtime (ds4-unified, ds4-reference, ds4-swift-tokenizer) served all three models until 2026-11-13 and was retired after Splash-m1 passed every validation; see docs/NATIVE-RETIREMENT.md and the tag rollback/native-default-20261113."
+  },
   "runtimes": {
-    "ds4-reference": {
-      "description": "Pinned upstream build, unmodified",
-      "patches": [],
-      "binary_sha256": "76a0aa5dc8eff126d67d4bbefe6ff9407be3937fd06416e483aeeea609742d44",
-      "directory": "runtime/ds4-reference",
-      "kind": "native"
-    },
-    "ds4-swift-tokenizer": {
-      "description": "Pinned upstream plus the Swift tokenizer adapter (active only for tokenizer.ggml.pre=qwen2)",
-      "patches": [
-        "native/patches/swift-tokenizer.patch"
-      ],
-      "binary_sha256": "0ce36bbd18c772d0a4e48a88d7ee51c445e35017d5fc05c321084576eb922114",
-      "directory": "runtime/ds4-swift-tokenizer",
-      "kind": "native"
-    },
-    "ds4-unified": {
-      "description": "Pinned upstream plus the Swift tokenizer adapter (active only for tokenizer.ggml.pre=qwen2) and the optional telemetry/calibration hooks (inactive unless enabled by environment)",
-      "patches": [
-        "native/patches/swift-tokenizer.patch",
-        "native/apply_hooks.py",
-        "native/telemetry/ds4_telemetry.c",
-        "native/telemetry/ds4_telemetry.h"
-      ],
-      "binary_sha256": "f270b43196aeccaefdc740369f3dff08d1c1c21fa8741334025e2d731bac41ca",
-      "directory": "runtime/ds4-unified",
-      "kind": "native"
-    },
-    "splash-m1-1.6.1": {
-      "kind": "splash",
-      "description": "Splash-m1 1.6.1-m1 (paperniuk/splash, the M1/M2 port of incoai/splash): Apple7 Metal kernels, DFlash2 speculative decoding, INT8 KV, prefix cache. Installed unmodified from the release tarball; needs macOS 26.4+. Kept for rollback; DwarfStar's models use splash-m1-1.6.1-ds1",
-      "release": "1.6.1-m1",
-      "source": "https://github.com/paperniuk/splash/releases/tag/1.6.1-m1",
-      "tarball_sha256": "fde8cc8fff55f7706d38078638e2d518bfa1a229cd8d4b12869ca2de39facbcd",
-      "binary_sha256": "5212f12688e437d3c075fb19d7d2e78545c5a5fac6597cf4553ebac14a492657",
-      "shader_sha256": {
-        "splash.metallib": "6e8bc6c270330bd49a30cd040f4e54b582209ba260af129fd6a13c913466676d",
-        "host-step.metallib": "dc7d6916fbae274bdcff3f3dcf16838a777ae6772f2457c926d839f13833967d"
-      },
-      "directory": "backends/splash-m1/1.6.1-m1/dist/splash-1.6.1-m1-arm64-macos26",
-      "home": "backends/splash-m1/home"
-    },
     "splash-m1-1.6.1-ds1": {
       "kind": "splash",
-      "description": "Splash-m1 1.6.1-m1 with DwarfStar's patches (backends/splash-m1/patches): the qwen2 tokenizer profile (Swift) and exact BF16 planes (BF16S for widths of 64 but not 256, BF16 hyper-connections kept exact; Cyber). Built by scripts/backends/build_splash.sh from the 1.6.1-m1 source with Xcode 26.6's Metal toolchain; its Python, server and installer are the release's",
+      "description": "Splash-m1 1.6.1-m1 with DwarfStar's patches (backends/splash-m1/patches): the qwen2 tokenizer profile (Swift) and exact BF16 planes (BF16S for widths of 64 but not 256, BF16 hyper-connections kept exact; Cyber). Built by scripts/backends/build_splash.sh from the 1.6.1-m1 source with Xcode 26.6's Metal toolchain; its Python, server and installer are the release's. directory is relative to the assets root, home to the data root.",
       "release": "1.6.1-m1-ds1",
       "source": "https://github.com/paperniuk/splash/tree/1.6.1-m1 + backends/splash-m1/patches/0001-qwen2-tokenizer-profile.patch, 0002-exact-bf16-planes.patch",
       "tarball_sha256": "fde8cc8fff55f7706d38078638e2d518bfa1a229cd8d4b12869ca2de39facbcd",
@@ -63,8 +25,8 @@
       "adapter_sha256": {
         "install/gguf.py": "9fe875393cfb3e1b651db8f56dd2bef971f08535fda4fadfae1dd34229b7575e"
       },
-      "directory": "backends/splash-m1/1.6.1-m1-ds1",
-      "home": "backends/splash-m1/home"
+      "directory": "Runtimes/splash-m1-1.6.1-ds1",
+      "home": "runtime/splash-home"
     }
   }
 }

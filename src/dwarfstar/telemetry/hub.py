@@ -2,16 +2,11 @@
 
 One hub runs inside the Workstation service. It
 
-* receives JSON datagrams from the controller, the agent layer and the native
-  runtime on a loopback UDP port;
-* turns the native runtime's progress records into structured request events;
-* maintains a compact live snapshot (request phase, token counts, rates,
-  context occupancy, MTP, n-gram disk reads, router heat, tool timeline);
+* receives JSON datagrams from the controller and the agent layer on a loopback UDP port;
+* maintains a compact live snapshot (runtime phase, request, context, tool timeline; and, for sessions recorded
+  from the retired native runtime, its verify cycles, n-gram reads and router heat, so they still replay);
 * fans events out to subscribers (the Workstation's event stream);
-* records a bounded history per session for replay;
-* tells the native runtime how much detail to produce by sending heartbeats
-  only while a subscriber wants it. No subscriber means no heartbeat, which
-  means the runtime computes nothing extra.
+* records a bounded history per session (one per model start) for replay.
 """
 from __future__ import annotations
 
@@ -32,17 +27,6 @@ SESSION_EVENT_LIMIT = 20000
 SESSION_FILE_LIMIT = 30
 TICK_FANOUT_HZ = 30.0
 ROUTER_RECORD_INTERVAL_S = 0.25
-ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
-
-RE_START = re.compile(r"\b(chat|completion) ctx=(\d+)\.\.(\d+):(\d+)(?: ([A-Z_ ]+))? prompt start$")
-RE_PREFILL = re.compile(r"\bprefill chunk (\d+)/(\d+) \([\d.]+%\) chunk=([\d.]+) t/s avg=([\d.]+) t/s ([\d.]+)s$")
-RE_PROMPT_DONE = re.compile(r"\bprompt done ([\d.]+)s$")
-RE_DECODE = re.compile(r"gen=(\d+)(.*?) decoding chunk=([\d.]+) t/s avg=([\d.]+) t/s ([\d.]+)s$")
-RE_FINISH = re.compile(r"gen=(\d+).*? finish=(stop|length|tool_calls|error|cancelled)(?: .*?)? ([\d.]+)s$")
-RE_KV_HIT = re.compile(r"kv cache hit \w+(?: RESPPROTO)? tokens=(\d+)")
-RE_KV_STORE = re.compile(r"kv cache stored tokens=(\d+) .*?reason=(\w+).*?size=([\d.]+) MiB")
-RE_TOOLS = re.compile(r"tool calls ctx=.*? n=(\d+) .*?names=\[([^\]]*)\]")
-RE_VISION = re.compile(r"vision embedding (encoded|cache hit)")
 
 
 class Subscriber:
@@ -59,9 +43,8 @@ class Subscriber:
 
 
 class Hub:
-    def __init__(self, event_port: int | None = None, control_port: int | None = None, record: bool = True):
+    def __init__(self, event_port: int | None = None, record: bool = True):
         self.event_port = event_port or telemetry.event_port()
-        self.control_port = control_port or telemetry.DEFAULT_CONTROL_PORT
         self.lock = threading.Lock()
         self.ring: collections.deque = collections.deque(maxlen=RING)
         self.subscribers: list[Subscriber] = []
@@ -81,7 +64,6 @@ class Hub:
         self.counts = collections.Counter()
         self.started = time.time()
         self.socket: socket.socket | None = None
-        self.control = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
     # ------------------------------------------------------------- lifecycle
 
@@ -93,17 +75,15 @@ class Hub:
         self.socket.bind(("127.0.0.1", self.event_port))
         self.socket.settimeout(0.5)
         threading.Thread(target=self._receive_loop, name="telemetry-receive", daemon=True).start()
-        threading.Thread(target=self._heartbeat_loop, name="telemetry-heartbeat", daemon=True).start()
 
     def stop(self) -> None:
         self.stop_flag.set()
         self._close_session()
-        for handle in (self.socket, self.control):
-            try:
-                if handle is not None:
-                    handle.close()
-            except OSError:
-                pass
+        try:
+            if self.socket is not None:
+                self.socket.close()
+        except OSError:
+            pass
 
     # ------------------------------------------------------------ subscribers
 
@@ -121,18 +101,6 @@ class Hub:
     def wanted_level(self) -> int:
         with self.lock:
             return max((s.level for s in self.subscribers), default=0)
-
-    def _heartbeat_loop(self) -> None:
-        """While somebody is watching, keep the native runtime's detail level alive."""
-        while not self.stop_flag.is_set():
-            level = self.wanted_level()
-            if level:
-                try:
-                    payload = json.dumps({"level": level, "ttl_ms": 3000}).encode()
-                    self.control.sendto(payload, ("127.0.0.1", self.control_port))
-                except OSError:
-                    pass
-            self.stop_flag.wait(1.0)
 
     # --------------------------------------------------------------- receive
 
@@ -159,10 +127,6 @@ class Hub:
     def ingest(self, event: dict) -> None:
         kind = event["kind"]
         self.counts[kind] += 1
-        if kind == "log":
-            for derived in self._from_native_record(event):
-                self.publish(derived)
-            return
         if kind == "tick":
             self._tick(event)
             return
@@ -216,82 +180,8 @@ class Hub:
         elif phase in ("starting", "running"):
             self.stopped_at.pop(event.get("model") or "", None)
             self.stopped_models.discard(event.get("model") or "")
-
-    def _from_native_record(self, event: dict) -> list[dict]:
-        line = ANSI.sub("", event.get("line", ""))
-        base = {"t": event.get("t"), "src": "native", "model": event.get("model")}
-        live, request = self.live, self.live["request"]
-        live["model"] = event.get("model") or live["model"]
-        out: list[dict] = []
-        match = RE_KV_HIT.search(line)
-        if match:
-            live["kv"]["hits"] += 1
-            live["kv"]["last_restore_tokens"] = int(match[1])
-            out.append({**base, "kind": "kv", "phase": "hit", "tokens": int(match[1])})
-        match = RE_KV_STORE.search(line)
-        if match:
-            live["kv"]["stores"] += 1
-            out.append({**base, "kind": "kv", "phase": "store", "tokens": int(match[1]), "reason": match[2], "mib": float(match[3])})
-        match = RE_VISION.search(line)
-        if match:
-            key = "encodes" if match[1] == "encoded" else "cache_hits"
-            live["vision"][key] += 1
-            out.append({**base, "kind": "vision", "phase": match[1]})
-        match = RE_START.search(line)
-        if match:
-            reused, prompt, new = int(match[2]), int(match[3]), int(match[4])
-            live["request_count"] += 1
-            # Native log lines can arrive after the controller reported the stop; they must not reopen a session.
-            # A stopped model produces nothing new until it reports starting again; anything later is a delayed record.
-            model = event.get("model") or ""
-            if model not in self.stopped_models and float(event.get("t") or 0) > self.stopped_at.get(model, -1):
+            if phase == "running":
                 self._open_session(event.get("model"))
-            live["request"] = request = {
-                "phase": "PREFILL", "active": True, "sequence": live["request_count"], "started": event.get("t"),
-                "reused_tokens": reused, "prompt_tokens": prompt, "new_prefill_tokens": new, "prefill_done": 0,
-                "generated": 0, "tools": "TOOLS" in (match[5] or ""),
-            }
-            live["context"].update(prompt=prompt, generated=0, used=prompt)
-            live["rates"].update(prefill_tps=None, decode_tps=None, live_tps=None, ttft_s=None)
-            out.append({**base, "kind": "request", "phase": "start", **{k: request[k] for k in ("sequence", "reused_tokens", "prompt_tokens", "new_prefill_tokens", "tools")}})
-            return out
-        match = RE_PREFILL.search(line)
-        if match:
-            request.update(phase="PREFILL", prefill_done=int(match[1]), prefill_total=int(match[2]))
-            live["rates"]["prefill_tps"] = float(match[4])
-            out.append({**base, "kind": "request", "phase": "prefill", "done": int(match[1]), "total": int(match[2]),
-                        "chunk_tps": float(match[3]), "avg_tps": float(match[4]), "seconds": float(match[5])})
-        match = RE_PROMPT_DONE.search(line)
-        if match and request.get("active"):
-            seconds = float(match[1])
-            request.update(phase="DECODE", prefill_seconds=seconds, prefill_done=request.get("new_prefill_tokens", 0))
-            if seconds > 0 and request.get("new_prefill_tokens"):
-                live["rates"]["prefill_tps"] = request["new_prefill_tokens"] / seconds
-            live["rates"]["ttft_s"] = seconds
-            out.append({**base, "kind": "request", "phase": "prefill_done", "seconds": seconds, "prefill_tps": live["rates"]["prefill_tps"]})
-        match = RE_DECODE.search(line)
-        if match:
-            flags = match[2]
-            phase = "TOOL_CALL" if "DSML_START" in flags else "REASONING" if "THINKING" in flags else "OUTPUT"
-            request.update(phase=phase, generated=int(match[1]))
-            live["rates"]["decode_tps"] = float(match[4])
-            live["context"].update(generated=int(match[1]), used=request.get("prompt_tokens", 0) + int(match[1]))
-            out.append({**base, "kind": "request", "phase": "decode", "generated": int(match[1]), "chunk_tps": float(match[3]),
-                        "avg_tps": float(match[4]), "state": phase})
-        match = RE_TOOLS.search(line)
-        if match:
-            names = [name.strip() for name in match[2].split(",") if name.strip()]
-            out.append({**base, "kind": "request", "phase": "tool_calls", "count": int(match[1]), "names": names})
-        match = RE_FINISH.search(line)
-        if match:
-            generated, finish, seconds = int(match[1]), match[2], float(match[3])
-            request.update(phase="ERROR" if finish in ("error", "cancelled") else "COMPLETE", active=False,
-                           generated=generated, finish=finish, seconds=seconds)
-            live["context"].update(generated=generated, used=request.get("prompt_tokens", 0) + generated)
-            live["rates"]["live_tps"] = None
-            out.append({**base, "kind": "request", "phase": "finish", "generated": generated, "finish": finish, "seconds": seconds,
-                        "decode_tps": live["rates"]["decode_tps"], "prefill_tps": live["rates"]["prefill_tps"]})
-        return out
 
     def _tick(self, event: dict) -> None:
         live = self.live

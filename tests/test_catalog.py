@@ -102,7 +102,7 @@ class EditorEntriesTests(unittest.TestCase):
             settings = Path(folder) / "settings.json"
             settings.write_text(json.dumps({"theme": "x", "agent_servers": {
                 "Other Agent": {"command": "other"}, "DwarfStar Cyber LOW 64K": {"command": "old"}}}))
-            with mock.patch.object(zed, "DATA", Path(folder)):
+            with mock.patch.object(zed, "BACKUPS", Path(folder)):
                 result = zed.apply(settings)
             document = json.loads(settings.read_text())
             self.assertEqual(document["theme"], "x")
@@ -113,10 +113,8 @@ class EditorEntriesTests(unittest.TestCase):
 
 
 class PolicyTests(unittest.TestCase):
-    def test_only_justified_overrides_remain(self):
-        overrides = {m: sorted(model["overrides"]) for m, model in catalog.models().items()}
-        self.assertEqual(overrides, {"scope": [], "swift": [], "cyber": ["prefill_chunk"]})
-        self.assertIn("Metal", catalog.model("cyber")["overrides"]["prefill_chunk"]["reason"])
+    def test_no_model_overrides_the_shared_policy(self):
+        self.assertEqual({m: sorted(model["overrides"]) for m, model in catalog.models().items()}, {"scope": [], "swift": [], "cyber": []})
 
     def test_every_model_gets_the_shared_policy(self):
         for model in catalog.models().values():
@@ -126,7 +124,7 @@ class PolicyTests(unittest.TestCase):
     def test_an_override_without_a_reason_is_rejected(self):
         defaults = catalog.policy()["model_defaults"]
         with self.assertRaises(catalog.CatalogError):
-            catalog._apply_policy({"id": "x", "prefill_chunk": 512}, defaults)
+            catalog._apply_policy({"id": "x", "max_output": 1024}, defaults)
         with self.assertRaises(catalog.CatalogError):
             catalog._apply_policy({"id": "x", "context": defaults["context"]}, defaults)
         with self.assertRaises(catalog.CatalogError):
@@ -143,69 +141,30 @@ class PolicyTests(unittest.TestCase):
             self.assertGreater(plan["metal_headroom_gib"], 0, f"{model_id} plan exceeds the Metal working set")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
-class BackendTests(unittest.TestCase):
-    def test_splash_is_the_default_backend_for_every_model(self):
+class RuntimeTests(unittest.TestCase):
+    def test_splash_serves_every_model(self):
         for model in catalog.models().values():
             self.assertEqual((model["backend"]["kind"], model["backend"]["id"]), ("splash", "splash-m1-1.6.1-ds1"))
+        self.assertEqual(list(catalog.load()["runtimes"]["runtimes"]), ["splash-m1-1.6.1-ds1"])
 
-    def test_the_native_runtime_stays_selectable_as_the_rollback(self):
-        from unittest import mock
-
-        with mock.patch.dict("os.environ", {"DWARFSTAR_RUNTIME_OVERRIDE": "scope=ds4-unified"}):
-            catalog.load.cache_clear()
-            try:
-                scope = catalog.model("scope")
-                self.assertEqual(scope["backend"]["kind"], "native")
-                self.assertEqual((scope["cache"]["k_cache_dtype"], scope["cache"]["v_cache_dtype"]), ("F16", "F16"))
-                self.assertAlmostEqual(catalog.memory_plan("scope")["planned_gib"], 43.73, places=2)
-                from dwarfstar import instance
-
-                self.assertTrue(instance.server_command("scope")[0][0].endswith("ds4-server"))
-                self.assertEqual(catalog.model("swift")["backend"]["kind"], "splash")
-            finally:
-                catalog.load.cache_clear()
-
-    def test_splash_serves_each_model_with_its_own_identity(self):
+    def test_assets_are_the_split_parts_draft_and_projector_under_the_assets_root(self):
         from dwarfstar import instance
+        from dwarfstar.paths import ASSETS
 
-        scope = catalog.model("scope")
-        self.assertEqual(scope["context"], 131072)
-        self.assertEqual([p["id"] for p in catalog.profiles("scope")], ["scope-low"])
-        self.assertLess(catalog.memory_plan("scope")["planned_gib"], 43.73)
-        argv, env = instance.server_command("scope")
-        joined = " ".join(argv)
-        for flag in ("--served-model-name qwen3.8-flash-next", "--port 8030", "--max-context 131072", "--offline", "--mmproj", "--draft-model"):
-            self.assertIn(flag, joined)
-        self.assertIn("backends/splash-m1/home", env["HOME"])
+        for model_id, folder in (("scope", "Scope"), ("swift", "Swift"), ("cyber", "Cyber")):
+            assets = catalog.model(model_id)["assets"]
+            self.assertEqual(sorted(assets), ["draft", "main", "ple", "vision"])
+            self.assertTrue(assets["main"]["path"].startswith(f"Models/{folder}/") and assets["main"]["path"].endswith("-00001-of-00002.gguf"))
+            self.assertEqual(assets["ple"]["path"], assets["main"]["path"].replace("-00001-of-00002", "-00002-of-00002"))
+            argv, env = instance.server_command(model_id)
+            self.assertEqual(argv[argv.index("--model-dir") + 1], str(ASSETS / assets["main"]["path"]))
+            joined = " ".join(argv)
+            for flag in ("--offline", "--mmproj", "--draft-model", "--max-context 131072"):
+                self.assertIn(flag, joined)
+            self.assertTrue(env["HOME"].endswith("runtime/splash-home"))
+            self.assertLess(catalog.memory_plan(model_id)["planned_gib"], catalog.memory_plan(model_id)["metal_working_set_gib"])
+        self.assertEqual(len(catalog.profiles("cyber")), 4)
 
-    def test_swift_and_cyber_use_their_own_split_layout_on_splash(self):
-        from unittest import mock
 
-        from dwarfstar import instance
-
-        with mock.patch.dict("os.environ", {"DWARFSTAR_RUNTIME_OVERRIDE": "swift=splash-m1-1.6.1-ds1,cyber=splash-m1-1.6.1-ds1"}):
-            catalog.load.cache_clear()
-            try:
-                for model_id, stem in (("swift", "Swift1.5-GSQ-RCO-Q2_0-00001-of-00002.gguf"), ("cyber", "DwarfStarCyber-Q2_0-00001-of-00002.gguf")):
-                    argv, _ = instance.server_command(model_id)
-                    self.assertTrue(argv[argv.index("--model-dir") + 1].endswith("backends/splash-m1/artifacts/" + model_id + "/" + stem))
-                    self.assertEqual(catalog.model(model_id)["context"], 131072)
-                    self.assertLess(catalog.memory_plan(model_id)["planned_gib"], catalog.memory_plan(model_id)["metal_working_set_gib"])
-                self.assertEqual(len(catalog.profiles("cyber")), 4)
-            finally:
-                catalog.load.cache_clear()
-
-    def test_a_backend_without_a_block_is_refused(self):
-        from unittest import mock
-
-        with mock.patch.dict("os.environ", {"DWARFSTAR_RUNTIME_OVERRIDE": "cyber=splash-m1-1.6.1"}):
-            catalog.load.cache_clear()
-            try:
-                with self.assertRaises(catalog.CatalogError):
-                    catalog.load()
-            finally:
-                catalog.load.cache_clear()
+if __name__ == "__main__":
+    unittest.main()

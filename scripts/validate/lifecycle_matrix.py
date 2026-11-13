@@ -27,10 +27,10 @@ REPO = HERE.parents[1]
 sys.path.insert(0, str(REPO / "src"))
 
 from dwarfstar import catalog  # noqa: E402
-from dwarfstar.paths import DATA, instance  # noqa: E402
+from dwarfstar.paths import EVIDENCE, instance  # noqa: E402
 
 SERVICE = "http://127.0.0.1:8038"
-STEPS = DATA / "evidence" / "production-validation" / "steps"
+STEPS = EVIDENCE / "production-validation" / "steps"
 
 
 def call(path: str, body: dict | None = None, timeout: float = 60) -> dict:
@@ -60,9 +60,15 @@ def job(path: str, body: dict) -> dict:
 
 def servers() -> list[tuple[int, str]]:
     rows = subprocess.run(["/bin/ps", "-axo", "pid=,command="], capture_output=True, text=True).stdout.splitlines()
-    # model server processes of either backend: ds4-server, or Splash's long-lived `python3 -u -P -m server.server`
-    return [(int(r.split(None, 1)[0]), r.split(None, 1)[1]) for r in rows
-            if "/ds4-server " in r or ("/backends/splash-m1/" in r and " -m server.server" in r)]
+    # model server processes: Splash's long-lived `python3 -u -P -m server.server` from the installed runtime
+    runtime = str(instance_runtime())
+    return [(int(r.split(None, 1)[0]), r.split(None, 1)[1]) for r in rows if runtime in r and " -m server.server" in r]
+
+
+def instance_runtime():
+    from dwarfstar.instance import runtime_directory
+
+    return runtime_directory(next(iter(catalog.models())))
 
 
 def port_open(port: int) -> bool:
@@ -106,14 +112,10 @@ def check_running(profile_id: str, expect_pid: int | None = None) -> dict:
     row = state["models"][model_id]
     procs = servers()
     ledger = json.loads((instance(model_id) / "state/server.json").read_text()) if (instance(model_id) / "state/server.json").is_file() else {}
-    if model["backend"]["kind"] == "native":
-        identifies_model = bool(procs) and model["assets"]["main"]["path"].split("/")[-1] in procs[0][1]
-        context_ok = f"--ctx {model['context']} " in (procs[0][1] if procs else "")
-    else:  # Splash's serve process carries no arguments after its re-exec: ask it what it loaded
-        status = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{model['port']}/status", timeout=5).read())
-        main = model["backend"]["extra_assets"].get("main") or model["assets"]["main"]  # the backend's own layout, if any
-        identifies_model = main["path"].split("/")[-1] in status["memory_plan"]["model"]["model_name"]
-        context_ok = status["maximum_context_tokens"] == model["context"]
+    # Splash's serve process carries no arguments after its re-exec: ask it what it loaded
+    status = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{model['port']}/status", timeout=5).read())
+    identifies_model = model["assets"]["main"]["path"].split("/")[-1] in status["memory_plan"]["model"]["model_name"]
+    context_ok = status["maximum_context_tokens"] == model["context"]
     checks = {
         "one_server": len(procs) == 1,
         "server_is_model": identifies_model,

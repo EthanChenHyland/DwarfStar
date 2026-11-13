@@ -28,7 +28,7 @@ local-data/
 
 # Native build products
 *.o
-native/build/
+
 
 # Editor and OS noise
 .DS_Store

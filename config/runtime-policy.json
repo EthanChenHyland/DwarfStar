@@ -1,12 +1,11 @@
 {
   "schema": 1,
-  "version": "2026.11.3",
+  "version": "2026.11.4",
   "description": "The one runtime policy every DwarfStar model uses. A model file in config/models may override a model_defaults key only with a reason in its override_reasons; repeating a default is rejected.",
   "model_defaults": {
     "runtime": "splash-m1-1.6.1-ds1",
     "context": 131072,
     "max_output": 81920,
-    "prefill_chunk": 2048,
     "sampling": {
       "temperature": 1.0,
       "top_p": 0.95,
@@ -14,16 +13,10 @@
       "min_p": 0.0
     },
     "cache": {
-      "k_cache_dtype": "F16",
-      "v_cache_dtype": "F16",
-      "indexer_key_dtype": "F32",
-      "block_key_dtype": "F16",
-      "kv_bytes_per_token": 34176,
-      "policy": "fixed by the runtime's Qwen4Exp graph (K/V allocated and read as F16; no quantized KV path). Q8 KV is future runtime and kernel work.",
-      "disk_checkpoints": {
-        "budget_mb": 12288,
-        "continued_interval_tokens": 10000
-      }
+      "k_cache_dtype": "INT8",
+      "v_cache_dtype": "INT8",
+      "kv_bytes_per_token": 13248,
+      "policy": "Splash-m1's symmetric INT8 KV cache (per-token-head F32 scales), 32-token pages, a prefix cache in memory, and long requests' KV spilled to the SSD cache (<cache>/splash-kv)"
     },
     "capabilities": [
       "acp",
@@ -34,7 +27,7 @@
       "browser",
       "computer_use",
       "vision",
-      "mtp",
+      "speculative_decoding",
       "compaction",
       "recovery",
       "telemetry",
@@ -53,20 +46,14 @@
   },
   "runtime": {
     "binding": "127.0.0.1 only; one port per model",
-    "attention": "the runtime's fused Metal attention kernels; always on (no switch exists)",
-    "weights": "memory-mapped GGUF with Metal residency requested at load; no mlock flag in the runtime",
-    "gpu_offload": "full: every layer, the MTP head and the vision projector run on the Metal GPU",
-    "ple": "n-gram table read from disk row by row, never resident",
-    "threads": "runtime default (GPU-bound; no CPU thread tuning)",
-    "mtp": "native multi-token prediction on, adaptive depth, per-request timing",
-    "vision": "projector loaded at start and resident",
-    "batch": "one request at a time per model; prefill in chunks of prefill_chunk tokens",
-    "output_reservation": "the server budgets decode against the exact remaining context; max_output is the per-request ceiling",
-    "environment": {
-      "DS4_QWEN4_MOE_TAILS": "1"
-    },
-    "telemetry": "optional hooks; nothing is produced unless a Workstation subscriber asks (UDP 8039 events, 8037 detail heartbeats)",
-    "logging": "one server log per start in the model's state directory; lifecycle journal in <data>/logs/lifecycle.jsonl"
+    "engine": "Splash-m1 1.6.1-m1 with DwarfStar's patches (splash-m1-1.6.1-ds1): Apple7 Metal kernels, exact BF16 planes",
+    "weights": "the split GGUF prepared at start into Metal images; routed experts resident; the PLE table streamed from the SSD",
+    "gpu_offload": "full: every layer, the draft model and the vision projector run on the Metal GPU",
+    "speculative": "DFlash2 draft model; every drafted token is verified by the target model",
+    "vision": "BF16 projector loaded at start and resident",
+    "batch": "one model at a time; Splash schedules prefill and decode itself",
+    "telemetry": "request metrics and the memory plan from the runtime's /status; no per-token router, PLE or draft detail",
+    "logging": "one server log per start in <logs>/<model>/ (newest 10 kept); lifecycle journal <logs>/lifecycle.jsonl"
   },
   "lifecycle": {
     "models_running_at_once": 1,
@@ -78,7 +65,7 @@
     "ownership": "the controller records pid, process birth and argv hash; it signals only that exact process"
   },
   "memory": {
-    "formula": "planned = resident model (main file + MTP head) + KV cache at the configured context + graph buffers at the prefill chunk + vision projector; required = planned + system reserve",
+    "formula": "planned = resident model (target weights + draft) + KV cache at the configured context + runtime buffers + vision projector; required = planned + system reserve",
     "system_reserve_gib": 1.5,
     "metal_working_set": "the GPU's recommendedMaxWorkingSetSize, read from Metal on this machine; a model whose plan exceeds it fails at depth even when unified memory is free",
     "metal_working_set_reference_gib": 51.84,

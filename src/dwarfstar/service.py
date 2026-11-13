@@ -27,7 +27,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from dwarfstar import catalog, telemetry
-from dwarfstar.paths import CODE, DATA, child_environment
+from dwarfstar.paths import CODE, DATA, LOGS, child_environment
 
 WEB_ROOT = CODE / "app" / "workstation" / "web"
 STATE_FILE = DATA / "state" / "workstation.json"
@@ -76,10 +76,9 @@ def model_states(detail: bool = False) -> dict[str, dict]:
         row = {"ok": True, "running": status["running"], "healthy": status["healthy"], "pid": status.get("pid"),
                "endpoint": status.get("endpoint"), "uptime_s": status.get("uptime_s"), "phase": status.get("phase"),
                "memory_plan": status.get("memory_plan"), "load_seconds": status.get("load_seconds"),
-               "mtp_state": status.get("mtp_state"), "collection_errors": status.get("collection_errors", [])}
+               "speculative": status.get("speculative"), "collection_errors": status.get("collection_errors", [])}
         if detail:
             row["request"] = status.get("request")
-            row["native"] = status.get("native")
             row["resources"] = status.get("resources")
             row["log"] = status.get("log")
             row["permissions"] = status.get("permissions")
@@ -151,7 +150,7 @@ def consistent_active(running: list[str]) -> str | None:
 def lifecycle_log(record: dict) -> None:
     """Append-only lifecycle journal in the data root, so a failed switch can be diagnosed afterwards."""
     try:
-        path = DATA / "logs" / "lifecycle.jsonl"
+        path = LOGS / "lifecycle.jsonl"
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a") as stream:
             stream.write(json.dumps({"t": time.time(), **record}, default=str) + "\n")

@@ -20,7 +20,7 @@
   function pill(ok, yes = "Healthy", no = "Not healthy") { return `<span class="pill ${ok ? "pass" : "fail"}">${ok ? yes : no}</span>`; }
 
   function compositionBar(m, total) {
-    const parts = [["Model weights", m.model_weights_gib, "var(--scope)"], ["MTP / draft", m.mtp_gib, "#7fd6a3"], ["KV cache", m.kv_gib, "#4fd695"],
+    const parts = [["Model weights", m.model_weights_gib, "var(--scope)"], ["Draft model", m.draft_gib, "#7fd6a3"], ["KV cache", m.kv_gib, "#4fd695"],
                    ["Graph buffers", m.buffers_gib, "#ffc857"], ["Vision", m.projector_gib, "#e58f8f"], ["Safety reserve", m.system_reserve_gib, "#56606e"]];
     return `<div class="bar" title="Planned composition against the ${total.toFixed(2)} GiB Metal working set">${parts.map(([, g, c]) => `<span style="width:${100 * (g || 0) / total}%;background:${c}"></span>`).join("")}</div>
       <div class="legend">${parts.map(([l, g, c]) => `<span><i style="background:${c}"></i>${l} ${f(g)}</span>`).join("")}</div>`;
@@ -51,7 +51,7 @@
         <div class="panel"><h2>Running model</h2>${r.model ? `<dl class="kv">
             <dt>Model</dt><dd><b>${esc(r.display_name)}</b> ${pill(r.healthy)}</dd>
             <dt>Reasoning</dt><dd>${r.active_profile ? esc(r.active_profile.split("-").pop().toUpperCase()) : '<span class="faint">unknown (reconnected)</span>'}</dd>
-            <dt>Backend</dt><dd>${esc(backend.kind === "native" ? "Native (ds4-unified)" : "Splash-m1 " + (backend.release || ""))} <span class="muted small">${esc(backend.speculative)}</span></dd>
+            <dt>Runtime</dt><dd>Splash-m1 ${esc(backend.release || "")} <span class="muted small">${esc(backend.speculative)}</span></dd>
             <dt>Process</dt><dd class="mono">pid ${r.pid} · port ${r.port}${r.uptime_s != null ? " · up " + Math.round(r.uptime_s / 60) + " min" : ""}</dd>
             <dt>Context</dt><dd>${r.context.used != null ? r.context.used.toLocaleString() + " used · " + r.context.remaining.toLocaleString() + " remaining" : '<span class="faint">no request yet</span>'} of ${r.context.window.toLocaleString()}</dd>
             <dt>Prefill chunk</dt><dd>${catalogModel.prefill_chunk} tokens${catalogModel.overrides?.prefill_chunk ? ' <span class="muted small">(model-specific)</span>' : ""}</dd>

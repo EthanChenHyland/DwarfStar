@@ -23,7 +23,7 @@
   function model() { const id = (V.replay && V.replay.model) || D.runningModel() || S.model; return D.modelOf(id); }
   /* What the model's backend reports. Activity a backend does not report is labelled as such, never drawn from guesses. */
   function caps() { return (model().backend || {}).telemetry || { router: true, ple: true, mtp: true, requests: true }; }
-  function backendName() { const b = model().backend || {}; return b.kind === "native" || !b.kind ? "native" : "Splash-m1"; }
+  function backendName() { return "Splash-m1"; }
   function notReported(x, y, w, h, what) {
     const g = V.g; g.fillStyle = "rgba(16,21,29,.86)"; g.fillRect(x, y, w, h);
     label(what + " not reported by the " + backendName() + " backend", x + w / 2, y + h / 2 - 14, COLORS.muted, "600 12px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "center", w - 20);
@@ -218,7 +218,7 @@
     if (caps().ple) label((ple.reads || 0).toLocaleString() + " row reads · " + ((ple.bytes || 0) / 2 ** 20).toFixed(1) + " MiB", x + 18, pleY + 78, COLORS.faint, "10.5px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", inner);
     let fy = pleY + pleH + 14;
     label("MODEL FILES · resident", x + 12, fy, COLORS.faint, "600 9.5px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", w - 24); fy += 16;
-    [["main", "Main model"], ["mtp", "MTP block"], ["vision", "Vision projector"]].forEach(([k, name]) => {
+    [["main", "Model, part 1"], ["draft", "Draft model"], ["vision", "Vision projector"]].forEach(([k, name]) => {
       if (fy + 44 > y + h - 40) return;  // never draw below the panel
       g.fillStyle = "#0c1017"; g.strokeStyle = COLORS.line; g.lineWidth = 1; g.beginPath(); g.roundRect(x + 10, fy, w - 20, 44, 6); g.fill(); g.stroke();
       label(name + " · " + (assets[k].bytes / 2 ** 30).toFixed(2) + " GiB", x + 18, fy + 5, COLORS.text, "11px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", inner);
@@ -429,11 +429,11 @@
   function renderFacts(m, live) {
     const key = m.id + (D.runningModel() || ""); if (factsFor === key) return; factsFor = key;
     V.root.querySelector("#viz-facts").innerHTML = `
-      <p><b>Storage.</b> Only the PLE n-gram table (${D.esc(m.quantization.ple.split(",")[0])}, ${(S.catalog.details[m.id].assets.ple.bytes / 2 ** 30).toFixed(1)} GiB) is read from disk while the model runs, a few rows per token. The main model, MTP block and vision projector are mapped into unified memory at load and stay resident; experts are <b>not</b> streamed from disk.</p>
+      <p><b>Storage.</b> Only the PLE n-gram table (${D.esc(m.quantization.ple.split(",")[0])}, ${(S.catalog.details[m.id].assets.ple.bytes / 2 ** 30).toFixed(1)} GiB) is read from disk while the model runs, a few rows per token. The model, the draft model and the vision projector are loaded into unified memory at start and stay resident; experts are <b>not</b> streamed from disk.</p>
       <p><b>Processor.</b> Each token passes through 48 layers. In every layer a router picks ${10} of 512 experts; the lit cells are the experts actually chosen for the current token, brighter for higher routing weight.</p>
       <p><b>MTP.</b> A small head drafts the next one or two tokens. The trunk checks them in the same pass; accepted drafts are committed without an extra pass, rejected drafts are discarded.</p>
       <p><b>Context.</b> The KV cache (K ${D.esc(m.cache.k_cache_dtype)}, V ${D.esc(m.cache.v_cache_dtype)}) is reserved for the full ${m.context_label} context at load and fills as the conversation grows.</p>
-      <p><b>Backend.</b> ${backendName() === "native" ? "Native ds4 runtime: router, MTP and PLE activity are reported per token." : `${D.esc(backendName())}: requests, rates, context and memory are reported; router selections${caps().ple ? "" : ", PLE reads"} and per-cycle drafts are not, so those regions say so instead of drawing estimates.`}</p>
+      <p><b>Runtime.</b> Splash-m1 reports requests, rates, context and its memory plan; it does not report router selections, PLE reads or per-cycle drafts, so those regions say so instead of drawing estimates. Sessions recorded with the earlier native runtime replay with their full detail.</p>
       <p><b>Privacy.</b> The view shows counts, ids and timings. It never shows token text, reasoning or tool arguments.</p>`;
     renderActions(); renderRequests();
   }

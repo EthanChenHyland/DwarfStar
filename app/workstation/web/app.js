@@ -312,7 +312,7 @@ function renderRunStats() {
   node.innerHTML = `
     <div class="stat"><div class="label">Decode</div><div class="value">${num(tps ?? measured.decode_tok_s, 1, "tok/s")}</div><div class="sub">${tps != null ? "live" : measured.decode_tok_s != null ? "measured" : ""}</div></div>
     <div class="stat"><div class="label">Time to first token</div><div class="value">${num(measured.ttft_s, 2, "s")}</div><div class="sub">short prompt, measured</div></div>
-    <div class="stat"><div class="label">MTP acceptance</div><div class="value">${num(live?.mtp?.acceptance_pct ?? measured.mtp_acceptance_pct, 1, "%")}</div><div class="sub">${live?.mtp?.proposed ? live.mtp.accepted + " of " + live.mtp.proposed + " drafts" : "measured"}</div></div>
+    <div class="stat"><div class="label">Prefill</div><div class="value">${num(live?.rates?.prefill_tps ?? measured.prefill_tok_s, 0, "tok/s")}</div><div class="sub">${live?.rates?.prefill_tps != null ? "live" : "8K prompt, measured"}</div></div>
     <div class="stat"><div class="label">Memory available</div><div class="value">${num(headroom, 1, "GiB")}</div><div class="sub">${memory?.swap_used_bytes != null ? "swap " + (memory.swap_used_bytes / 2 ** 30).toFixed(1) + " GiB" : ""}</div></div>`;
 }
 
@@ -323,8 +323,8 @@ function renderModels() {
   const m = modelOf(S.modelTab), d = S.catalog.details[S.modelTab], measured = d.measured || {};
   const assets = d.assets, memory = m.memory;
   const total = m.disk_bytes;
-  const order = [["main", "Main model"], ["ple", "PLE (n-gram) sidecar"], ["mtp", "MTP block"], ["vision", "Vision projector"]];
-  const colors = { main: TONE[m.id], ple: "#3d6f8f", mtp: "#7fd6a3", vision: "#e58f8f" };
+  const order = [["main", "Model, part 1"], ["ple", "PLE table, part 2"], ["draft", "Draft model"], ["vision", "Vision projector"]];
+  const colors = { main: TONE[m.id], ple: "#3d6f8f", draft: "#7fd6a3", vision: "#e58f8f" };
   const plan = m.memory_plan, planned = plan.planned_gib, limit = plan.metal_working_set_gib;
   const state = S.state?.models[m.id];
   const runningPlan = state?.memory_plan || {};
@@ -352,7 +352,7 @@ function renderModels() {
         <dt>Routed experts</dt><dd>${esc(m.quantization.experts)}</dd>
         <dt>Dense trunk</dt><dd>${esc(m.quantization.dense)}</dd>
         <dt>PLE</dt><dd>${esc(m.quantization.ple)}</dd>
-        <dt>MTP</dt><dd>${esc(m.quantization.mtp)}</dd>
+        <dt>Draft</dt><dd>${esc(m.quantization.speculative || "")}</dd>
         <dt>Vision</dt><dd>${esc(m.quantization.vision)}</dd>
         <dt>KV cache</dt><dd>K ${esc(m.cache.k_cache_dtype)} · V ${esc(m.cache.v_cache_dtype)} · ${(m.cache.kv_bytes_per_token / 1024).toFixed(1)} KiB per token<div class="muted small">${esc(m.cache.policy)}</div></dd>
       </dl></div>
@@ -392,18 +392,17 @@ function renderModels() {
         <dt>Prefill chunk</dt><dd>${m.prefill_chunk} tokens${m.overrides?.prefill_chunk ? ' <span class="muted small">(model-specific; see Runtime policy)</span>' : ""}</dd>
       </dl></div>
       <div class="panel"><h2>Speed</h2><dl class="kv">
-        <dt>Cold load</dt><dd>${num(measured.cold_load_s, 1, " s")}</dd>
-        <dt>Warm load</dt><dd>${num(measured.warm_load_s, 1, " s")}</dd>
+        <dt>Start, idle to ready</dt><dd>${num(measured.start_s, 1, " s")}</dd>
         <dt>Time to first token</dt><dd>${num(measured.ttft_s, 2, " s")}</dd>
-        <dt>Prefill</dt><dd>${num(measured.prefill_tok_s, 0, " tok/s")}</dd>
-        <dt>Decode</dt><dd>${num(measured.decode_tok_s, 1, " tok/s")}</dd>
-        <dt>Decode, long context</dt><dd>${num(measured.decode_long_tok_s, 1, " tok/s")} ${measured.decode_long_context ? `<span class="muted small">at ${esc(measured.decode_long_context)}</span>` : ""}</dd>
+        <dt>Prefill, 8K / 32K</dt><dd>${num(measured.prefill_tok_s, 0, "")} / ${num(measured.prefill_32k_tok_s, 0, " tok/s")}</dd>
+        <dt>Generation</dt><dd>${measured.decode_range_tok_s ? measured.decode_range_tok_s.join("–") + " tok/s" : NA} <span class="muted small">with the draft model; depends on how many drafts are accepted</span></dd>
+        <dt>Repeated prefix</dt><dd>${measured.repeated_prefix_reused_tokens != null ? measured.repeated_prefix_reused_tokens.toLocaleString() + " tokens reused" : NA}</dd>
+        <dt>Peak wired memory</dt><dd>${num(measured.peak_wired_gib, 2, " GiB")}</dd>
       </dl></div>
-      <div class="panel"><h2>MTP (speculative decoding)</h2><dl class="kv">
-        <dt>Enabled</dt><dd>Yes, native adaptive depth</dd>
-        <dt>Sidecar format</dt><dd>${esc(m.quantization.mtp)}</dd>
-        <dt>Acceptance</dt><dd>${num(measured.mtp_acceptance_pct, 1, " %")}</dd>
-        <dt>Speed benefit</dt><dd>${measured.mtp_benefit ? esc(measured.mtp_benefit) : NA}</dd>
+      <div class="panel"><h2>Speculative decoding</h2><dl class="kv">
+        <dt>Method</dt><dd>${esc(m.quantization.speculative || "DFlash2 draft model")}</dd>
+        <dt>Verification</dt><dd>every drafted token is checked by the model itself; outputs are the model's</dd>
+        <dt>Acceptance</dt><dd>${NA} <span class="muted small">not reported by the runtime</span></dd>
       </dl></div>
       <div class="panel"><h2>Capabilities</h2>${m.capabilities.map((c) => `<span class="cap">${esc(CAPABILITY[c] || c)}</span>`).join("")}</div>
     </div>
@@ -413,7 +412,7 @@ function renderModels() {
     </div>`;
   root.querySelectorAll("[data-tab]").forEach((b) => b.onclick = () => { S.modelTab = b.dataset.tab; renderModels(); });
 }
-const CAPABILITY = { acp: "ACP agent", full_auto: "Full Auto", native_tool_calls: "Native tool calls", workspace: "Workspace files", shell: "Shell", browser: "Browser automation", computer_use: "Computer use (KimiCU)", vision: "Vision", mtp: "MTP", compaction: "Compaction", recovery: "Recovery", telemetry: "Telemetry" };
+const CAPABILITY = { acp: "ACP agent", full_auto: "Full Auto", native_tool_calls: "Native tool calls", workspace: "Workspace files", shell: "Shell", browser: "Browser automation", computer_use: "Computer use (KimiCU)", vision: "Vision", speculative_decoding: "Speculative decoding", compaction: "Compaction", recovery: "Recovery", telemetry: "Telemetry" };
 
 /* ------------------------------------------------------------------- live */
 function sparkline(canvas, values, color, max) {

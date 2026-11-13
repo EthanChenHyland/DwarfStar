@@ -43,20 +43,17 @@ class ReconcileTests(unittest.TestCase):
     """runtime_control.reconcile() with the process table and endpoint replaced by fakes."""
 
     def setUp(self):
-        from tests.native_controller import native_controller
-
-        stack = native_controller(runtime_control)
-        self.addCleanup(stack.close)
         self.directory = tempfile.TemporaryDirectory()
         self.state = Path(self.directory.name)
-        self.argv = [str(runtime_control.SERVER), "-m", "/models/main.gguf", "--port", "8030"]
-        self.config = {"argv": self.argv, "context": 131072, "endpoint": "http://127.0.0.1:8030/v1"}
+        # Splash's long-lived server process, as the launcher leaves it after its re-exec
+        self.argv = [str(runtime_control.SERVER), "-u", "-P", "-m", "server.server"]
+        self.config = {"argv": self.argv, "context": 131072, "endpoint": "http://127.0.0.1:8030/v1", "port": 8030}
         self.signals = []
 
     def tearDown(self):
         self.directory.cleanup()
 
-    def run_reconcile(self, ledger=None, processes=None, healthy=True):
+    def run_reconcile(self, ledger=None, processes=None, healthy=True, listener=None):
         processes = processes or {}
         if ledger is not None:
             (self.state / "server.json").write_text(json.dumps(ledger))
@@ -73,6 +70,7 @@ class ReconcileTests(unittest.TestCase):
              mock.patch.object(runtime_control, "heavyweight_processes",
                                return_value=[(pid, Path(cmd.split()[0]).name) for pid, cmd in processes.items()]), \
              mock.patch.object(runtime_control, "health", return_value={"ok": healthy}), \
+             mock.patch.object(runtime_control, "listening_pid", return_value=listener), \
              mock.patch.object(runtime_control, "emit"), \
              mock.patch.object(runtime_control.os, "kill", side_effect=lambda *a: self.signals.append(a)):
             return runtime_control.reconcile()
@@ -97,17 +95,22 @@ class ReconcileTests(unittest.TestCase):
         self.assertEqual(self.signals, [])
 
     def test_an_orphaned_server_of_this_model_is_adopted_not_restarted(self):
-        result = self.run_reconcile(processes={44: " ".join(self.argv)})
+        result = self.run_reconcile(processes={44: " ".join(self.argv)}, listener=44)
         self.assertEqual((result["ledger"], result["adopted"]), ("adopted", 44))
         self.assertEqual(json.loads((self.state / "server.json").read_text())["pid"], 44)
         self.assertEqual(self.signals, [])
 
     def test_an_unhealthy_orphan_is_not_adopted(self):
-        result = self.run_reconcile(processes={45: " ".join(self.argv)}, healthy=False)
+        result = self.run_reconcile(processes={45: " ".join(self.argv)}, healthy=False, listener=45)
         self.assertIsNone(result["adopted"])
 
+    def test_a_server_on_another_port_is_not_adopted(self):
+        result = self.run_reconcile(processes={47: " ".join(self.argv)}, listener=None)
+        self.assertIsNone(result["adopted"])
+        self.assertEqual(self.signals, [])
+
     def test_a_foreign_server_is_reported_and_left_alone(self):
-        foreign = str(runtime_control.SERVER) + " -m /elsewhere/other.gguf --port 9999"
+        foreign = "/opt/other/ds4-server -m /elsewhere/other.gguf --port 9999"
         result = self.run_reconcile(processes={46: foreign})
         self.assertEqual([f["pid"] for f in result["foreign"]], [46])
         self.assertEqual(self.signals, [])

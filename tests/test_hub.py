@@ -1,11 +1,7 @@
-"""Telemetry hub reducers: native progress records, verify cycles and tool events."""
+"""Telemetry hub reducers: runtime sessions, recorded verify cycles and tool events."""
 import unittest
 
 from dwarfstar.telemetry.hub import Hub
-
-
-def native(line):
-    return {"kind": "log", "src": "native", "model": "cyber", "t": 1.0, "type": "generation", "line": "ds4-server: " + line}
 
 
 class HubTests(unittest.TestCase):
@@ -27,63 +23,17 @@ class HubTests(unittest.TestCase):
         self.hub.ingest({"kind": "runtime", "src": "controller", "model": "cyber", "t": 1.0, "phase": "stopped"})
         self.assertIsNone(self.hub.snapshot()["hub"]["session"])
 
-    def test_a_late_native_record_does_not_reopen_a_stopped_session(self):
+    def test_a_running_model_opens_one_session_and_a_stop_closes_it(self):
         hub = Hub(record=True)
         opened = []
         hub._open_session = lambda model: opened.append(model)
-        hub.ingest({"kind": "runtime", "src": "controller", "model": "cyber", "t": 10.0, "phase": "stopped"})
-        late = native("chat ctx=0..41:41 prompt start")
-        late["t"] = 9.5  # written by the runtime before it exited, delivered after the stop
-        hub.ingest(late)
+        hub.ingest({"kind": "runtime", "src": "controller", "model": "cyber", "t": 10.0, "phase": "starting"})
         self.assertEqual(opened, [])
-        hub.ingest({"kind": "runtime", "src": "controller", "model": "cyber", "t": 10.5, "phase": "starting"})
-        fresh = native("chat ctx=0..41:41 prompt start")
-        fresh["t"] = 11.0
-        hub.ingest(fresh)
+        hub.ingest({"kind": "runtime", "src": "controller", "model": "cyber", "t": 40.0, "phase": "running", "pid": 7})
         self.assertEqual(opened, ["cyber"])
+        hub.ingest({"kind": "runtime", "src": "controller", "model": "cyber", "t": 90.0, "phase": "stopped"})
+        self.assertIn("cyber", hub.stopped_models)
         hub.stop()
-
-    def test_nothing_reopens_a_session_for_a_stopped_model_until_it_starts(self):
-        hub = Hub(record=True)
-        opened = []
-        hub._open_session = lambda model: opened.append(model)
-        hub.ingest({"kind": "runtime", "src": "service", "model": "cyber", "t": 10.0, "phase": "stopped"})
-        late = native("chat ctx=0..41:41 prompt start")
-        late["t"] = 12.0  # stamped on arrival, after the stop
-        hub.ingest(late)
-        self.assertEqual(opened, [])
-        hub.ingest({"kind": "runtime", "src": "controller", "model": "cyber", "t": 13.0, "phase": "running"})
-        fresh = native("chat ctx=0..41:41 prompt start")
-        fresh["t"] = 14.0
-        hub.ingest(fresh)
-        self.assertEqual(opened, ["cyber"])
-        hub.stop()
-
-    def test_request_lifecycle_from_native_records(self):
-        for line in ("chat ctx=0..8329:8329 TOOLS prompt start",
-                     "chat ctx=0..8329:8329 TOOLS prefill chunk 4096/8329 (49.2%) chunk=301.00 t/s avg=300.50 t/s 13.630s",
-                     "chat ctx=0..8329:8329 TOOLS prompt done 27.700s",
-                     "chat ctx=8329..8379:50 gen=50 TOOLS THINKING decoding chunk=29.40 t/s avg=29.40 t/s 1.701s",
-                     "tool calls ctx=0..8329:8329 n=1 raw_tool_text=1 ids=[call_x] names=[read]",
-                     "chat ctx=0..8329:8329 gen=119 TOOLS DSML_START DSML_END finish=tool_calls 31.121s"):
-            self.hub.ingest(native(line))
-        phases = [e["phase"] for e in self.drain() if e["kind"] == "request"]
-        self.assertEqual(phases, ["start", "prefill", "prefill_done", "decode", "tool_calls", "finish"])
-        live = self.hub.snapshot()
-        self.assertEqual(live["request"]["prompt_tokens"], 8329)
-        self.assertEqual(live["request"]["generated"], 119)
-        self.assertEqual(live["request"]["finish"], "tool_calls")
-        self.assertFalse(live["request"]["active"])
-        self.assertAlmostEqual(live["rates"]["decode_tps"], 29.4)
-        self.assertAlmostEqual(live["rates"]["prefill_tps"], 8329 / 27.7, places=1)
-        self.assertEqual(live["context"]["used"], 8329 + 119)
-
-    def test_text_and_paths_never_become_events(self):
-        self.hub.ingest(native("kv cache hit text tokens=7979 text=34264 quant=2 key=token-text load=59.8 ms"))
-        events = self.drain()
-        self.assertEqual([(e["kind"], e["phase"], e["tokens"]) for e in events], [("kv", "hit", 7979)])
-        for event in events:
-            self.assertNotIn("line", event)
 
     def test_ticks_accumulate_mtp_ple_and_router_heat(self):
         row = [3, 128, 7, 64]
@@ -120,7 +70,7 @@ class HubTests(unittest.TestCase):
         self.assertEqual(tools["count"], 1)
         self.assertEqual(tools["timeline"][0]["ms"], 812)
 
-    def test_no_subscriber_means_no_detail_requested(self):
+    def test_subscribers_set_the_detail_level(self):
         hub = Hub(record=False)
         self.assertEqual(hub.wanted_level(), 0)
         subscriber = hub.subscribe(2)

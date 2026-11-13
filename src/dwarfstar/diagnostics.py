@@ -21,6 +21,7 @@ import time
 from pathlib import Path
 
 from dwarfstar import catalog
+from dwarfstar import paths
 from dwarfstar.paths import CODE, DATA, local_config
 
 GIB = 2**30
@@ -91,36 +92,39 @@ def _installation() -> list[dict]:
 
     rows = []
     local = CODE / "config" / "local.json"
-    rows.append(_check("Installation", "Local configuration", "ok" if local.is_file() else "warn", safe_path(local),
-                       "Copy config/local.example.json to config/local.json and set data_root."))
-    writable = DATA.is_dir() and os.access(DATA, os.W_OK)
-    rows.append(_check("Installation", "Data root", "ok" if writable else "error", safe_path(DATA),
-                       "Create the data root named in config/local.json and make it writable."))
+    rows.append(_check("Installation", "Local configuration", "ok", safe_path(local) if local.is_file() else "none: every root at its default"))
+    for name, root in paths.roots().items():
+        if name == "code":
+            continue
+        writable = root.is_dir() and os.access(root, os.W_OK)
+        rows.append(_check("Installation", f"{name.capitalize()} root", "ok" if writable else "error", safe_path(root),
+                           f"Create {safe_path(root)} (or set {name}_root in config/local.json) and make it writable."))
     pins = catalog.load()["runtimes"]["runtimes"]
     for runtime_id in sorted({m["runtime"] for m in catalog.models().values()}):
-        binary = DATA / pins[runtime_id]["directory"] / "ds4-server"
-        if not binary.is_file():
-            rows.append(_check("Installation", f"Runtime {runtime_id}", "error", f"missing {safe_path(binary)}",
-                               "Build the runtime from the pinned ds4 commit with native/ (see docs/REPRODUCIBILITY.md)."))
+        pin, root = pins[runtime_id], paths.ASSETS / pins[runtime_id]["directory"]
+        files = {"engine/splash": pin["binary_sha256"], **{"engine/" + k: v for k, v in pin["shader_sha256"].items()}, **pin["adapter_sha256"]}
+        missing = [name for name in files if not (root / name).is_file()]
+        if missing:
+            rows.append(_check("Installation", f"Runtime {runtime_id}", "error", f"missing in {safe_path(root)}: {', '.join(missing)}",
+                               "Build it with scripts/backends/build_splash.sh (see docs/REPRODUCIBILITY.md)."))
             continue
-        digest = hashlib.sha256(binary.read_bytes()).hexdigest()
-        ok = digest == pins[runtime_id]["binary_sha256"]
-        rows.append(_check("Installation", f"Runtime {runtime_id}", "ok" if ok else "error",
-                           f"{safe_path(binary)} · SHA-256 {'matches the pin' if ok else 'differs from the pin'}",
-                           "Rebuild the runtime; the controller refuses an unpinned binary."))
+        differ = [name for name, digest in files.items() if hashlib.sha256((root / name).read_bytes()).hexdigest() != digest]
+        rows.append(_check("Installation", f"Runtime {runtime_id}", "error" if differ else "ok",
+                           f"{safe_path(root)} · engine, shaders and adapter {'match the pins' if not differ else 'differ: ' + ', '.join(differ)}",
+                           "Rebuild with scripts/backends/build_splash.sh; the controller refuses an unpinned build."))
     for model_id, model in catalog.models().items():
         missing, wrong = [], []
         for role, asset in model["assets"].items():
-            path = DATA / asset["path"]
+            path = paths.ASSETS / asset["path"]
             if not path.is_file():
                 missing.append(role)
             elif path.stat().st_size != asset["bytes"]:
                 wrong.append(role)
         level = "error" if missing or wrong else "ok"
-        detail = "main, PLE, MTP and vision files present at catalog sizes" if level == "ok" else \
+        detail = "both split parts, the draft model and the vision projector present at catalog sizes" if level == "ok" else \
             "; ".join(filter(None, [("missing: " + ", ".join(missing)) if missing else "", ("wrong size: " + ", ".join(wrong)) if wrong else ""]))
         rows.append(_check("Models", model["display_name"], level, detail,
-                           f"Place the files named in config/models/{model_id}.json under {safe_path(DATA)}/models/{model_id}/. "
+                           f"Place the files named in config/models/{model_id}.json under {safe_path(paths.ASSETS)}. "
                            "DwarfStar never downloads models on its own."))
         drift = instance.check(model_id)
         rows.append(_check("Models", f"{model['short_name']} generated configuration", "ok" if not drift else "error",
@@ -198,15 +202,15 @@ def runtime_section(state: dict, live: dict, system: dict) -> dict:
         row = state["models"][model_id]
         model = catalog.model(model_id)
         plan = catalog.memory_plan(model_id)
-        mtp_gib = model["assets"]["mtp"]["bytes"] / GIB
+        draft_gib = model["assets"]["draft"]["bytes"] / GIB
         runtime_plan = row.get("memory_plan") or {}
         used = ((live or {}).get("context") or {}).get("used")
         section.update({
             "pid": row.get("pid"), "port": model["port"], "healthy": row.get("healthy"), "phase": row.get("phase"),
             "uptime_s": row.get("uptime_s"), "load_seconds": row.get("load_seconds"),
             "memory": {
-                "model_weights_gib": round(plan["resident_model_gib"] - mtp_gib, 2),
-                "mtp_gib": round(mtp_gib, 2),
+                "model_weights_gib": round(plan["resident_model_gib"] - draft_gib, 2),
+                "draft_gib": round(draft_gib, 2),
                 "kv_gib": plan["kv_gib"], "buffers_gib": plan["buffers_gib"], "projector_gib": plan["projector_gib"],
                 "planned_gib": plan["planned_gib"], "runtime_reported_gib": runtime_plan.get("planned_gib"),
                 "metal_working_set_gib": plan["metal_working_set_gib"], "metal_headroom_gib": plan["metal_headroom_gib"],
@@ -244,10 +248,11 @@ def document(state: dict, live: dict, system: dict, hub: dict, turns=None) -> di
                       "events": hub.get("events")},
         "lifecycle": state.get("lifecycle"),
         "checks": rows, "summary": summary(rows),
-        "locations": {"code": safe_path(CODE), "data": safe_path(DATA), "chats": safe_path(DATA / "chats"),
-                      "telemetry_sessions": safe_path(DATA / "telemetry" / "sessions"), "lifecycle_log": safe_path(DATA / "logs" / "lifecycle.jsonl"),
+        "locations": {**{name: safe_path(path) for name, path in paths.roots().items()},
+                      "models": safe_path(paths.MODELS), "runtime": safe_path(paths.RUNTIMES), "chats": safe_path(paths.CHATS),
+                      "telemetry_sessions": safe_path(paths.TELEMETRY / "sessions"), "lifecycle_log": safe_path(paths.LOGS / "lifecycle.jsonl"),
                       "local_config": "present" if local_config() else "absent"},
-        "seal": {"present": (DATA / "DWARFSTAR-PRODUCTION-SEAL.json").is_file()},
+        "seal": {"present": (paths.SEAL_DIRECTORY / "DWARFSTAR-PRODUCTION-SEAL.json").is_file()},
     }
 
 

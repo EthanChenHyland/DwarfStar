@@ -20,7 +20,7 @@ import time
 SCHEMA_VERSION = 1
 DEFAULT_EVENT_PORT = 8039  # UDP, producers -> hub
 DEFAULT_HTTP_PORT = 8038  # HTTP + SSE, hub -> Workstation
-DEFAULT_CONTROL_PORT = 8037  # UDP, hub -> native runtime (detail level heartbeats)
+
 MAX_DATAGRAM = 8192
 
 _socket: socket.socket | None = None

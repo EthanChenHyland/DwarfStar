@@ -1,4 +1,4 @@
-"""Owner of one model's native server.
+"""Owner of one model's Splash-m1 server.
 
 One controller implementation serves every model. The model is fixed for the
 life of the process (``DWARFSTAR_MODEL``). The controller only ever signals
@@ -8,7 +8,7 @@ never force-kills.
 Starting a server is refused unless all of the following hold:
 
 * no other heavyweight model runtime is running and the known ports are free;
-* the pinned server binary and its shader sources match the recorded hashes;
+* the pinned Splash engine, shader libraries and metadata adapter match the recorded hashes;
 * the model files are the verified files recorded in ``assets.json``;
 * the generated configuration matches the catalog;
 * enough memory is available for this model at its configured context.
@@ -37,17 +37,18 @@ MODEL = paths.model_id()
 ROOT = paths.instance(MODEL)
 STATE = ROOT / "state"
 STATE.mkdir(mode=0o700, parents=True, exist_ok=True)
+SERVER_LOGS = paths.LOGS / MODEL  # one log per server start, the newest SERVER_LOG_KEEP kept
+SERVER_LOG_KEEP = 10
 CONFIG = ROOT / "runtime.json"
-KIND = catalog.runtime_pin(MODEL).get("kind", "native")
 RUNTIME_DIR = instance.runtime_directory(MODEL)
-# The long-lived server process: ds4-server for the native runtime. Splash's launcher prepares the model, then hands
-# off to `python3 -u -P -m server.server` (re-parented to launchd), which supervises the engine and is the only
-# Splash process that lives as long as the model; the controller owns that one.
-SERVER = RUNTIME_DIR / ("ds4-server" if KIND == "native" else "python/bin/python3")
+# The long-lived server process. Splash's launcher prepares the model, then hands off to
+# `python3 -u -P -m server.server` (re-parented to launchd), which supervises the engine and is the only Splash
+# process that lives as long as the model; the controller owns that one.
+SERVER = RUNTIME_DIR / "python/bin/python3"
 
 
 def is_server_command(command: str) -> bool:
-    return command.startswith(str(SERVER) + " ") and (KIND == "native" or " -m server.server" in command)
+    return command.startswith(str(SERVER) + " ") and " -m server.server" in command
 
 # Ports of other local runtimes that may exist on the same machine. A listener
 # on any of them, or on any catalog port, blocks a start.
@@ -126,9 +127,7 @@ def health() -> dict:
         with urllib.request.urlopen(c["endpoint"] + "/models", timeout=1) as stream:
             value = json.load(stream)
         item = next(v for v in value["data"] if v["id"] == c["model_id"])
-        ok = item["context_length"] == c["context"] and (
-            KIND != "native" or item["top_provider"]["max_completion_tokens"] == c["max_output"])
-        return {"ok": ok, "model": item}
+        return {"ok": item["context_length"] == c["context"], "model": item}
     except Exception:
         return {"ok": False}
 
@@ -152,6 +151,7 @@ def heavyweight_processes() -> list[tuple[int, str]]:
         if (
             name in ("ds4-server", "llama-server")
             or (name == "splash" and "/engine/splash" in command)
+            or (name.startswith("python") and " -m server.server" in command)
             or (name == "moespresso" and " serve " in command)
             or (name.startswith("python") and " -m mtplx.server.openai " in command)
         ):
@@ -226,26 +226,12 @@ def pinned() -> dict:
             f"Run `dwarfstar generate --model {MODEL}`. Nothing was started."
         )
     c = config()
-    if KIND != "native":
-        engine = RUNTIME_DIR / "engine"
-        if hashlib.sha256((engine / "splash").read_bytes()).hexdigest() != c["server_sha256"] or any(
-                hashlib.sha256((engine / name).read_bytes()).hexdigest() != digest for name, digest in c["shader_sha256"].items()) or any(
-                hashlib.sha256((RUNTIME_DIR / name).read_bytes()).hexdigest() != digest for name, digest in c.get("adapter_sha256", {}).items()):
-            raise RuntimeError("Splash engine, shaders or metadata adapter differ from the pinned build; rebuild it "
-                               "(scripts/backends/build_splash.sh) before starting.")
-        missing = [f"{role}: {path}" for role, path in c["model_files"].items() if not Path(path).is_file()]
-        if missing:
-            raise RuntimeError("Model files are missing; nothing was started: " + "; ".join(missing))
-        instance.assets_current(MODEL)
-        return c
-    if hashlib.sha256(SERVER.read_bytes()).hexdigest() != c["server_sha256"]:
-        raise RuntimeError("DwarfStar binary changed; rebuild/review before starting.")
-    metal = SERVER.parent / "metal"
-    shaders = {p.name for p in metal.iterdir() if p.is_file()}
-    if shaders != set(c["shader_sha256"]) or any(
-        hashlib.sha256((metal / name).read_bytes()).hexdigest() != digest for name, digest in c["shader_sha256"].items()
-    ):
-        raise RuntimeError("Shader sources changed; review before starting.")
+    engine = RUNTIME_DIR / "engine"
+    if hashlib.sha256((engine / "splash").read_bytes()).hexdigest() != c["server_sha256"] or any(
+            hashlib.sha256((engine / name).read_bytes()).hexdigest() != digest for name, digest in c["shader_sha256"].items()) or any(
+            hashlib.sha256((RUNTIME_DIR / name).read_bytes()).hexdigest() != digest for name, digest in c["adapter_sha256"].items()):
+        raise RuntimeError("Splash engine, shaders or metadata adapter differ from the pinned build; rebuild it "
+                           "(scripts/backends/build_splash.sh) before starting.")
     missing = [f"{role}: {path}" for role, path in c["model_files"].items() if not Path(path).is_file()]
     if missing:
         raise RuntimeError("Model files are missing; nothing was started: " + "; ".join(missing))
@@ -268,22 +254,19 @@ def serve_owned() -> None:
         if key.startswith(("DS4_", "DSTAR_", "MOESPRESSO_", "MTPLX_", "LLAMA_ARG_")):
             del env[key]
     env.update(c["environment"])
-    env.update(native_telemetry_environment())
     os.chdir(RUNTIME_DIR)
     os.execve(str(SERVER), c["argv"], env)
 
 
-def native_telemetry_environment() -> dict[str, str]:
-    """Variables understood only by the telemetry-capable runtime build; ignored by the reference builds."""
-    from dwarfstar import telemetry
-
-    if not telemetry.enabled():
-        return {}
-    return {
-        "DS4_TELEMETRY_UDP": str(telemetry.event_port()),
-        "DS4_TELEMETRY_CONTROL": str(int(os.environ.get("DWARFSTAR_TELEMETRY_CONTROL", telemetry.DEFAULT_CONTROL_PORT))),
-        "DS4_TELEMETRY_MODEL": MODEL,
-    }
+def rotate_server_logs(keep: int = SERVER_LOG_KEEP) -> list[str]:
+    """Delete all but the newest `keep - 1` server logs before a start writes another; the running server's log is
+    never among them (a start only happens with no server of this model running)."""
+    logs = sorted(SERVER_LOGS.glob("server-*.log"), key=lambda path: path.stat().st_mtime)
+    removed = []
+    for path in logs[: max(0, len(logs) - (keep - 1))]:
+        path.unlink(missing_ok=True)
+        removed.append(path.name)
+    return removed
 
 
 def start() -> dict:
@@ -296,7 +279,9 @@ def start() -> dict:
     c = pinned()
     admission = admit_memory()
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    log = STATE / f"server-{stamp}.log"
+    SERVER_LOGS.mkdir(parents=True, exist_ok=True)
+    rotate_server_logs()
+    log = SERVER_LOGS / f"server-{stamp}.log"
     started_at = time.time()
     emit("runtime", phase="starting", admission=admission)
     command = [sys.executable, "-B", "-m", "dwarfstar", "runtime", "--model", MODEL, "_serve"]
@@ -316,69 +301,23 @@ def start() -> dict:
             ledger = {**current, "log": str(log), "started_at": started_at, "model": MODEL}
             save(STATE / "server.json", ledger)
             if health()["ok"]:
-                ledger["mtp_block_loaded"] = "ds4: MTP block " in native_log(ledger)
                 ledger["load_seconds"] = time.time() - started_at
                 save(STATE / "server.json", ledger)
                 emit("runtime", phase="running", pid=child.pid, load_s=round(ledger["load_seconds"], 2),
                      memory_plan=memory_plan(ledger))
-                return {
-                    "ok": True, "pid": child.pid, "health": health(),
-                    "mtp_block_loaded": ledger["mtp_block_loaded"], "load_seconds": ledger["load_seconds"],
-                    "admission": admission,
-                }
+                return {"ok": True, "pid": child.pid, "health": health(), "load_seconds": ledger["load_seconds"],
+                        "admission": admission}
         time.sleep(0.5)
     raise RuntimeError(f"Owned startup remains pending: {log}. No duplicate or forced kill was attempted.")
 
 
-def native_log(row) -> str:
-    if not row or not row.get("log"):
-        return ""
-    try:
-        path = Path(row["log"])
-        with path.open("rb") as stream:
-            stream.seek(max(0, path.stat().st_size - 131072))
-            return stream.read().decode(errors="replace")
-    except OSError:
-        return ""
-
-
 def memory_plan(row) -> dict:
-    """The runtime's own memory plan, parsed from the first lines of its log."""
-    import re
-
-    if not row:
-        return {}
-    if KIND != "native":
-        return splash_memory_plan()
-    if not row.get("log"):
-        return {}
-    try:
-        with Path(row["log"]).open("rb") as stream:
-            head = stream.read(16384).decode(errors="replace")
-    except OSError:
-        return {}
-    head = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", head)
-    plan = {}
-    match = re.search(
-        r"memory: KV ([\d.]+) GiB \(raw ([\d.]+) \+ compressed ([\d.]+)\) \+ buffers ([\d.]+) GiB "
-        r"\+ resident model ([\d.]+) GiB = ([\d.]+) GiB planned", head)
-    if match:
-        keys = ("kv_gib", "kv_raw_gib", "kv_indexer_gib", "buffers_gib", "resident_model_gib", "planned_gib")
-        plan.update({key: float(value) for key, value in zip(keys, match.groups())})
-    match = re.search(r"kv_raw_f32=(on|off)", head)
-    if match:
-        plan["kv_cache_dtype"] = "F32" if match[1] == "on" else "F16"
-    match = re.search(r"n-grams: ([\d.]+) GiB, disk reads only", head)
-    if match:
-        plan["ple_disk_gib"] = float(match[1])
-    match = re.search(r"MTP block .* \((\d+) tensors, ([\d.]+) GiB\)", head)
-    if match:
-        plan["mtp_gib"] = float(match[2])
-    return plan
+    """The running server's own memory plan (Splash's /status), in the catalog's fields."""
+    return splash_memory_plan() if row else {}
 
 
 def splash_memory_plan() -> dict:
-    """Splash reports its own plan on /status; mapped to the same fields as the native log line."""
+    """Splash reports its own plan on /status; mapped to the catalog's memory fields."""
     try:
         with urllib.request.urlopen(config()["endpoint"].removesuffix("/v1") + "/status", timeout=2) as stream:
             plan = json.load(stream)["memory_plan"]
@@ -418,7 +357,7 @@ def requests(row) -> list:
 
 def status() -> dict:
     from dwarfstar.approval_policy import status as permission_status
-    from dwarfstar.native_metrics import assemble, native_snapshot, process_resources
+    from dwarfstar.server_metrics import assemble, process_resources
 
     c = config()
     errors = []
@@ -430,33 +369,22 @@ def status() -> dict:
     h = health() if row else {"ok": False}
     if row and not h["ok"]:
         errors.append("Health collection error: model endpoint unavailable or configuration mismatch")
-    native, log_errors = native_snapshot(row or read(STATE / "last-stopped.json"), STATE / "telemetry-log-cursor.json")
-    errors += log_errors
     try:
         clients = requests(row)
     except Exception as error:
         clients = []
         errors.append("ACP metadata collection error: " + type(error).__name__)
-    resource, resource_errors = process_resources(row["pid"] if row else None, ROOT, STATE / "telemetry-cache-size.json")
+    resource, resource_errors = process_resources(row["pid"] if row else None, paths.CACHE, STATE / "telemetry-cache-size.json")
     errors += resource_errors
     try:
-        request, phase = assemble(c, row, h, native, clients, resource)
+        request, phase = assemble(c, row, clients)
     except Exception as error:
         request, phase = {}, "IDLE"
         errors.append("Request aggregation collection error: " + type(error).__name__)
-    if native.get("log_catching_up"):
-        errors.append("Native log catch-up pending; bounded incremental read")
     if request.get("telemetry_error"):
         errors.append("ACP telemetry collection error")
     if request.get("active") and time.time() - request.get("observed_at", 0) > 8:
         errors.append("ACP metadata collection error: stale receipt; no model stall or completion inferred")
-    last_native = {k: v for k, v in native.items() if k.startswith("mtp_")} if not row else {}
-    if row and row.get("mtp_block_loaded"):
-        mtp_state = "MTP enabled · native block loaded"
-    elif row:
-        mtp_state = "MTP configured · native adaptive"
-    else:
-        mtp_state = "MTP configured · runtime offline"
     tooling = read(paths.CODE / "agent-tools/state/capabilities.json", {})
     last = read(STATE / "last-stopped.json", {}) or {}
     return {
@@ -469,9 +397,7 @@ def status() -> dict:
         "uptime_s": resource.get("process_uptime_s"),
         "endpoint": c["endpoint"],
         "configuration": c,
-        "native": native if row else {},
-        "last_session_native": last_native,
-        "mtp_state": mtp_state,
+        "speculative": c["speculative"],
         "request": request,
         "phase": phase,
         "resources": resource,
@@ -511,15 +437,21 @@ def stop() -> dict:
     return {"ok": True, "stopped": row["pid"]}
 
 
+def listening_pid(port: int) -> int | None:
+    result = run(["/usr/sbin/lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"])
+    pids = [int(p) for p in result.stdout.split() if p.isdigit()]
+    return pids[0] if pids else None
+
+
 def reconcile() -> dict:
     """Make the saved ownership record agree with the processes that actually exist. Never signals a process.
 
     * A ledger whose process has exited is retired (kept as last-stopped).
     * A ledger whose PID now belongs to a different process (PID reuse) is retired as invalid.
-    * A running ds4-server whose command line is exactly this model's generated command, with no valid
-      ledger (for example after the controller or service crashed during a start), is adopted: it is
-      healthy-checked and recorded, so the Workstation reconnects instead of starting a duplicate.
-    * Any other ds4-server is reported as foreign and left alone.
+    * A Splash server of this installation (our runtime's `-m server.server`) that listens on this model's port and
+      answers as this model, with no valid ledger (for example after the controller or service crashed during a
+      start), is adopted: recorded, so the Workstation reconnects instead of starting a duplicate.
+    * Any other model server is reported as foreign and left alone.
     """
     c = config()
     report = {"ok": True, "model": MODEL, "ledger": "none", "adopted": None, "foreign": []}
@@ -536,18 +468,18 @@ def reconcile() -> dict:
         else:
             report["ledger"] = "valid"
             return report
-    expected = hashlib.sha256(" ".join(c["argv"]).encode()).hexdigest()
-    for pid, name in heavyweight_processes():
+    listener = listening_pid(c["port"])
+    for pid, _name in heavyweight_processes():
         current = identity(pid)
-        if not current or name != "ds4-server":
-            continue
-        if current["argv_sha256"] == expected and health()["ok"]:
-            logs = sorted(STATE.glob("server-*.log"), key=lambda path: path.stat().st_mtime)
+        if not current or current["command"].startswith(str(RUNTIME_DIR / "engine" / "splash")):
+            continue  # gone, or the engine our own server supervises
+        if is_server_command(current["command"]) and listener == pid and health()["ok"]:
+            logs = sorted(SERVER_LOGS.glob("server-*.log"), key=lambda path: path.stat().st_mtime)
             save(STATE / "server.json", {**current, "log": str(logs[-1]) if logs else None, "started_at": None, "model": MODEL,
                                          "adopted_at": time.time()})
             emit("runtime", phase="running", pid=pid, adopted=True)
             report.update(ledger="adopted", adopted=pid)
-        elif KIND == "native" and current["argv_sha256"] != expected:
+        elif not is_server_command(current["command"]) or listener != pid:
             report["foreign"].append({"pid": pid, "command": current["command"][:160]})
     return report
 
