@@ -29,7 +29,7 @@ DwarfStar is one product with three models. Everything that is not a model fact 
 | Agent | `src/dwarfstar/agent.py`, `acp/`, `agent-tools/` | One ACP launcher for every profile. Full Auto, workspace/shell/browser/KimiCU/vision tools, compaction and recovery are identical across profiles; only the provider file (model + effort) differs. |
 | Runtime | `native/` → `<data>/runtime/ds4-unified/` | The pinned Paperniuk ds4 build plus the Swift tokenizer adapter and optional telemetry hooks (inactive unless enabled by environment). Token-identical to the reference builds for all three models. |
 | Telemetry | `src/dwarfstar/telemetry/`, `native/telemetry/` | Fire-and-forget UDP events from runtime, controller and agent; the hub aggregates and streams them. Detail (router rows) is only produced while a subscriber asks for it. |
-| UI | `app/workstation/web/` | Run, Models, Live, Visualizer, Benchmarks, Research, Diagnostics. Plain JS, served only on loopback. |
+| UI | `app/workstation/web/` | Run, Chats, Models, Live, Visualizer, Diagnostics. Benchmark data is engineering infrastructure (`research/`, `scripts/`), not a Workstation page. Plain JS, served only on loopback. |
 | Editor | `src/dwarfstar/zed.py` | Seven generated Zed entries, all `bin/dwarfstar-acp --profile <id>`. |
 | Seal | `src/dwarfstar/seal.py` | Production baseline (every tracked file hashed) and the compact seal checked by `dwarfstar seal --verify`. |
 

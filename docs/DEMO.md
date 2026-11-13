@@ -44,7 +44,7 @@ Select **Cyber**: four reasoning levels (OFF, LOW, MEDIUM, XHIGH). Switch to it;
 
 ## 8. Evidence
 
-**Benchmarks** lists every result behind the decisions, including the production validation of this release. **Diagnostics** shows that generated configuration matches the catalog, the Zed entries match, and the seal is present.
+Measured speed, memory and quality for each model are on its **Models** page; the full benchmark record is in `docs/BENCHMARKS.md`. **Diagnostics** shows that generated configuration matches the catalog, the Zed entries match, and the seal is present.
 
 ## 9. Stop
 

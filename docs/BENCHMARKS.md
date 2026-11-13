@@ -1,8 +1,6 @@
 # Benchmarks
 
-All results come from the canonical reports on the reference machine (M1 Max, 64 GiB) and are collected into `research/benchmark-index.json` by `dwarfstar bench-index` (87 entries). The Workstation's **Benchmarks** view renders the same index. Raw evidence stays outside the repository.
-
-![Benchmarks](assets/benchmarks.png)
+All results come from the canonical reports on the reference machine (M1 Max, 64 GiB) and are collected into `research/benchmark-index.json` by `dwarfstar bench-index` (87 entries). It is engineering infrastructure: the Workstation shows each model's measured numbers on its Models page and has no benchmark browser. Raw evidence stays outside the repository.
 
 ## How to read them
 

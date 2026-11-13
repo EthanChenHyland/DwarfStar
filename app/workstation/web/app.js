@@ -3,7 +3,7 @@
 "use strict";
 
 const S = {
-  catalog: null, state: null, live: null, system: null, benchmarks: null, diagnostics: null,
+  catalog: null, state: null, live: null, system: null, diagnostics: null,
   model: null, effort: null, view: "run", modelTab: null, busy: false,
   series: { tps: [], prefill: [], gpu: [], wired: [], ple: [], accept: [] },
   events: [], ticks: [], tools: [], source: null, sourceLevel: 0, connected: false,
@@ -129,7 +129,7 @@ function show(view) {
   document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === "view-" + view));
   connect(view === "visualizer" ? 2 : 1);
   if (view !== "chats") window.Chats?.unmount();
-  ({ run: renderRun, chats: () => window.Chats?.mount(), models: renderModels, live: renderLive, visualizer: () => window.Visualizer?.mount(), benchmarks: renderBenchmarks, research: renderResearch, settings: renderSettings })[view]?.();
+  ({ run: renderRun, chats: () => window.Chats?.mount(), models: renderModels, live: renderLive, visualizer: () => window.Visualizer?.mount(), settings: renderSettings })[view]?.();
   if (view !== "visualizer") window.Visualizer?.unmount();
   $("#main").scrollTop = 0;
 }
@@ -343,9 +343,9 @@ function renderModels() {
       </dl></div>
       <div class="panel"><h2>Capabilities</h2>${m.capabilities.map((c) => `<span class="cap">${esc(CAPABILITY[c] || c)}</span>`).join("")}</div>
     </div>
-    <div class="panel" style="margin-top:14px"><h2>Quality and benchmark history</h2>
+    <div class="panel" style="margin-top:14px"><h2>Measured quality</h2>
       ${quality ? `<table><thead><tr><th>Measurement</th><th>Result</th><th>Notes</th></tr></thead><tbody>${quality}</tbody></table>` : `<p class="muted">No results recorded.</p>`}
-      <p class="small muted" style="margin:10px 0 0">Full history is on the Benchmarks page.</p>
+      <p class="small muted" style="margin:10px 0 0">Raw results and how they were measured: docs/BENCHMARKS.md in the repository.</p>
     </div>`;
   root.querySelectorAll("[data-tab]").forEach((b) => b.onclick = () => { S.modelTab = b.dataset.tab; renderModels(); });
 }
@@ -419,42 +419,6 @@ function renderLive() {
     .concat(tools.map((t) => `<div class="item"><span class="muted">${new Date(t.t * 1000).toLocaleTimeString()}</span><span class="tag ${esc(t.category)}">${esc(t.category)}</span><span>${esc(t.name)}</span><span class="muted">${t.ms != null ? t.ms + " ms" : ""}</span><span>${t.ok === false ? "✗" : "✓"}</span></div>`)).join("") || `<span class="muted">No tool calls in this session yet.</span>`;
 }
 
-/* ------------------------------------------------------------- benchmarks */
-async function renderBenchmarks() {
-  const root = $("#view-benchmarks");
-  if (!S.benchmarks) S.benchmarks = await api("/api/benchmarks");
-  const data = S.benchmarks;
-  if (!data.ok) { root.innerHTML = `<h1>Benchmarks</h1><div class="notice">${esc(data.error)}</div>`; return; }
-  const filter = renderBenchmarks.filter || "all";
-  const rows = data.entries.filter((e) => filter === "all" || e.model === filter);
-  root.innerHTML = `<h1>Benchmarks</h1>
-    <p class="lead">Measured results, generated from the canonical reports (${data.entries.length} entries, index built ${esc(data.generated)}). Raw evidence stays on this machine.</p>
-    <div class="tabs">${["all", ...S.catalog.models.map((m) => m.id)].map((id) => `<button class="chip ${id === filter ? "selected" : ""}" data-filter="${id}">${id === "all" ? "All" : esc(modelOf(id).family)}</button>`).join("")}</div>
-    <div class="panel" style="padding:0;overflow:auto;max-height:70vh"><table><thead><tr><th>Date</th><th>Experiment</th><th>Model</th><th>Profile</th><th>Task / measure</th><th>Result</th><th class="num">Wall s</th><th class="num">Decode tok/s</th><th class="num">MTP %</th><th>Context</th></tr></thead>
-      <tbody>${rows.map((e) => `<tr><td class="mono">${esc(e.date || "")}</td><td>${esc(e.experiment)}</td><td>${esc(e.model || "")}</td><td>${esc(e.profile || "")}</td><td>${esc(e.task || "")}</td>
-        <td>${e.acceptance == null ? esc(e.result || "") : `<span class="pill ${e.acceptance ? "pass" : "fail"}">${e.acceptance ? "pass" : "fail"}</span> ${esc(e.result || "")}`}</td>
-        <td class="num">${e.wall_s != null ? e.wall_s.toFixed(1) : ""}</td><td class="num">${e.decode_tok_s != null ? e.decode_tok_s.toFixed(1) : ""}</td><td class="num">${e.mtp_acceptance_pct != null ? e.mtp_acceptance_pct.toFixed(1) : ""}</td><td>${esc(e.context || "")}</td></tr>`).join("")}</tbody></table></div>`;
-  root.querySelectorAll("[data-filter]").forEach((b) => b.onclick = () => { renderBenchmarks.filter = b.dataset.filter; renderBenchmarks(); });
-}
-
-/* --------------------------------------------------------------- research */
-function renderResearch() {
-  const root = $("#view-research"); if (!S.catalog) return;
-  const highlights = S.benchmarks?.highlights || [];
-  root.innerHTML = `<h1>Research and provenance</h1>
-    <p class="lead">Where each model comes from and what the experiments found. Hashes identify the exact files in use.</p>
-    ${S.catalog.models.map((m) => { const d = S.catalog.details[m.id]; return `
-      <div class="panel" style="margin-bottom:14px;border-left:3px solid ${TONE[m.id]}"><h3>${esc(m.display_name)}</h3>
-        <dl class="kv"><dt>Source</dt><dd class="mono">${esc(d.source.repository)} @ ${esc(d.source.revision)}</dd>
-          <dt>Derivation</dt><dd>${esc(d.source.derivation || "")}</dd>
-          ${d.source.policy ? `<dt>Policy</dt><dd><b>${esc(d.source.policy)}</b></dd>` : ""}
-          <dt>Runtime</dt><dd>${esc(d.runtime.name)} · build <span class="mono">${esc(d.runtime.id)}</span> · source <span class="mono">${esc(d.runtime.source.commit.slice(0, 12))}</span></dd>
-          <dt>Notes</dt><dd>${esc(d.provenance.notes || "")}</dd></dl></div>`; }).join("")}
-    <h2>Findings</h2>
-    <div class="grid cols-2">${highlights.map((h) => `<div class="panel"><h3>${esc(h.title)}</h3><p class="muted" style="margin:0">${esc(h.text)}</p></div>`).join("") || `<p class="muted">Open the Benchmarks page once to load the findings.</p>`}</div>`;
-  if (!S.benchmarks) api("/api/benchmarks").then((r) => { S.benchmarks = r; if (S.view === "research") renderResearch(); });
-}
-
 /* --------------------------------------------------------------- settings */
 async function renderSettings() {
   const root = $("#view-settings");
@@ -490,10 +454,9 @@ async function boot() {
   S.model = selected.model; S.effort = selected.reasoning_effort;
   connect(1);
   const initial = location.hash.slice(1);
-  show(["run", "chats", "models", "live", "visualizer", "benchmarks", "research", "settings"].includes(initial) ? initial : "run");
+  show(["run", "chats", "models", "live", "visualizer", "settings"].includes(initial) ? initial : "run");
   window.addEventListener("hashchange", () => { const v = location.hash.slice(1); if (v && v !== S.view && document.querySelector("#view-" + v)) show(v); });
   setInterval(refreshState, 4000);
-  api("/api/benchmarks").then((r) => { S.benchmarks = r; });
 }
 window.DwarfStar = { S, api, esc, modelOf, runningModel, TONE, show, toast, gib };
 boot();

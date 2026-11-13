@@ -11,8 +11,6 @@
 | **Models** | One statistics page per model with the same schema: identity, source and revision, quantization, storage, memory plan, context and KV cache dtypes, speed, MTP, capabilities, provenance, and quality/benchmark history. Anything not measured says **Not measured**. |
 | **Live** | Prompt/output tokens, prefill and decode rates, MTP acceptance, context occupancy, PLE disk reads, unified memory, GPU and the tool activity of the running session. |
 | **Visualizer** | See `docs/VISUALIZER.md`. |
-| **Benchmarks** | The benchmark index (`research/benchmark-index.json`): every historical and production-validation row, filterable by model. |
-| **Research** | Findings and reports, with the numbers behind each decision. |
 | **Diagnostics** | Generated-config drift, Zed entry check, seal presence, telemetry hub state, server logs, code and data roots. |
 
 ## Profiles
@@ -53,4 +51,4 @@ bin/dwarfstar runtime --model cyber requirement
 | ![Run](assets/workstation-run.png) Run: Scope selected and running | ![Model selector](assets/model-selector.png) Swift 1.5 with LOW / MEDIUM |
 | ![Chats](assets/chats.png) A chat with Cyber LOW using the shell tool | |
 | ![Statistics](assets/models-stats.png) Cyber statistics page | ![Live](assets/live.png) Live telemetry during a Cyber agent session |
-| ![Visualizer](assets/visualizer.png) Visualizer: router, MTP, PLE, shell action | ![Benchmarks](assets/benchmarks.png) Benchmark index with the production validation |
+| ![Visualizer](assets/visualizer.png) Visualizer: router, MTP, PLE, shell action | |
