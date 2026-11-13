@@ -16,7 +16,7 @@ DwarfStar is the product: Workstation, catalog, lifecycle, chats, compaction, AC
 |---|---|---|---|
 | Artifact | published 2-part split GGUF (`qwen4exp`, PLE in part 2) | main + standalone PLE GGUF | main + standalone PLE GGUF, BF16 dense trunk |
 | Tokenizer profile | `gpt2/qwen35` | `gpt2/qwen2` (Swift's own tokenizer) | `gpt2/qwen35` |
-| **Splash-m1** | **Direct**: loads the existing local files | **Not supported**: Splash accepts only `gpt2/qwen35` and `gpt2/flint`; a lossless split repack loads metadata but the tokenizer profile is refused. Relabelling would mis-tokenize | **Not supported**: after a lossless split repack, Splash refuses the BF16 shared-expert projection (`tensor is not tile aligned`). Fixing it means re-encoding Cyber's exact BF16 trunk, which is out of scope |
+| **Splash-m1** | **Direct**: loads the existing local files | **Works with a one-line adapter fix** (below): Splash lacked Swift's legitimate `qwen2` tokenizer profile | **Not yet**: two BF16 layout gaps in Splash's planner (below); a lossless engine fix is identified |
 | **Native oMLX / MLX** | Not practical | Not practical | Not practical |
 | Vision on Splash | Yes, with the original BF16 projector from the pinned source repo (`mmproj-Qwen3.8-Flash-Next-BF16.gguf`, 0.91 GB, SHA-256 `b1a82259…`). Splash refuses the Q8_0 projector: it converts vision weights to BF16 and refuses values that are not exactly representable | – | – |
 | Speculative decoding | Splash: DFlash2 draft `incoai/Qwen3.8-Flash-Next-DFlash2` @ `a22a1744` (1.21 GB, 0.49 GiB resident). Native MTP sidecars are not used by Splash | – | – |
@@ -80,3 +80,36 @@ scripts/validate/backend_ab.py splash-scope 8040 qwen3.8-flash-next --out <data>
 **Decision: no adaptive selection.** 2048 is the fastest chunk; 4096 is not faster and costs 2.2 GiB more; 1024 costs 3–4 % prefill and saves 1.1 GiB. The whole range is far inside the 15 % bar for a change, so the fixed shared default stays and Cyber keeps 1024 (its plan needs the headroom; the measured cost is about 4 % of prefill).
 
 **Prefix reuse already exists.** The native runtime reuses a repeated prompt prefix in memory (second turn of the A/B test: 8,539 of ~8.6K tokens reused, TTFT 0.35 s) and also restores long prefixes from its disk KV checkpoints across restarts (12 GiB budget, a checkpoint every 10,000 tokens of a continued conversation). Agent turns, which resend the same system prompt and transcript, benefit from both. The Visualizer's Requests table shows the reused share for every request.
+
+## Swift on Splash-m1 (2026-11-13)
+
+**Tokenizer fix.** Splash derives a Hugging Face tokenizer from GGUF metadata and knew only the `qwen35` and `flint` profiles. Swift's GGUF declares `tokenizer.ggml.pre = qwen2`, its real profile: Swift's shipped `tokenizer.json` applies NFC, then Qwen2's regex *without* combining marks (its `tokenizer_config.json` also lists a `pretokenize_regex` with marks, which Hugging Face ignores; verified by loading Swift with `AutoTokenizer`). `backends/splash-m1/patches/0001-qwen2-tokenizer-profile.patch` adds that profile to `install/gguf.py`: the regex is byte-identical to Swift's `tokenizer.json`, plus a unit test in Splash's own suite. Nothing in Swift's GGUF was changed.
+
+**Parity.** `scripts/backends/tokenizer_parity.py` compares, for the same GGUF, the native runtime's token IDs (`ds4 --dump-tokens --raw`, built from the same objects as the pinned server; metadata only, 0.3 s), Splash's production path (`tokenizer_files` → `AutoTokenizer` → `tokenizable`, no special tokens added), and optionally the model's own shipped tokenizer. Swift: **62/62 cases, 2,116 tokens, identical across all three** (plain text, code, punctuation, whitespace, Unicode incl. NFD, Devanagari, RTL and emoji, JSON tool calls, special tokens, and prompts rendered from Swift's chat template with tools and every reasoning setting). Real requests agree too: native and Splash report the same prompt token counts (70, 8,157, 32,466). Special-token config matches (no BOS, EOS `<|im_end|>`, pad `<|endoftext|>`, 33 added tokens); the six FIM tokens are marked control in the GGUF, so Splash would hide them when decoding with special tokens skipped (IDs unaffected).
+
+The same harness on Scope shows three existing native-vs-Splash differences, unchanged by this work: native does not NFC-normalize `qwen35` input (decomposed accents tokenize differently), and native treats a literal `<|vision_start|>` typed in text as plain text.
+
+**Layout.** Splash loads a two-part split GGUF. Its engine keeps only part 1's metadata and checks nothing in later parts but an optional `split.no` (`GgufFile::parse`), so `repack_split_gguf.py --link-part2` writes part 1 only (37.6 GB, tensor payloads and metadata verified identical) and symlinks Swift's unchanged PLE file as part 2.
+
+| Swift | Native | Splash-m1 | Change |
+|---|---:|---:|---:|
+| TTFT, short | 0.69 s | 0.52 s | −25 % |
+| Prefill, 8K / 32K | 295 / 283 tok/s | 333 / 310 tok/s | +13 % / +10 % |
+| Generation while answering | 37–40 tok/s | 45–78 tok/s (DFlash2 draft) | +15–96 % |
+| Wall, 8K needle / 32K needle | 37.0 / 124.0 s | 32.0 / 113.0 s | −13 % / −9 % |
+| Repeated prefix, turn 2 | 8,523 reused, TTFT 0.34 s | 8,224 reused, TTFT 0.60 s | both reuse |
+| Peak wired | 45.85 GiB | 43.04 GiB | −2.8 GiB |
+| Answers | needle correct at 8K and 32K | same | equal |
+
+Smoke tests on Splash: LOW and MEDIUM reasoning answer correctly, reasoning arrives separately, and a tool request returns a proper `shell` call. Not yet run: 128K depth, vision, DwarfStar lifecycle integration.
+
+## Cyber on Splash-m1: diagnosis (2026-11-13)
+
+Splash's planner repacks projection weights into "planes" whose width must be a multiple of the format's column unit: 256 for formats with native blocks over 64 elements (BF16 and F16 use 256-element blocks), else 64 (`quant_column_unit`, `tiledRepack`). Cyber keeps its dense trunk in BF16, exactly as the authoritative source stores it; Scope and Swift store the same tensors in 32/64-element quantized types. A full audit of Cyber's 1,223 tensors finds two gaps:
+
+1. `blk.*.ffn_down_shexp.weight`, BF16 [2560 × **640**] (48 tensors): 640 = 2·256 + 128. The shared expert runs inside the grouped routed-expert pass as a slice exactly as wide as a routed expert (640), so neither column padding nor the float "as stored" projection (used only for the indexer) can serve it without changing the computation.
+2. Hyper-connection projections `hc_*_down` [10240 → 320] and `hc_*_up` [320 → 10240] (+ `output_hc_*`), BF16: Splash deliberately converts any BF16/F16 hyper-connection projection to **Q8_0** at load (`quantizedOrQ8_0`, for bandwidth). That would silently change Cyber's learned values. Native multiplies them in BF16.
+
+Every other Cyber BF16 tensor already fits (widths 2560/6144/10240) or uses an exact as-stored path (router, embeddings, alpha/beta, indexer, PLE conv).
+
+Options, in order: (1) no other Splash type holds BF16 values exactly at a 64 unit (Q8_0/Q4_x/IQ4_NL/MXFP4/Q2_0 are all lossy); (2) no tail kernel exists for a partial 256 block; (3) loader-side zero padding cannot work because the shared expert's width is tied to the routed experts'; (4) **minimal engine change, lossless**: add a BF16 plane format with 64-element blocks (`meta_groups` 2; its scale `g` is always 1). The kernels are generic over the format table (`FmtFloat16<F, V>` reads `kQuantFormats[F].meta_groups`; instantiations come from `QUANT_FORMATS(X)`). The planner would pick it for BF16 tensors whose width is not a multiple of 256, and use BF16 planes instead of the Q8_0 conversion for BF16 hyper-connection projections. This needs the Metal toolchain (not installed: `xcrun -f metal` fails) and an engine and metallib rebuild with new pins. (5) Rebuilding or re-encoding Cyber is **not** needed for the lossless path.
