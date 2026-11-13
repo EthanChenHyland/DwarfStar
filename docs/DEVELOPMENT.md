@@ -9,7 +9,7 @@
 ## Setup
 
 ```bash
-cp config/local.example.json config/local.json   # set data_root
+cp config/local.example.json config/local.json   # optional: override any of the five roots
 (cd agent-tools && npm ci)
 # install the Oh My Pi agent CLI (`omp`) globally with Bun; generate links acp/vendor/omp to its sources
 bin/dwarfstar generate                            # write per-model instance config and local links
@@ -22,7 +22,7 @@ bin/dwarfstar assets                              # verify model files against t
 scripts/validate/check.sh
 ```
 
-Runs the unit tests (catalog and backends, lifecycle state machine, memory admission, telemetry hub, chats, crash recovery, approval and redaction policy), parses every Python file, lints, checks generated configuration against the catalog, checks the benchmark index is reproducible, and syntax-checks the JavaScript and TypeScript.
+Runs the unit tests (catalog, lifecycle state machine, memory admission, telemetry hub, chats, shared Zed sessions, storage, crash recovery, approval and redaction policy), parses every Python file, lints, checks generated configuration against the catalog, checks the benchmark index is reproducible, and syntax-checks the JavaScript and TypeScript.
 
 ## Changing a model fact
 
@@ -37,17 +37,11 @@ Never edit files under `<data>/instances/` by hand; they are generated.
 
 ## Runtime validation
 
-`scripts/validate/production_validation.py` drives the product the way a user does (Workstation switch, `dwarfstar-acp`, telemetry stream). Each step writes one JSON record under `<data>/evidence/production-validation/steps/`; `summarize` produces `validation.json`, which `dwarfstar bench-index` picks up.
+`scripts/validate/lifecycle_matrix.py` drives the Workstation lifecycle (start, switch, same-family effort change, cross-model, stop) through the service. `scripts/validate/storage_smoke.py` cold-starts each model, runs a tiny generation and vision check, resumes a chat's own session, runs a tool turn and stops — the migration and post-cleanup validation. `scripts/backends/splash_equivalence.py` runs the deterministic prompt set and the native-vs-Splash A/B. These load a model, so they are not part of `check.sh`.
 
-`scripts/validate/runtime_parity.py` compares the unified runtime with the reference build at temperature 0.
+## Building the runtime
 
-## Native runtime
-
-`native/apply_hooks.py` and `native/patches/` turn the pinned ds4 checkout into the `ds4-unified` build. `config/runtimes.json` pins each build's binary SHA-256; the controller refuses a binary that does not match.
-
-## Deferred research tooling
-
-`scripts/calibrate/` (activation capture and a GPTQ-style Q2_0 encoder for a possible Cyber expert re-encode) is not used by the product and is not referenced by any runtime path. The runtime's calibration capture is compiled in but inactive unless `DS4_QWEN4_CALIB_DIR` is set.
+`scripts/backends/build_splash.sh` builds Splash-m1 from the pinned `1.6.1-m1` source with DwarfStar's two patches (`backends/splash-m1/patches/`) using Xcode 26.6's Metal toolchain, into `<assets>/Runtimes/splash-m1-1.6.1-ds1/`. `config/runtimes.json` pins the engine, shader and metadata-adapter SHA-256; the controller refuses anything that does not match. The native ds4 runtime is retired and not built; `docs/NATIVE-RETIREMENT.md` covers reconstructing it from git for comparison.
 
 ## Seal
 

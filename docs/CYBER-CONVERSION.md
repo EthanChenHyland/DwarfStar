@@ -21,7 +21,7 @@ DwarfStar Cyber is a format conversion of `dealignai/Qwen3.8-Flash-Next-CYBERSEC
 ## Runtime settings
 
 * Context 131072 (128K), output ceiling 81920 (the shared policy), prefill chunk 1024 (its one override). With the default 2048 chunk the 128K plan (51.92 GiB with the vision projector) exceeded the 51.84 GiB Metal working-set limit and prefill failed at depth; the 1024 chunk reduces the plan to 50.81 GiB.
-* K and V cache F16, the same as every model; the runtime's Qwen4Exp graph has no quantized KV path.
+* K and V cache INT8 under the production Splash-m1 runtime, the same as every model (13,248 bytes per token). The native ds4 runtime these conversion figures were first validated against had no quantized KV path and allocated F16 K/V; native is retired (`docs/NATIVE-RETIREMENT.md`).
 * Sampling from the checkpoint's `generation_config.json` (temperature 1.0, top-p 0.95, top-k 20).
 * Reasoning efforts OFF, LOW, MEDIUM, XHIGH, each distinct on the wire.
 

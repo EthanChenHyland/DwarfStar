@@ -1,39 +1,36 @@
-# Visualizer
+# Live — Advanced view (the Visualizer)
 
-One implementation (`app/workstation/web/visualizer.js`) for every model. It draws only what telemetry reports; when a signal is absent the panel says so instead of animating.
+The Advanced view of **Live** (`app/workstation/web/visualizer.js`) draws a data map of the running model: where its data lives, the processor grid, the draft, context, memory and the agent's actions. It draws only what the runtime reports; where Splash does not report a signal, the region says so rather than animate an estimate. Toggle it from the **Standard** / **Advanced** switch at the top of Live.
 
 ## What it shows
 
 | Region | Source | Notes |
 |---|---|---|
-| Storage | catalog + PLE read events | Main file, MTP block and projector are resident; only the PLE (n-gram) table is read from disk during inference. Reads light up as they happen. |
-| Unified memory | controller memory plan + system sampler | Resident model, F16 K/V cache, buffers, projector; live wired memory and swap. |
-| Processor / layers | runtime `tick` events | 48 layers; per-token router selections (10 of 512 experts per layer) with weights. Router rows are produced only while a full-detail subscriber is attached. |
-| Routing heatmap | hub router heat | Cumulative expert selection counts per layer for the session. |
-| MTP | `tick` `dp`/`da` counters | Drafts proposed, accepted and rejected per verify cycle. |
-| Context | request and tick events | Context occupancy against the model's 128K. |
-| Prefill / decode | request phases from the server log stream | Prompt start, prefill progress, decode rate, finish. |
+| Storage | catalog + PLE read events | The model, draft and projector are resident; only the PLE (n-gram) table is read from disk during inference. Splash does not report the read rate, so that line says "not reported". |
+| Unified memory | controller memory plan + system sampler | Resident model, INT8 K/V cache, buffers, projector, the Metal limit and live wired memory. |
+| Processor / layers | runtime `tick` events (native replays only) | 48 layers; per-token router selections (10 of 512 experts per layer). **Splash does not report router selections**, so the grid stays empty with a label for live sessions; sessions recorded with the earlier native runtime replay the selections they captured. |
+| Routing heatmap | hub router heat | Cumulative expert selection counts per layer — native replays only, for the same reason. |
+| Speculative draft | `/status` draft totals | A DFlash2 draft model proposes tokens; the target verifies them. Splash reports acceptance as a running total (shown in the Standard view), not per verification cycle, so the per-cycle panel says so. |
+| Context | request and `/status` | Context occupancy against the model's 128K. |
+| Prefix cache | `/status` cache | Tokens reused and the hit rate. |
 | Action timeline | agent tool events | Workspace, shell, browser, computer use (KimiCU) and vision actions with duration and result. Names and categories only. |
-| Requests | request `start` / `finish` events | One row per model request: prompt tokens, reused prefix and its share, new prefill, prefill and decode rates, generated tokens, total time and how it ended. Also filled when replaying a recorded session. |
+| Requests | request events / replay | Splash does not send per-request events, so for a live session the latest request (from the agent's receipt) and Splash's running totals are in the Standard view; replays of native sessions show one row per request. |
 
-**Backend capabilities.** The catalog tells the page which backend serves the model and what it reports. The native runtime reports router selections, MTP drafts and PLE reads per token. A backend that does not (Splash-m1 reports requests, rates, context and its memory plan only) gets a "not reported by this backend" label in those regions; nothing is drawn from estimates.
+**Backend capabilities.** The catalog tells the page what the backend reports. Splash-m1 reports requests, rates, latency, draft acceptance, prefix-cache use and its memory plan — not per-token router, expert or PLE activity — so those regions are labelled "not reported by the Splash-m1 backend"; nothing is drawn from estimates.
 
 Never shown: prompt text, reasoning, tool arguments, file contents or credentials. This is a compute and action view, not a transcript.
 
 ## Detail levels
 
-The hub tells the runtime, by heartbeat on UDP 8037, how much detail anyone is watching:
+The hub records at two levels, chosen by whether the Advanced view is open:
 
-* **0 — nobody watching**: the runtime sends no tick events.
-* **1 — Live view**: counters (tokens, MTP, PLE, context).
-* **2 — Visualizer**: counters plus router rows.
-
-Heartbeats expire after 3 s, so a closed window returns the runtime to level 0 by itself.
+* **1 — Standard / Live**: request receipts, system samples and tool events.
+* **2 — Advanced**: the same, kept with any router rows a replayed native session carries.
 
 ## Overhead
 
-Measured in the production validation (`docs/BENCHMARKS.md`, step `overhead`): the same temperature-0 workload with the visualizer closed and open, two runs each. Output was identical across modes. See the validation record for the decode difference.
+Measured in the production validation (`docs/BENCHMARKS.md`, step `overhead`): the same temperature-0 workload with the view closed and open, two runs each. Output was identical across modes. See the validation record for the decode difference.
 
 ## Recorded sessions
 
-Each model session's events are written to `<data>/telemetry/sessions/` (router rows sampled), and the visualizer can replay one from the session picker.
+Each session's events are written to `<data>/telemetry/sessions/`, and the view can replay one from the session picker. Live Splash sessions carry requests, rates and actions; native sessions recorded earlier also carry router and draft detail.
