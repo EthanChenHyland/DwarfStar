@@ -292,6 +292,7 @@ async function lifecycle(path, body) {
       const job = S.state?.lifecycle;
       if (!job || job.job > accepted.job) break;
       if (job.job === accepted.job && !job.busy) {
+        S.pendingSwitch = null;
         toast(job.result?.ok ? (path.endsWith("stop") ? "Model stopped" : "Ready") : (job.result?.error || "Failed"));
         break;
       }
@@ -484,7 +485,8 @@ function renderLive() {
 
 /* ------------------------------------------------------------------- boot */
 async function boot() {
-  document.querySelectorAll("#nav button").forEach((b) => b.onclick = () => show(b.dataset.view));
+  document.querySelectorAll("#nav button[data-view]").forEach((b) => b.onclick = () => show(b.dataset.view));
+  $("#palette-open").onclick = () => window.Palette?.open();
   try { [S.catalog, S.state] = await Promise.all([api("/api/catalog"), api("/api/state")]); }
   catch { setTimeout(boot, 1500); return; }
   const selected = S.catalog.profiles.find((p) => p.id === S.state.selected_profile) || S.catalog.profiles.find((p) => p.default);
@@ -494,6 +496,17 @@ async function boot() {
   show(["run", "chats", "models", "live", "visualizer", "settings"].includes(initial) ? initial : "run");
   window.addEventListener("hashchange", () => { const v = location.hash.slice(1); if (v && v !== S.view && document.querySelector("#view-" + v)) show(v); });
   setInterval(refreshState, 4000);
+  firstRun();
+}
+/* First run (or a broken installation): if any setup check blocks a start, say so once on every page. */
+async function firstRun() {
+  const setup = await api("/api/setup").catch(() => null);
+  if (!setup?.ok || !setup.summary.error) return;
+  const blocking = setup.checks.filter((c) => c.level === "error");
+  const banner = el(`<div class="notice setup-banner" role="alert"><b>Setup needs attention:</b> ${blocking.length} check${blocking.length === 1 ? "" : "s"} would block a model start
+    (${esc(blocking.slice(0, 3).map((c) => c.name).join(", "))}${blocking.length > 3 ? ", …" : ""}). <button class="ghost small-button">Open Diagnostics</button></div>`);
+  banner.querySelector("button").onclick = () => show("settings");
+  $("#main").prepend(banner);
 }
 window.DwarfStar = { S, api, esc, modelOf, runningModel, TONE, show, toast, gib };
 boot();

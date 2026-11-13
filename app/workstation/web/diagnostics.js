@@ -63,7 +63,7 @@
             <dt>1 · System RAM</dt><dd>${f(sys.available_gib)} available of ${f(sys.total_gib, 0)} · wired ${f(sys.wired_gib, 1)} · swap ${f(sys.swap_used_gib, 1)}</dd>
             <dt>2 · Admission</dt><dd>${plan ? `start needs ${f(plan.required_gib, 1)} available <span class="muted small">(plan ${f(plan.planned_gib)} + ${plan.system_reserve_gib} GiB reserve)</span>` : '<span class="faint">no model running</span>'}</dd>
             <dt>3 · Metal limit</dt><dd>${plan ? `${f(plan.metal_working_set_gib)} GPU working set · ${f(plan.metal_headroom_gib)} headroom for this plan` : "–"}</dd>
-            <dt>4 · Measured peak</dt><dd>${measured.peak_wired_gib != null ? f(measured.peak_wired_gib) + " wired, whole machine" : f(null)}${m && m.runtime_reported_gib ? ` · runtime reports ${f(m.runtime_reported_gib)} planned now` : ""}</dd>
+            <dt>4 · Measured peak</dt><dd>${measured.peak_wired_gib != null ? f(measured.peak_wired_gib) + " wired, whole machine" : f(null)}${m && m.runtime_reported_gib ? ` · <span class="muted small">runtime's own plan ${f(m.runtime_reported_gib)}, without vision</span>` : ""}</dd>
           </dl></div>
         <div class="panel"><h2>Chats and agent</h2><dl class="kv">
             <dt>Chats</dt><dd>${doc.chats.chats} stored${doc.chats.answering.length ? ` · ${doc.chats.answering.length} answering` : ""}</dd>
