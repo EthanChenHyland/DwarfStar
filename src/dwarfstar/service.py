@@ -499,7 +499,22 @@ class Service:
 
                         flag = query.get("archived", ["0"])[0]
                         archived = None if flag == "all" else flag == "1"
-                        return self._json({"ok": True, "chats": chats.list_chats(query.get("q", [None])[0], archived)})
+                        return self._json({"ok": True, "chats": chats.list_chats(query.get("q", [None])[0], archived, query.get("tag", [None])[0],
+                                                                                 query.get("starred", ["0"])[0] == "1"),
+                                           "tags": chats.all_tags()})
+                    if path.startswith("/api/chats/") and path.endswith("/export"):
+                        from dwarfstar import chats
+
+                        name, media, body = chats.export(path.split("/")[3], query.get("format", ["md"])[0])
+                        data = body.encode()
+                        self.send_response(200)
+                        self.send_header("Content-Type", media)
+                        self.send_header("Content-Disposition", f'attachment; filename="{name}"')
+                        self.send_header("Content-Length", str(len(data)))
+                        self.send_header("Cache-Control", "no-store")
+                        self.end_headers()
+                        self.wfile.write(data)
+                        return
                     if path.startswith("/api/chats/"):
                         from dwarfstar import chats
 
@@ -553,6 +568,10 @@ class Service:
                         state = service.state()
                         profile_id = body.get("profile") or state.get("active_profile") or stored_selection()
                         result = {"ok": True, "chat": chats.summary(chats.create(str(profile_id)))}
+                    elif path == "/api/chats-bulk":
+                        from dwarfstar import chats
+
+                        result = chats.bulk(body.get("ids") or [], str(body.get("action", "")), str(body.get("confirm", "")))
                     elif path.startswith("/api/chats/"):
                         from dwarfstar import chats
 
@@ -566,6 +585,12 @@ class Service:
                             result = {"ok": True, "chat": chats.summary(chats.set_archived(chat_id, bool(body.get("archived", True))))}
                         elif action == "delete":
                             result = chats.delete(chat_id, str(body.get("confirm", "")))
+                        elif action == "organize":
+                            result = {"ok": True, "chat": chats.summary(chats.organize(chat_id, body.get("pinned"), body.get("starred"), body.get("tags")))}
+                        elif action == "fork":
+                            upto = body.get("upto")
+                            record = chats.fork(chat_id, int(upto) if upto is not None else None, body.get("messages", True) is not False)
+                            result = {"ok": True, "chat": chats.summary(record)}
                         else:
                             return self._json({"ok": False, "error": "Unknown endpoint"}, 404)
                     elif path == "/api/launch":

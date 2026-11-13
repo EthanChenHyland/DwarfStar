@@ -38,6 +38,8 @@ ROOT = DATA / "chats"
 ID_PATTERN = re.compile(r"^c\d{14}-[0-9a-f]{6}$")
 TURN_TIMEOUT_S = 3600
 TITLE_WORDS = 7
+TAG_PATTERN = re.compile(r"^[\w][\w .+-]{0,31}$")
+FORK_PREFACE_CHARS = 24000  # transcript carried into a fork's first turn (the agent session itself cannot be copied)
 
 
 class ChatError(ValueError):
@@ -81,6 +83,9 @@ def new_record(profile_id: str, now: float | None = None) -> dict:
         "context": {"tokens": 0, "window": model["context"]},
         "agent_session_id": None,
         "compactions": 0,
+        "pinned": False,
+        "starred": False,
+        "tags": [],
         "messages": [],
     }
 
@@ -102,10 +107,12 @@ def get(chat_id: str) -> dict:
 def summary(record: dict) -> dict:
     last = next((m for m in reversed(record["messages"]) if m["role"] in ("user", "assistant")), None)
     return {k: record[k] for k in ("id", "title", "created", "updated", "archived", "profile", "model", "reasoning", "context")} | {
-        "messages": len(record["messages"]), "preview": (last or {}).get("text", "")[:140]}
+        "messages": len(record["messages"]), "preview": (last or {}).get("text", "")[:140], "pinned": bool(record.get("pinned")),
+        "starred": bool(record.get("starred")), "tags": list(record.get("tags") or []), "forked_from": record.get("forked_from")}
 
 
-def list_chats(query: str | None = None, archived: bool | None = False) -> list[dict]:
+def list_chats(query: str | None = None, archived: bool | None = False, tag: str | None = None, starred: bool = False) -> list[dict]:
+    """Pinned chats first, then most recently updated. Search covers titles, tags and message text."""
     rows = []
     for path in ROOT.glob("c*/chat.json"):
         try:
@@ -114,13 +121,121 @@ def list_chats(query: str | None = None, archived: bool | None = False) -> list[
             continue
         if archived is not None and bool(record.get("archived")) != archived:
             continue
+        if tag and tag not in (record.get("tags") or []):
+            continue
+        if starred and not record.get("starred"):
+            continue
         if query:
             needle = query.lower()
-            haystack = (record.get("title", "") + "\n" + "\n".join(m.get("text", "") for m in record.get("messages", []))).lower()
+            haystack = "\n".join([record.get("title", ""), " ".join(record.get("tags") or []),
+                                  *(m.get("text", "") for m in record.get("messages", []))]).lower()
             if needle not in haystack:
                 continue
         rows.append(summary(record))
-    return sorted(rows, key=lambda row: row["updated"], reverse=True)
+    return sorted(rows, key=lambda row: (row["pinned"], row["updated"]), reverse=True)
+
+
+def all_tags() -> list[dict]:
+    counts: dict[str, int] = {}
+    for path in ROOT.glob("c*/chat.json"):
+        try:
+            record = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if not record.get("archived"):
+            for tag in record.get("tags") or []:
+                counts[tag] = counts.get(tag, 0) + 1
+    return [{"tag": t, "chats": n} for t, n in sorted(counts.items(), key=lambda item: item[0].lower())]
+
+
+def organize(chat_id: str, pinned: bool | None = None, starred: bool | None = None, tags: list | None = None) -> dict:
+    """Pin, star or tag a chat. Organizing does not count as activity, so the chat keeps its place in Recent."""
+    record = get(chat_id)
+    if pinned is not None:
+        record["pinned"] = bool(pinned)
+    if starred is not None:
+        record["starred"] = bool(starred)
+    if tags is not None:
+        clean = []
+        for tag in tags:
+            tag = " ".join(str(tag).split())
+            if not TAG_PATTERN.match(tag):
+                raise ChatError(f"A tag is 1-32 letters, digits, spaces or .+-_: {tag!r}")
+            if tag not in clean:
+                clean.append(tag)
+        record["tags"] = clean[:12]
+    return _write(record)
+
+
+def fork(chat_id: str, upto: int | None = None, keep_messages: bool = True) -> dict:
+    """A new chat with the same model and reasoning level. With messages, the transcript up to `upto` (exclusive) is
+    copied and handed to the agent as context on the fork's first turn; the original chat is untouched."""
+    source = get(chat_id)
+    record = new_record(source["profile"])
+    if keep_messages:
+        record["tags"] = list(source.get("tags") or [])
+        messages = [m for m in source["messages"][:upto] if m["role"] in ("user", "assistant")]
+        record.update(title=(source["title"] + " (fork)")[:120], title_manual=True, messages=[dict(m) for m in messages],
+                      forked_from={"id": chat_id, "title": source["title"], "messages": len(messages)})
+    return _write(record)
+
+
+def fork_preface(record: dict) -> str:
+    """For a fork's first turn: the copied transcript, newest kept when it is long, as context for a fresh agent session."""
+    if record.get("agent_session_id") or not record.get("forked_from"):
+        return ""
+    lines, size = [], 0
+    for message in reversed(record["messages"][:-1]):
+        line = f"{'User' if message['role'] == 'user' else 'Assistant'}: {message['text']}"
+        if size + len(line) > FORK_PREFACE_CHARS:
+            lines.append("[earlier messages omitted]")
+            break
+        lines.append(line)
+        size += len(line)
+    if not lines:
+        return ""
+    return ("This conversation continues an earlier one. Its transcript so far, for context:\n\n" + "\n\n".join(reversed(lines))
+            + "\n\n---\n\n")
+
+
+def export(chat_id: str, fmt: str) -> tuple[str, str, str]:
+    """(filename, media type, body). Markdown holds what the chat shows: messages and tool titles, never reasoning."""
+    record = get(chat_id)
+    stem = re.sub(r"[^\w.-]+", "-", record["title"]).strip("-")[:60] or record["id"]
+    if fmt == "json":
+        return f"{stem}.json", "application/json", json.dumps(record, indent=1, ensure_ascii=False) + "\n"
+    if fmt != "md":
+        raise ChatError("Export as md or json")
+    model = catalog.profile(record["profile"])["label"] if record["profile"] else record["model"]
+    out = [f"# {record['title']}", "", f"- Model: {model}", f"- Created: {time.strftime('%Y-%m-%d %H:%M', time.localtime(record['created']))}",
+           f"- Chat id: `{record['id']}`"]
+    if record.get("tags"):
+        out.append("- Tags: " + ", ".join(record["tags"]))
+    for message in record["messages"]:
+        heading = {"user": "You", "assistant": "Assistant", "error": "Error"}.get(message["role"], message["role"])
+        out += ["", f"## {heading}", "", message.get("text", "")]
+        for call in message.get("tools") or []:
+            out.append(f"- tool: {call.get('title') or call.get('kind') or 'call'} ({call.get('status', 'done')})")
+    return f"{stem}.md", "text/markdown; charset=utf-8", "\n".join(out) + "\n"
+
+
+def bulk(chat_ids: list, action: str, confirm: str = "") -> dict:
+    """Archive, unarchive or delete several chats. Deleting needs the confirmation text "delete N chats"."""
+    ids = [str(i) for i in chat_ids][:500]
+    for chat_id in ids:
+        get(chat_id)  # every id must exist before anything changes
+    if action in ("archive", "unarchive"):
+        for chat_id in ids:
+            set_archived(chat_id, action == "archive")
+    elif action == "delete":
+        expected = f"delete {len(ids)} chat{'s' if len(ids) != 1 else ''}"
+        if confirm != expected:
+            raise ChatError(f'Type "{expected}" to confirm')
+        for chat_id in ids:
+            delete(chat_id, chat_id)
+    else:
+        raise ChatError("Unknown bulk action")
+    return {"ok": True, "action": action, "chats": ids}
 
 
 def rename(chat_id: str, title: str) -> dict:
@@ -320,8 +435,9 @@ class Turns:
             if chat_id in self.active:
                 raise ChatError("This chat is already answering")
             self.active[chat_id] = {"started": time.time(), "text": "", "tools": [], "phase": "starting"}
-        _write(add_message(record, "user", text))
-        threading.Thread(target=self._run, args=(chat_id, text, agent_factory), name=f"chat-{chat_id}", daemon=True).start()
+        record = _write(add_message(record, "user", text))
+        prompt = fork_preface(record) + text
+        threading.Thread(target=self._run, args=(chat_id, prompt, agent_factory), name=f"chat-{chat_id}", daemon=True).start()
         return {"ok": True, "accepted": True}
 
     def _update(self, chat_id: str, update: dict) -> None:

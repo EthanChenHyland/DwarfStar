@@ -6,8 +6,9 @@
 "use strict";
 (function () {
   const D = window.DwarfStar, S = D.S, esc = D.esc;
-  const C = { mounted: false, root: null, list: [], archived: false, query: "", current: null, chat: null, progress: null,
-              poll: 0, renaming: false, confirmDelete: 0, searchTimer: 0, startedModel: null };
+  const C = { mounted: false, root: null, list: [], tags: [], filter: "recent", tag: null, query: "", current: null, chat: null, progress: null,
+              poll: 0, renaming: false, tagging: false, confirmDelete: 0, searchTimer: 0, startedModel: null, selecting: false, selected: new Set(),
+              restored: false };
 
   const when = (t) => {
     const s = Date.now() / 1000 - t;
@@ -27,12 +28,16 @@
         <p class="lead">Conversations with the running model through the same agent as Zed: tools, Full Auto and automatic context compaction included. Chats are stored on this Mac only.</p>
         <div class="chat-layout">
           <aside class="chat-side panel tight" aria-label="Chats">
-            <button class="primary" id="chat-new">New chat</button>
+            <div class="row chat-side-top"><button class="primary" id="chat-new">New chat</button>
+              <button class="ghost small-button" id="chat-select" title="Select several chats to archive or delete">Select</button></div>
             <input id="chat-search" type="search" placeholder="Search chats" aria-label="Search chats" autocomplete="off">
             <div class="chat-filter" role="tablist">
-              <button class="chip selected" data-archived="0" role="tab">Recent</button>
-              <button class="chip" data-archived="1" role="tab">Archived</button>
+              <button class="chip selected" data-filter="recent" role="tab">Recent</button>
+              <button class="chip" data-filter="starred" role="tab">Starred</button>
+              <button class="chip" data-filter="archived" role="tab">Archived</button>
             </div>
+            <div class="chat-tags" id="chat-tags"></div>
+            <div class="chat-bulk" id="chat-bulk" hidden></div>
             <ul class="chat-list" id="chat-list"></ul>
           </aside>
           <section class="chat-main panel" id="chat-main" aria-live="polite"></section>
@@ -42,59 +47,129 @@
         clearTimeout(C.searchTimer);
         C.searchTimer = setTimeout(() => { C.query = event.target.value.trim(); loadList(); }, 200);
       };
-      C.root.querySelectorAll("[data-archived]").forEach((b) => b.onclick = () => {
-        C.archived = b.dataset.archived === "1";
-        C.root.querySelectorAll("[data-archived]").forEach((x) => x.classList.toggle("selected", x === b));
-        loadList();
-      });
+      C.root.querySelectorAll("[data-filter]").forEach((b) => b.onclick = () => setFilter(b.dataset.filter));
+      C.root.querySelector("#chat-select").onclick = () => { C.selecting = !C.selecting; C.selected.clear(); renderList(); renderBulk(); };
       C.mounted = true;
     }
     loadList();
+    if (!C.current && !C.restored && S.state?.last_chat) C.current = S.state.last_chat;  // reopen where the user left off
+    C.restored = true;
     if (C.current) openChat(C.current); else renderMain();
+  }
+
+  function setFilter(filter, tag = null) {
+    C.filter = filter; C.tag = tag; C.selected.clear();
+    C.root.querySelectorAll("[data-filter]").forEach((x) => x.classList.toggle("selected", x.dataset.filter === filter && !tag));
+    loadList(); renderBulk();
   }
 
   function unmount() { clearTimeout(C.poll); C.poll = 0; }
 
   async function loadList() {
-    const query = new URLSearchParams({ archived: C.archived ? "1" : "0", ...(C.query ? { q: C.query } : {}) });
+    const query = new URLSearchParams({ archived: C.filter === "archived" ? "1" : "0", ...(C.filter === "starred" ? { starred: "1" } : {}),
+                                        ...(C.tag ? { tag: C.tag } : {}), ...(C.query ? { q: C.query } : {}) });
     const result = await D.api("/api/chats?" + query);
     C.list = result.ok ? result.chats : [];
-    renderList();
+    C.tags = result.ok ? result.tags : [];
+    renderList(); renderTags();
+  }
+
+  function renderTags() {
+    const node = C.root.querySelector("#chat-tags");
+    node.innerHTML = C.tags.map((t) => `<button class="chip tag ${C.tag === t.tag ? "selected" : ""}" data-tag="${esc(t.tag)}"
+      title="${t.chats} chat${t.chats === 1 ? "" : "s"}">#${esc(t.tag)}</button>`).join("");
+    node.querySelectorAll("[data-tag]").forEach((b) => b.onclick = () => C.tag === b.dataset.tag ? setFilter("recent") : setFilter("recent", b.dataset.tag));
+  }
+
+  /* Bulk mode: archive or restore at once; deleting needs the count typed out, and moves chats aside (recoverable from disk). */
+  function renderBulk() {
+    const bar = C.root.querySelector("#chat-bulk"), n = C.selected.size;
+    C.root.querySelector("#chat-select").textContent = C.selecting ? "Done" : "Select";
+    bar.hidden = !C.selecting;
+    if (!C.selecting) return;
+    const phrase = `delete ${n} chat${n === 1 ? "" : "s"}`, archived = C.filter === "archived";
+    bar.innerHTML = `<div class="row small"><b>${n} selected</b><span class="spacer"></span>
+        <button class="ghost small-button" id="bulk-all">${n === C.list.length && n ? "None" : "All"}</button>
+        <button class="ghost small-button" id="bulk-archive" ${n ? "" : "disabled"}>${archived ? "Unarchive" : "Archive"}</button></div>
+      <div class="row small"><input id="bulk-confirm" placeholder='Type "${phrase}"' aria-label="Delete confirmation" ${n ? "" : "disabled"}>
+        <button class="danger small-button" id="bulk-delete" disabled>Delete</button></div>`;
+    bar.querySelector("#bulk-all").onclick = () => { if (C.selected.size === C.list.length) C.selected.clear(); else C.list.forEach((c) => C.selected.add(c.id)); renderList(); renderBulk(); };
+    bar.querySelector("#bulk-archive").onclick = () => bulk(archived ? "unarchive" : "archive");
+    const confirm = bar.querySelector("#bulk-confirm"), del = bar.querySelector("#bulk-delete");
+    confirm.oninput = () => { del.disabled = confirm.value.trim() !== phrase; };
+    del.onclick = () => bulk("delete", confirm.value.trim());
+  }
+
+  async function bulk(action, confirm = "") {
+    const ids = [...C.selected];
+    const result = await D.api("/api/chats-bulk", { ids, action, confirm });
+    if (!result.ok) return D.toast(result.error);
+    D.toast(`${ids.length} chat${ids.length === 1 ? "" : "s"} ${action === "delete" ? "deleted" : action + "d"}`);
+    if (ids.includes(C.current) && action !== "unarchive") { C.current = null; C.chat = null; renderMain(); }
+    C.selected.clear(); loadList(); renderBulk();
   }
 
   function renderList() {
     const node = C.root.querySelector("#chat-list");
     if (!C.list.length) {
-      node.innerHTML = `<li class="chat-empty muted small">${C.query ? "No chats match." : C.archived ? "No archived chats." : "No chats yet."}</li>`;
+      node.innerHTML = `<li class="chat-empty muted small">${C.query || C.tag ? "No chats match." : C.filter === "archived" ? "No archived chats."
+        : C.filter === "starred" ? "No starred chats. Star one from its header." : "No chats yet."}</li>`;
       return;
     }
     node.innerHTML = C.list.map((c) => `
-      <li><button class="chat-item ${c.id === C.current ? "active" : ""}" data-id="${esc(c.id)}" style="--tone:${tone(c.model)}">
-        <span class="chat-item-title">${esc(c.title)}</span>
-        <span class="chat-item-meta"><i></i>${esc(profileName(c.profile))} · ${when(c.updated)}</span>
+      <li class="${C.selecting ? "selecting" : ""}">${C.selecting ? `<input type="checkbox" data-pick="${esc(c.id)}" ${C.selected.has(c.id) ? "checked" : ""} aria-label="Select ${esc(c.title)}">` : ""}
+        <button class="chat-item ${c.id === C.current ? "active" : ""}" data-id="${esc(c.id)}" style="--tone:${tone(c.model)}">
+        <span class="chat-item-title">${c.pinned ? '<span class="chat-mark" title="Pinned">📌</span>' : ""}${c.starred ? '<span class="chat-mark star" title="Starred">★</span>' : ""}${esc(c.title)}</span>
+        <span class="chat-item-meta"><i></i>${esc(profileName(c.profile))} · ${when(c.updated)}${c.tags.length ? " · " + c.tags.map((t) => "#" + esc(t)).join(" ") : ""}</span>
         ${c.preview ? `<span class="chat-item-preview">${esc(c.preview)}</span>` : ""}
       </button></li>`).join("");
-    node.querySelectorAll(".chat-item").forEach((b) => b.onclick = () => openChat(b.dataset.id));
+    node.querySelectorAll(".chat-item").forEach((b) => b.onclick = () => {
+      if (C.selecting) { const box = node.querySelector(`[data-pick="${b.dataset.id}"]`); box.checked = !box.checked; box.onchange(); return; }
+      openChat(b.dataset.id, true);
+    });
+    node.querySelectorAll("[data-pick]").forEach((box) => box.onchange = () => {
+      if (box.checked) C.selected.add(box.dataset.pick); else C.selected.delete(box.dataset.pick);
+      renderBulk();
+    });
   }
 
   async function newChat() {
     const profile = S.catalog.profiles.find((p) => p.model === S.model && p.reasoning_effort === S.effort);
     const result = await D.api("/api/chats", { profile: profile?.id });
     if (!result.ok) { D.toast(result.error); return; }
-    C.archived = false; C.query = "";
+    await showNew(result.chat.id);
+  }
+
+  async function showNew(id) {
+    C.query = "";
     C.root.querySelector("#chat-search").value = "";
-    C.root.querySelectorAll("[data-archived]").forEach((x) => x.classList.toggle("selected", x.dataset.archived === "0"));
-    await openChat(result.chat.id);
-    loadList();
+    setFilter("recent");
+    await openChat(id, true);
     C.root.querySelector("#chat-input")?.focus();
   }
 
-  async function openChat(id) {
-    const result = await D.api("/api/chats/" + encodeURIComponent(id));
+  /* Fork: a new chat with the same model and reasoning level. With the transcript (whole, or up to a message) the
+   * agent receives it as context on the fork's first turn; without it, a fresh chat with the same settings. */
+  async function fork(upto = null, messages = true) {
+    const result = await D.api(`/api/chats/${C.chat.id}/fork`, { messages, ...(upto != null ? { upto } : {}) });
+    if (!result.ok) return D.toast(result.error);
+    D.toast(messages ? "Forked: the original chat is unchanged" : "New chat with the same model and reasoning");
+    await showNew(result.chat.id);
+  }
+
+  async function organize(change) {
+    const result = await D.api(`/api/chats/${C.chat.id}/organize`, change);
+    if (!result.ok) return D.toast(result.error);
+    Object.assign(C.chat, { pinned: result.chat.pinned, starred: result.chat.starred, tags: result.chat.tags });
+    renderMain(false); loadList();
+  }
+
+  async function openChat(id, explicit = false) {
+    const result = await D.api("/api/chats/" + encodeURIComponent(id) + (explicit ? "?open" : ""));
     if (!result.ok) { C.current = null; C.chat = null; renderMain(); return; }
     const changed = C.current !== id;
     C.current = id; C.chat = result.chat; C.progress = result.progress;
-    if (changed) { C.renaming = false; C.confirmDelete = 0; }
+    if (changed) { C.renaming = false; C.tagging = false; C.confirmDelete = 0; }
     renderMain(changed);
     renderList();
     if (C.progress) follow();
@@ -126,22 +201,33 @@
       return;
     }
     const usage = chat.context || {}, pct = usage.window ? Math.min(100, 100 * (usage.tokens || 0) / usage.window) : 0;
+    const remaining = Math.max(0, (usage.window || 0) - (usage.tokens || 0));
     main.style.setProperty("--tone", tone(chat.model));
     main.innerHTML = `
       <header class="chat-head">
         <div class="chat-title-wrap" id="chat-title-wrap"></div>
         <div class="row chat-head-meta">
           <span class="pill" title="Model and reasoning level of this chat">${esc(profileName(chat.profile))}</span>
-          <span class="chat-context" title="Context the agent is using (it compacts older turns automatically as this fills)">
+          <span class="chat-context" title="Context the agent is using; it compacts older turns automatically as this fills. ${remaining.toLocaleString()} tokens remaining.">
             <span class="chat-context-bar"><i style="width:${pct.toFixed(1)}%"></i></span>
-            ${(usage.tokens || 0).toLocaleString()} / ${Math.round((usage.window || 0) / 1024)}K
+            ${(usage.tokens || 0).toLocaleString()} / ${Math.round((usage.window || 0) / 1024)}K · ${Math.round(remaining / 1024)}K left
           </span>
-          ${chat.compactions ? `<span class="muted small">${chat.compactions} compaction${chat.compactions === 1 ? "" : "s"}</span>` : ""}
+          ${chat.compactions ? `<span class="muted small" title="The agent condensed older turns to stay within the window; the full transcript is kept here">${chat.compactions} compaction${chat.compactions === 1 ? "" : "s"}</span>` : ""}
           <span class="spacer"></span>
-          <button class="ghost small-button" id="chat-archive">${chat.archived ? "Unarchive" : "Archive"}</button>
+          <button class="ghost small-button icon-toggle ${chat.starred ? "on" : ""}" id="chat-star" title="${chat.starred ? "Unstar" : "Star"}" aria-pressed="${!!chat.starred}">${chat.starred ? "★" : "☆"}</button>
+          <button class="ghost small-button ${chat.pinned ? "on" : ""}" id="chat-pin" aria-pressed="${!!chat.pinned}">${chat.pinned ? "Unpin" : "Pin"}</button>
+          <button class="ghost small-button" id="chat-tag">Tags</button>
+          <details class="chat-menu"><summary>More</summary><div class="chat-menu-list panel tight">
+            <button id="chat-fork" title="Copy this conversation into a new chat; the agent gets the transcript as context">Fork conversation</button>
+            <button id="chat-same" title="A new, empty chat with ${esc(profileName(chat.profile))}">New chat, same settings</button>
+            <a href="/api/chats/${esc(chat.id)}/export?format=md" download>Export Markdown</a>
+            <a href="/api/chats/${esc(chat.id)}/export?format=json" download>Export JSON</a>
+            <button id="chat-archive">${chat.archived ? "Unarchive" : "Archive"}</button>
+          </div></details>
           <button class="danger small-button" id="chat-delete">${C.confirmDelete ? "Confirm delete" : "Delete"}</button>
         </div>
-        <div class="faint small">Created ${new Date(chat.created * 1000).toLocaleString()} · updated ${when(chat.updated)}</div>
+        <div class="chat-tag-edit" id="chat-tag-edit"></div>
+        <div class="faint small">${chat.forked_from ? `Forked from “${esc(chat.forked_from.title)}” · ` : ""}Created ${new Date(chat.created * 1000).toLocaleString()} · updated ${when(chat.updated)}${(chat.tags || []).length ? " · " + chat.tags.map((t) => "#" + esc(t)).join(" ") : ""}</div>
       </header>
       <div class="chat-messages" id="chat-messages"></div>
       <div class="chat-notice" id="chat-notice"></div>
@@ -150,8 +236,14 @@
         <button class="primary" id="chat-send" type="submit">Send</button>
       </form>`;
     renderTitle();
+    renderTagEdit();
     renderMessages(fresh);
     renderComposerState();
+    main.querySelector("#chat-star").onclick = () => organize({ starred: !chat.starred });
+    main.querySelector("#chat-pin").onclick = () => organize({ pinned: !chat.pinned });
+    main.querySelector("#chat-tag").onclick = () => { C.tagging = !C.tagging; renderTagEdit(); };
+    main.querySelector("#chat-fork").onclick = () => fork();
+    main.querySelector("#chat-same").onclick = () => fork(null, false);
     main.querySelector("#chat-archive").onclick = async () => {
       const result = await D.api(`/api/chats/${chat.id}/archive`, { archived: !chat.archived });
       if (!result.ok) return D.toast(result.error);
@@ -198,11 +290,26 @@
     }
   }
 
+  function renderTagEdit() {
+    const node = C.root.querySelector("#chat-tag-edit"), chat = C.chat;
+    if (!C.tagging) { node.innerHTML = ""; return; }
+    node.innerHTML = `<input class="chat-title-input" id="chat-tag-input" value="${esc((chat.tags || []).join(", "))}" placeholder="Tags, separated by commas (e.g. work, pcap)" aria-label="Tags">`;
+    const input = node.querySelector("input");
+    input.focus();
+    const save = async () => {
+      if (!C.tagging) return;
+      C.tagging = false;
+      await organize({ tags: input.value.split(",").map((t) => t.trim()).filter(Boolean) });
+    };
+    input.onkeydown = (event) => { if (event.key === "Enter") save(); if (event.key === "Escape") { C.tagging = false; renderTagEdit(); } };
+  }
+
   function renderMessages(scroll = true) {
     const node = C.root.querySelector("#chat-messages");
     if (!node) return;
     const atBottom = node.scrollHeight - node.scrollTop - node.clientHeight < 40;
     const messages = C.chat.messages.map(message);
+    // "fork from here" on each reply: a new chat holding the transcript up to and including that reply
     if (C.progress) {
       const tools = (C.progress.tools || []).map(toolChip).join("");
       messages.push(`<div class="chat-msg assistant live"><div class="chat-msg-head">Answering <span class="muted">· ${esc(C.progress.phase || "starting")}</span></div>
@@ -210,6 +317,7 @@
     }
     node.innerHTML = messages.join("") || `<p class="muted chat-first">Say something to start. The first message becomes the title until you rename it.</p>`;
     if (scroll || atBottom) node.scrollTop = node.scrollHeight;
+    node.querySelectorAll("[data-fork]").forEach((b) => b.onclick = () => fork(Number(b.dataset.fork)));
   }
 
   function toolChip(t) {
@@ -217,12 +325,13 @@
     return `<span class="pill ${status}" title="${esc(t.title || "")}">${esc((t.title || t.kind || "tool").slice(0, 60))}</span>`;
   }
 
-  function message(m) {
+  function message(m, index) {
     const time = new Date(m.t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     if (m.role === "error") return `<div class="chat-msg error"><div class="chat-msg-head">Not answered <span class="faint">${time}</span></div><div class="chat-msg-text">${esc(m.text)}</div></div>`;
     const who = m.role === "user" ? "You" : profileName(C.chat.profile);
     const tools = (m.tools || []).map(toolChip).join("");
-    return `<div class="chat-msg ${m.role}"><div class="chat-msg-head">${esc(who)} <span class="faint">${time}</span></div>
+    const forkHere = m.role === "assistant" && !C.progress ? `<button class="chat-fork-here" data-fork="${index + 1}" title="New chat with the conversation up to here">Fork from here</button>` : "";
+    return `<div class="chat-msg ${m.role}"><div class="chat-msg-head">${esc(who)} <span class="faint">${time}</span>${forkHere}</div>
       ${tools ? `<div class="chat-tools">${tools}</div>` : ""}<div class="chat-msg-text">${esc((m.text || "").trim()) || '<span class="faint">(no text reply)</span>'}</div></div>`;
   }
 

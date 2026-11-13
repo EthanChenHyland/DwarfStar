@@ -1,0 +1,52 @@
+// Headless check of chat organization against the running service: star, pin, tag, tag filter, fork (whole and from a
+// reply), new chat with the same settings, export, bulk select + typed delete confirmation. Chats it creates are deleted
+// again (moved aside under chats/.deleted); the original chat's pin, star and tags are restored.
+const { chromium } = await import(process.env.PW);
+const browser = await chromium.launch({ headless: true });
+const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+const errors = []; page.on("pageerror", (e) => errors.push(String(e))); page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
+const api = (path, body) => page.evaluate(([p, b]) => fetch(p, b ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b) } : {}).then(r => r.json()), [path, body]);
+await page.goto("http://127.0.0.1:8038/#chats"); await page.waitForTimeout(1500);
+const before = (await api("/api/chats?archived=all")).chats;
+const original = before.find((c) => c.messages >= 2) || before[0];
+if (!original) { console.log("no chat to organize"); process.exit(1); }
+const out = {};
+await page.click(`.chat-item[data-id="${original.id}"]`); await page.waitForTimeout(500);
+await page.click("#chat-star"); await page.waitForTimeout(400);
+await page.click("#chat-pin"); await page.waitForTimeout(400);
+await page.click("#chat-tag"); await page.fill("#chat-tag-input", "demo, review"); await page.press("#chat-tag-input", "Enter"); await page.waitForTimeout(500);
+out.organized = (await api("/api/chats/" + original.id)).chat;
+out.organized = { pinned: out.organized.pinned, starred: out.organized.starred, tags: out.organized.tags };
+out.listMarks = await page.locator(`.chat-item[data-id="${original.id}"] .chat-mark`).count();
+await page.click('#chat-tags [data-tag="review"]'); await page.waitForTimeout(400);
+out.tagFilter = await page.locator(".chat-item").count();
+await page.click('[data-filter="starred"]'); await page.waitForTimeout(400);
+out.starredFilter = await page.locator(".chat-item").count();
+await page.click('[data-filter="recent"]'); await page.waitForTimeout(400);
+await page.click(`.chat-item[data-id="${original.id}"]`); await page.waitForTimeout(400);
+await page.click(".chat-menu > summary"); await page.waitForTimeout(200);
+await page.screenshot({ path: process.env.SHOT || "/dev/null" });
+out.exportMd = await page.evaluate((id) => fetch(`/api/chats/${id}/export?format=md`).then(async r => [r.headers.get("content-disposition"), (await r.text()).slice(0, 40)]), original.id);
+await page.click("#chat-fork"); await page.waitForTimeout(800);
+const forked = await page.evaluate(() => window.DwarfStar && document.querySelector(".chat-item.active")?.dataset.id);
+out.fork = (await api("/api/chats/" + forked)).chat; out.fork = { messages: out.fork.messages.length, forked_from: out.fork.forked_from?.id === original.id, session: out.fork.agent_session_id };
+await page.click(`.chat-item[data-id="${original.id}"]`); await page.waitForTimeout(500);
+await page.hover(".chat-msg.assistant"); await page.click(".chat-msg.assistant .chat-fork-here"); await page.waitForTimeout(800);
+const forkedHere = await page.evaluate(() => document.querySelector(".chat-item.active")?.dataset.id);
+out.forkHereMessages = (await api("/api/chats/" + forkedHere)).chat.messages.length;
+await page.click(`.chat-item[data-id="${original.id}"]`); await page.waitForTimeout(400);
+await page.click(".chat-menu > summary"); await page.click("#chat-same"); await page.waitForTimeout(800);
+const same = await page.evaluate(() => document.querySelector(".chat-item.active")?.dataset.id);
+out.same = (await api("/api/chats/" + same)).chat; out.same = { messages: out.same.messages.length, profile: out.same.profile === original.profile };
+await page.click("#chat-select"); await page.waitForTimeout(200);
+for (const id of [forked, forkedHere, same]) await page.check(`[data-pick="${id}"]`);
+out.deleteDisabledBefore = await page.isDisabled("#bulk-delete");
+await page.fill("#bulk-confirm", "delete 3 chats"); out.deleteEnabledAfter = !(await page.isDisabled("#bulk-delete"));
+await page.screenshot({ path: process.env.SHOT2 || "/dev/null" });
+await page.click("#bulk-delete"); await page.waitForTimeout(800);
+const after = (await api("/api/chats?archived=all")).chats;
+out.cleanedUp = after.length === before.length;
+await api(`/api/chats/${original.id}/organize`, { pinned: original.pinned, starred: original.starred, tags: original.tags });
+out.overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth);
+out.errors = errors;
+await browser.close(); console.log(JSON.stringify(out, null, 1));

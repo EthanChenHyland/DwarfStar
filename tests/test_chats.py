@@ -132,6 +132,68 @@ class ChatTests(unittest.TestCase):
             chats.Turns().start(chat["id"], "hello", ["cyber"], agent_factory=FakeAgent)
         self.assertIn("Swift", str(caught.exception))
 
+    def test_pins_stars_and_tags_organize_without_reordering_by_activity(self):
+        a, b = chats.create("cyber-low"), chats.create("scope-low")
+        chats.organize(a["id"], pinned=True, starred=True, tags=["work", " work ", "pcap 2"])
+        rows = chats.list_chats()
+        self.assertEqual(rows[0]["id"], a["id"])  # pinned first although b is newer
+        self.assertEqual(rows[0]["tags"], ["work", "pcap 2"])
+        self.assertEqual([c["id"] for c in chats.list_chats(tag="work")], [a["id"]])
+        self.assertEqual([c["id"] for c in chats.list_chats(starred=True)], [a["id"]])
+        self.assertEqual([c["id"] for c in chats.list_chats(query="pcap")], [a["id"]])
+        self.assertEqual(chats.all_tags(), [{"tag": "pcap 2", "chats": 1}, {"tag": "work", "chats": 1}])
+        with self.assertRaises(chats.ChatError):
+            chats.organize(b["id"], tags=["<script>"])
+
+    def test_a_fork_copies_the_transcript_and_hands_it_to_a_fresh_agent_session(self):
+        turns = chats.Turns()
+        chat = chats.create("cyber-low")
+        self.turn(turns, chat["id"], "What is in the capture?")
+        forked = chats.fork(chat["id"])
+        self.assertEqual([m["role"] for m in forked["messages"]], ["user", "assistant"])
+        self.assertIsNone(forked["agent_session_id"])
+        self.assertEqual(forked["forked_from"]["id"], chat["id"])
+        prompts = []
+        original = FakeAgent.request
+
+        def capture(agent, method, params, timeout, on_update=None):
+            if method == "session/prompt":
+                prompts.append(params["prompt"][0]["text"])
+            return original(agent, method, params, timeout, on_update)
+
+        with mock.patch.object(FakeAgent, "request", capture):
+            self.turn(turns, forked["id"], "Go on")
+            self.turn(turns, forked["id"], "And then?")
+        self.assertIn("What is in the capture?", prompts[0])
+        self.assertTrue(prompts[0].endswith("Go on"))
+        self.assertEqual(prompts[1], "And then?")  # later turns resume the fork's own agent session
+        self.assertEqual(chats.get(forked["id"])["messages"][2]["text"], "Go on")  # the stored message is what was typed
+        self.assertEqual(len(chats.get(chat["id"])["messages"]), 2)  # the original is untouched
+        blank = chats.fork(chat["id"], keep_messages=False)
+        self.assertEqual((blank["messages"], blank["profile"]), ([], "cyber-low"))
+
+    def test_export_shows_messages_and_tools_but_no_reasoning(self):
+        turns = chats.Turns()
+        chat = chats.create("cyber-low")
+        self.turn(turns, chat["id"], "List files")
+        name, media, body = chats.export(chat["id"], "md")
+        self.assertTrue(name.endswith(".md"))
+        self.assertIn("## Assistant", body)
+        self.assertIn("tool: $ ls", body)
+        self.assertNotIn("secret reasoning", body)
+        self.assertEqual(json.loads(chats.export(chat["id"], "json")[2])["id"], chat["id"])
+
+    def test_bulk_delete_needs_the_exact_count_confirmation(self):
+        ids = [chats.create("cyber-low")["id"] for _ in range(3)]
+        chats.bulk(ids[:2], "archive")
+        self.assertEqual([c["id"] for c in chats.list_chats()], [ids[2]])
+        with self.assertRaises(chats.ChatError):
+            chats.bulk(ids, "delete", "yes")
+        with self.assertRaises(chats.ChatError):
+            chats.bulk([ids[0], "c20990101000000-abcdef"], "archive")  # nothing changes if any id is unknown
+        chats.bulk(ids, "delete", "delete 3 chats")
+        self.assertEqual(chats.list_chats(archived=None), [])
+
     def test_ids_cannot_escape_the_chat_directory(self):
         with self.assertRaises(chats.ChatError):
             chats.get("../../etc/passwd")
