@@ -1,0 +1,40 @@
+{
+ "schema": 1,
+ "date": "2026-11-12",
+ "description": "Opening-token probe: one 8.3K-token agent request (system prompt, 24 tool schemas, one user task) replayed 80 times per model with production sampling (temperature 1.0, top_p 0.95, top_k 20), 24 new tokens each. A sample is an early stop when the model ends the turn inside its reasoning within the token limit and produces no answer or tool call.",
+ "models": {
+  "cyber": {
+   "samples": 80,
+   "early_stop": 4,
+   "standard_openings": 54,
+   "early_stop_token_counts": [
+    5,
+    1,
+    4,
+    5
+   ]
+  },
+  "swift": {
+   "samples": 80,
+   "early_stop": 0,
+   "standard_openings": 80,
+   "early_stop_token_counts": []
+  },
+  "scope": {
+   "samples": 80,
+   "early_stop": 0,
+   "standard_openings": 80,
+   "early_stop_token_counts": []
+  },
+  "cyber_min_p_0.05": {
+   "samples": 80,
+   "early_stop": 1,
+   "standard_openings": 63
+  },
+  "cyber_min_p_0.1": {
+   "samples": 80,
+   "early_stop": 2,
+   "standard_openings": 64
+  }
+ }
+}
