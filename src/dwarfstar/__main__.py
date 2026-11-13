@@ -9,6 +9,7 @@
     dwarfstar serve                        Workstation service: API, telemetry hub and user interface
     dwarfstar switch PROFILE               stop any other model, start the profile's model
     dwarfstar seal [--verify]              write or check the installation seal
+    dwarfstar doctor                       installation and health checks with remedies
 """
 from __future__ import annotations
 
@@ -108,6 +109,11 @@ def main(argv: list[str] | None = None) -> int:
         from dwarfstar import seal
 
         return seal.main(rest)
+
+    if command == "doctor":
+        from dwarfstar import diagnostics
+
+        return diagnostics.main(rest)
 
     if command == "bench-index":
         from dwarfstar import benchindex

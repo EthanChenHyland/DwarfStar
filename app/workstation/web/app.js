@@ -129,7 +129,7 @@ function show(view) {
   document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === "view-" + view));
   connect(view === "visualizer" ? 2 : 1);
   if (view !== "chats") window.Chats?.unmount();
-  ({ run: renderRun, chats: () => window.Chats?.mount(), models: renderModels, live: renderLive, visualizer: () => window.Visualizer?.mount(), settings: renderSettings })[view]?.();
+  ({ run: renderRun, chats: () => window.Chats?.mount(), models: renderModels, live: renderLive, visualizer: () => window.Visualizer?.mount(), settings: () => window.Diagnostics?.mount() })[view]?.();
   if (view !== "visualizer") window.Visualizer?.unmount();
   $("#main").scrollTop = 0;
 }
@@ -417,32 +417,6 @@ function renderLive() {
   const tools = [...(live.tools?.timeline || [])].slice(-40).reverse();
   $("#live-tools").innerHTML = (live.tools?.active ? [`<div class="item"><span class="muted">running</span><span class="tag ${esc(live.tools.active.category)}">${esc(live.tools.active.category)}</span><b>${esc(live.tools.active.name)}</b><span></span><span>…</span></div>`] : [])
     .concat(tools.map((t) => `<div class="item"><span class="muted">${new Date(t.t * 1000).toLocaleTimeString()}</span><span class="tag ${esc(t.category)}">${esc(t.category)}</span><span>${esc(t.name)}</span><span class="muted">${t.ms != null ? t.ms + " ms" : ""}</span><span>${t.ok === false ? "✗" : "✓"}</span></div>`)).join("") || `<span class="muted">No tool calls in this session yet.</span>`;
-}
-
-/* --------------------------------------------------------------- settings */
-async function renderSettings() {
-  const root = $("#view-settings");
-  root.innerHTML = `<h1>Diagnostics</h1><p class="lead">Loading…</p>`;
-  const d = S.diagnostics = await api("/api/diagnostics");
-  const [sessions] = await Promise.all([api("/api/sessions")]);
-  root.innerHTML = `<h1>Diagnostics</h1><p class="lead">Paths, health and consistency checks. Nothing here changes the installation.</p>
-    <div class="grid cols-2">
-      <div class="panel"><h2>Locations</h2><dl class="kv"><dt>Code</dt><dd class="mono">${esc(d.code_root)}</dd><dt>Data</dt><dd class="mono">${esc(d.data_root)}</dd>
-        <dt>Telemetry sessions</dt><dd class="mono">${esc(d.telemetry.sessions_directory)}</dd><dt>Installation seal</dt><dd>${d.seal.present ? "present" : "not written yet"}</dd></dl></div>
-      <div class="panel"><h2>Telemetry</h2><dl class="kv"><dt>Hub uptime</dt><dd>${fmtDuration(d.telemetry.hub.uptime_s)}</dd><dt>Subscribers</dt><dd>${d.telemetry.hub.subscribers}</dd>
-        <dt>Detail level</dt><dd>${d.telemetry.hub.detail_level} <span class="muted small">(0 = runtime produces nothing extra)</span></dd>
-        <dt>Events received</dt><dd class="mono">${esc(JSON.stringify(d.telemetry.hub.events))}</dd></dl></div>
-      <div class="panel"><h2>Models</h2><table><thead><tr><th>Model</th><th>Status</th><th>Generated config</th><th>Runtime build</th></tr></thead><tbody>
-        ${Object.entries(d.models).map(([id, row]) => `<tr><td>${esc(modelOf(id).display_name)}</td><td>${d.state.models[id].running ? (d.state.models[id].healthy ? "running" : "unhealthy") : "offline"}</td>
-          <td>${typeof row.generated_config === "string" ? `<span class="pill pass">${esc(row.generated_config)}</span>` : `<span class="pill fail">${esc(row.generated_config.join("; "))}</span>`}</td><td class="mono">${esc(row.runtime)}</td></tr>`).join("")}</tbody></table></div>
-      <div class="panel"><h2>Editor entries</h2>${d.editor_entries.ok ? `<span class="pill pass">Zed entries match the catalog</span>` : `<span class="pill fail">Zed entries differ</span>
-        <dl class="kv" style="margin-top:8px"><dt>Missing</dt><dd>${esc((d.editor_entries.missing || []).join(", ") || "–")}</dd><dt>Obsolete</dt><dd>${esc((d.editor_entries.obsolete || []).join(", ") || "–")}</dd></dl>
-        <p class="muted small">Run <span class="mono">dwarfstar zed --apply</span> to regenerate them.</p>`}</div>
-    </div>
-    <div class="panel" style="margin-top:14px"><h2>Recorded sessions</h2>
-      <table><thead><tr><th>Session</th><th class="num">Size</th><th>Last event</th></tr></thead><tbody>${(sessions.sessions || []).map((s) => `<tr><td class="mono">${esc(s.id)}</td><td class="num">${(s.bytes / 1024).toFixed(0)} KiB</td><td>${new Date(s.modified * 1000).toLocaleString()}</td></tr>`).join("") || `<tr><td colspan="3" class="muted">None yet.</td></tr>`}</tbody></table>
-      <p class="muted small" style="margin:10px 0 0">Sessions hold counters and timings only. The newest 30 are kept. Open one in the Visualizer to replay it.</p></div>
-    <div class="panel" style="margin-top:14px"><h2>Server logs</h2><dl class="kv">${Object.entries(d.state.models).map(([id, s]) => `<dt>${esc(modelOf(id).family)}</dt><dd class="mono">${esc(s.log || "–")}</dd>`).join("")}</dl></div>`;
 }
 
 /* ------------------------------------------------------------------- boot */

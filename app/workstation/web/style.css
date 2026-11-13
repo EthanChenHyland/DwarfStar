@@ -107,6 +107,7 @@ tr:hover td { background: rgba(255,255,255,.015); }
 .pill { display: inline-block; padding: 1px 8px; border-radius: 20px; font-size: 11px; background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); }
 .pill.pass { color: var(--good); border-color: rgba(79,214,149,.35); }
 .pill.fail { color: var(--bad); border-color: rgba(255,107,107,.35); }
+.pill.warn { color: var(--warn); border-color: rgba(255,200,87,.35); }
 .cap { display: inline-flex; gap: 6px; align-items: center; padding: 4px 10px; margin: 0 6px 6px 0; border-radius: 7px; background: var(--panel-2); border: 1px solid var(--line-soft); font-size: 12px; }
 .cap::before { content: "✓"; color: var(--good); font-weight: 700; }
 .tabs { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
