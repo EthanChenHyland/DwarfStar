@@ -10,6 +10,8 @@
     dwarfstar switch PROFILE               stop any other model, start the profile's model
     dwarfstar seal [--verify]              write or check the installation seal
     dwarfstar doctor                       installation and health checks with remedies
+    dwarfstar storage [--json]            disk use by category, unreferenced large files (--empty-chat-trash [--apply])
+    dwarfstar cache status | clean        recreatable cache; clean is a dry run unless --apply (--browsers to include them)
 """
 from __future__ import annotations
 
@@ -114,6 +116,11 @@ def main(argv: list[str] | None = None) -> int:
         from dwarfstar import diagnostics
 
         return diagnostics.main(rest)
+
+    if command in ("storage", "cache"):
+        from dwarfstar import storage
+
+        return storage.main(rest if command == "storage" else ["cache", *rest])
 
     if command == "bench-index":
         from dwarfstar import benchindex

@@ -147,11 +147,33 @@ def consistent_active(running: list[str]) -> str | None:
     return None
 
 
+LIFECYCLE_LOG_BYTES = 5 << 20  # rotated at this size; the current file and LIFECYCLE_LOG_KEEP older ones are kept
+LIFECYCLE_LOG_KEEP = 3
+
+
+def rotate_log(path: Path, limit: int = LIFECYCLE_LOG_BYTES, keep: int = LIFECYCLE_LOG_KEEP) -> bool:
+    """lifecycle.jsonl -> lifecycle.1.jsonl -> ... -> lifecycle.<keep>.jsonl, the oldest dropped."""
+    try:
+        if path.stat().st_size < limit:
+            return False
+    except OSError:
+        return False
+    for index in range(keep, 0, -1):
+        older = path.with_name(f"{path.stem}.{index}{path.suffix}")
+        if index == keep:
+            older.unlink(missing_ok=True)
+        newer = path if index == 1 else path.with_name(f"{path.stem}.{index - 1}{path.suffix}")
+        if newer.exists():
+            newer.rename(older)
+    return True
+
+
 def lifecycle_log(record: dict) -> None:
-    """Append-only lifecycle journal in the data root, so a failed switch can be diagnosed afterwards."""
+    """Append-only lifecycle journal in the logs root (rotated), so a failed switch can be diagnosed afterwards."""
     try:
         path = LOGS / "lifecycle.jsonl"
         path.parent.mkdir(parents=True, exist_ok=True)
+        rotate_log(path)
         with path.open("a") as stream:
             stream.write(json.dumps({"t": time.time(), **record}, default=str) + "\n")
     except OSError:
