@@ -533,6 +533,9 @@ def safe_sync(row, store=STATE):
         print("DwarfStar supplemental task-state warning: " + str(e), file=sys.stderr)
 
 
+RELEASE_WAIT_S = 6
+
+
 def admit(workspace, key, profile, metrics, journal, state=None):
     """Before exec, hand the workspace lock to an isolated passive owner holder."""
     task = Store(state)
@@ -540,11 +543,18 @@ def admit(workspace, key, profile, metrics, journal, state=None):
     p = task.root / "workspace-locks" / digest(workspace)
     p.parent.mkdir(parents=True, exist_ok=True)
     f = p.open("a")
-    try:
-        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        f.close()
-        raise RuntimeError("A live ACP agent already owns this workspace; duplicate session refused")
+    # The previous owner's guard notices its agent exited within one 2 s poll and then releases the lock, so a turn
+    # that follows another at once waits briefly. A live owner (an editor's open agent) keeps it and is refused.
+    until = time.monotonic() + RELEASE_WAIT_S
+    while True:
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except BlockingIOError:
+            if time.monotonic() >= until:
+                f.close()
+                raise RuntimeError("A live ACP agent already owns this workspace; duplicate session refused")
+            time.sleep(0.1)
     from dwarfstar.runtime_control import identity
 
     launch = identity(os.getpid())

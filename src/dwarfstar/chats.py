@@ -11,11 +11,16 @@ transcript kept here is never compacted.
 Storage, under the data root and never in the repository:
 
     <data>/chats/<id>/chat.json     the chat record (schema 1, see `new_record`)
-    <data>/chats/<id>/workspace/    the agent's workspace and session bank for this chat
+    <data>/chats/<id>/workspace/    the agent's workspace and session bank for this chat (or the record's
+                                    `workspace`, for a chat continuing a Zed thread in its project folder)
     <data>/chats/.deleted/          deleted chats, moved aside rather than erased
 
 Only visible reply text and tool-call titles are stored. Reasoning (chain of
 thought) is never stored or shown.
+
+A shared chat (`"transcript": "agent_session"`, see shared_sessions.py) is one whose agent session is also
+used from Zed. Its messages are read from the agent's session file, the one canonical transcript; the
+record keeps only Workstation-side state (title, tags, errors and notices).
 """
 from __future__ import annotations
 
@@ -30,7 +35,7 @@ import threading
 import time
 from pathlib import Path
 
-from dwarfstar import catalog
+from dwarfstar import catalog, shared_sessions
 from dwarfstar.paths import CODE, DATA
 
 SCHEMA = 1
@@ -102,7 +107,75 @@ def get(chat_id: str) -> dict:
         raise ChatError("Unknown chat") from error
     if record.get("schema") != SCHEMA:
         raise ChatError(f"Unsupported chat schema {record.get('schema')}")
+    return _shared_view(record)
+
+
+def workspace_of(record: dict) -> Path:
+    return Path(record["workspace"]) if record.get("workspace") else _path(record["id"]).parent / "workspace"
+
+
+def _shared_view(record: dict) -> dict:
+    """For a shared chat: messages from the agent session file, plus the Workstation's own errors and notices and a
+    message the agent has not written yet (a turn that is starting)."""
+    if record.get("transcript") != "agent_session":
+        return record
+    source = shared_sessions.session_file(workspace_of(record), record.get("agent_session_id"))
+    if source is None:
+        record["transcript_status"] = "The agent session file for this chat is missing; showing the last copy the Workstation saw."
+        return record
+    derived = [{**m, "source": "agent"} for m in shared_sessions.visible_transcript(source)]
+    newest = max((m.get("t") or 0 for m in derived), default=0)
+    local = [m for m in record["messages"] if m.get("source") != "agent" and
+             (m["role"] in ("error", "notice") or (m["role"] == "user" and (m.get("t") or 0) > newest))]
+    record["messages"] = sorted(derived + local, key=lambda m: m.get("t") or 0)
+    record.pop("transcript_status", None)
     return record
+
+
+def link_zed_thread(session_id: str, database: Path | None = None) -> dict:
+    """Continue a Zed thread in the Workstation: a chat on the thread's own agent session and project folder. Nothing
+    is copied; an already linked thread returns its chat."""
+    thread = next((t for t in shared_sessions.zed_threads(database) if t["session_id"] == session_id), None)
+    if thread is None:
+        raise ChatError("No DwarfStar thread in Zed has that session")
+    if thread["chat"]:
+        return get(thread["chat"])
+    if thread["state"] != "continuable":
+        raise ChatError(thread["why"])
+    record = new_record(thread["profile"])
+    record.update(title=thread["title"][:120], title_manual=True, workspace=thread["workspace"], agent_session_id=session_id,
+                  transcript="agent_session", shared={"client": "zed", "agent": thread["agent"], "thread": thread["thread_id"],
+                                                      "linked": time.time()})
+    _write(record)
+    return get(record["id"])
+
+
+def share_with_zed(chat_id: str, launch: bool = True) -> dict:
+    """Make a chat's agent session the canonical transcript and open its workspace in Zed, where the matching DwarfStar
+    agent lists the session in its history. Refused when the session does not hold every message the chat shows
+    (a fork's copied messages): Zed could not show them, and the chat would silently lose them."""
+    record = get(chat_id)
+    if not record.get("agent_session_id"):
+        raise ChatError("Send a first message, so the chat has an agent session to share")
+    workspace = workspace_of(record)
+    source = shared_sessions.session_file(workspace, record["agent_session_id"])
+    if source is None:
+        raise ChatError("This chat's agent session file is missing")
+    if record.get("transcript") != "agent_session":
+        session_turns = sum(m["role"] == "user" for m in shared_sessions.visible_transcript(source))
+        chat_turns = sum(m["role"] == "user" for m in record["messages"])
+        if session_turns < chat_turns:
+            raise ChatError(f"The agent session holds {session_turns} of this chat's {chat_turns} messages (the rest were copied "
+                            "into a fork), so Zed could not show the whole conversation.")
+        record.update(transcript="agent_session", shared={"client": "zed", "agent": shared_sessions.zed_agent_name(record["profile"]),
+                                                          "linked": time.time()})
+        _write(record)
+    agent = record["shared"]["agent"]
+    if launch:
+        subprocess.run(["open", "-a", "Zed", str(workspace)], check=False)
+    return {"ok": True, "chat": chat_id, "workspace": str(workspace), "session": record["agent_session_id"], "zed_agent": agent,
+            "how": f"In Zed's agent panel, choose \"{agent}\" and open this conversation from its history. One client at a time: "
+                   "while one is answering, the other cannot write to the session."}
 
 
 def summary(record: dict) -> dict:
@@ -176,7 +249,8 @@ def fork(chat_id: str, upto: int | None = None, keep_messages: bool = True) -> d
     if keep_messages:
         record["tags"] = list(source.get("tags") or [])
         messages = [m for m in source["messages"][:upto] if m["role"] in ("user", "assistant")]
-        record.update(title=(source["title"] + " (fork)")[:120], title_manual=True, messages=[dict(m) for m in messages],
+        record.update(title=(source["title"] + " (fork)")[:120], title_manual=True,
+                      messages=[{k: v for k, v in m.items() if k != "source"} for m in messages],
                       forked_from={"id": chat_id, "title": source["title"], "messages": len(messages)})
     return _write(record)
 
@@ -316,13 +390,31 @@ class AgentSession:
         workspace.mkdir(parents=True, exist_ok=True)
         self.process = subprocess.Popen(
             [str(CODE / "bin/dwarfstar-acp"), "--profile", profile_id, "--workspace", str(workspace)],
-            cwd=str(workspace), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            cwd=str(workspace), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, bufsize=1, start_new_session=True,
             env={**os.environ, "DWARFSTAR_TASK_ID": "chat-" + workspace.parent.name + "-" + secrets.token_hex(3)},
         )
         self.messages: queue.Queue = queue.Queue()
         self.sequence = 0
+        self.stderr_tail: list[str] = []
         threading.Thread(target=self._read, daemon=True).start()
+        threading.Thread(target=self._read_stderr, daemon=True).start()
+
+    def _read_stderr(self) -> None:
+        for line in self.process.stderr:  # kept short: only to say why the agent refused to start
+            self.stderr_tail = (self.stderr_tail + [line.rstrip()])[-20:]
+
+    def exit_reason(self) -> str:
+        try:
+            self.process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            pass
+        time.sleep(0.1)
+        line = next((l for l in reversed(self.stderr_tail) if re.match(r"^\w+(Error|Exception): ", l)), "")
+        if "already owns this workspace" in line:
+            return ("This conversation's workspace is open in another DwarfStar agent (for example Zed's agent panel). "
+                    "Close that thread or project in Zed, then send again.")
+        return line.split(": ", 1)[1] if line else ""
 
     def _read(self) -> None:
         for line in self.process.stdout:
@@ -349,7 +441,8 @@ class AgentSession:
             except queue.Empty:
                 continue
             if message.get("__eof"):
-                raise ChatError("The agent exited during " + method)
+                reason = self.exit_reason()
+                raise ChatError(reason or "The agent exited during " + method)
             if message.get("method") == "session/update":
                 if on_update:
                     on_update(message["params"].get("update", {}))
@@ -444,8 +537,14 @@ def open_session(agent: AgentSession, record: dict, workspace: Path) -> tuple[st
             try:
                 agent.request(method, {**params, "sessionId": record["agent_session_id"]}, 180)
                 return record["agent_session_id"], True
-            except ChatError:
+            except ChatError as error:
+                if re.search(r"\block\b", str(error), re.I):
+                    raise ChatError("This conversation's agent session is in use by another client (for example Zed). "
+                                    "Finish or close it there, then send again.") from error
                 continue
+        if record.get("transcript") == "agent_session":
+            raise ChatError("The agent could not resume this shared session; a new session would split the conversation "
+                            "between Zed and the Workstation, so nothing was sent.")
     return agent.request("session/new", params, 180)["sessionId"], False
 
 
@@ -453,7 +552,7 @@ def probe_resume(chat_id: str, agent_factory=None) -> dict:
     """Check, without sending anything, that the agent resumes this chat's own session (no fallback to a new one).
     The chat's model must be running; the chat is not modified."""
     record = get(chat_id)
-    workspace = _path(chat_id).parent / "workspace"
+    workspace = workspace_of(record)
     if not record.get("agent_session_id"):
         return {"ok": False, "chat": chat_id, "error": "no agent session yet"}
     agent = (agent_factory or AgentSession)(record["profile"], workspace)
@@ -578,7 +677,7 @@ class Turns:
 
     def _run(self, chat_id: str, text: str, agent_factory) -> None:
         record = get(chat_id)
-        workspace = _path(chat_id).parent / "workspace"
+        workspace = workspace_of(record)
         agent = None
         error = None
         result: dict = {}

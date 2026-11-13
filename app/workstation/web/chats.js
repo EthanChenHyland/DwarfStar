@@ -35,6 +35,7 @@
               <button class="chip selected" data-filter="recent" role="tab">Recent</button>
               <button class="chip" data-filter="starred" role="tab">Starred</button>
               <button class="chip" data-filter="archived" role="tab">Archived</button>
+              <button class="chip" data-filter="zed" role="tab" title="DwarfStar threads in Zed's agent panel">Zed</button>
             </div>
             <div class="chat-tags" id="chat-tags"></div>
             <div class="chat-bulk" id="chat-bulk" hidden></div>
@@ -66,6 +67,7 @@
   function unmount() { clearTimeout(C.poll); C.poll = 0; }
 
   async function loadList() {
+    if (C.filter === "zed") return loadZed();
     const query = new URLSearchParams({ archived: C.filter === "archived" ? "1" : "0", ...(C.filter === "starred" ? { starred: "1" } : {}),
                                         ...(C.tag ? { tag: C.tag } : {}), ...(C.query ? { q: C.query } : {}) });
     const result = await D.api("/api/chats?" + query);
@@ -109,7 +111,43 @@
     C.selected.clear(); loadList(); renderBulk();
   }
 
+  /* Zed threads: the agent session file is the shared transcript. A thread in a live workspace with a current
+     profile can be continued here (same session, no copy); others can only be read. */
+  async function loadZed() {
+    const result = await D.api("/api/zed-threads");
+    C.zed = result.ok ? result.threads : [];
+    C.tags = [];
+    renderTags();
+    const node = C.root.querySelector("#chat-list");
+    if (!C.zed.length) { node.innerHTML = `<li class="chat-empty muted small">${result.ok ? "No DwarfStar threads in Zed." : esc(result.error)}</li>`; return; }
+    const action = (t) => t.chat ? `<button class="ghost small-button" data-open="${esc(t.chat)}">Open chat</button>`
+      : t.state === "continuable" ? `<button class="ghost small-button" data-link="${esc(t.session_id)}">Continue here</button>`
+      : t.state === "readable" ? `<button class="ghost small-button" data-read="${esc(t.session_id)}">Read</button>` : "";
+    node.innerHTML = C.zed.map((t) => `<li><div class="chat-item zed-thread" title="${esc(t.why)}">
+        <span class="chat-item-title">${esc(t.title)}</span>
+        <span class="chat-item-meta"><i></i>${esc(t.agent.replace("DwarfStar ", ""))} · ${esc(t.state)}${t.archived_workspace ? " · archived workspace" : ""}</span>
+        <span class="row small">${action(t)}</span></div></li>`).join("");
+    node.querySelectorAll("[data-open]").forEach((b) => b.onclick = () => openChat(b.dataset.open, true));
+    node.querySelectorAll("[data-link]").forEach((b) => b.onclick = async () => {
+      const linked = await D.api("/api/zed-threads/link", { session: b.dataset.link });
+      if (!linked.ok) return D.toast(linked.error);
+      D.toast("Linked: Zed and this chat now share one agent session");
+      openChat(linked.chat.id, true);
+    });
+    node.querySelectorAll("[data-read]").forEach((b) => b.onclick = () => readZed(b.dataset.read));
+  }
+
+  async function readZed(session) {
+    const result = await D.api("/api/zed-threads/read?session=" + encodeURIComponent(session));
+    if (!result.ok) return D.toast(result.error);
+    C.current = null; C.chat = null;
+    const main = C.root.querySelector("#chat-main"), t = result.thread;
+    main.innerHTML = `<header class="chat-head"><h2>${esc(t.title)}</h2><div class="faint small">${esc(t.agent)} · read only · ${esc(t.why)}</div></header>
+      <div class="chat-messages" id="chat-messages">${result.messages.map((m, i) => message(m, i)).join("")}</div>`;
+  }
+
   function renderList() {
+    if (C.filter === "zed") return loadZed();
     const node = C.root.querySelector("#chat-list");
     if (!C.list.length) {
       node.innerHTML = `<li class="chat-empty muted small">${C.query || C.tag ? "No chats match." : C.filter === "archived" ? "No archived chats."
@@ -214,6 +252,7 @@
             <span class="chat-context-bar"><i style="width:${pct.toFixed(1)}%"></i></span>
             ${(usage.tokens || 0).toLocaleString()} / ${Math.round((usage.window || 0) / 1024)}K · ${Math.round(remaining / 1024)}K left
           </span>
+          ${chat.shared ? `<span class="pill" title="This chat and Zed's “${esc(chat.shared.agent)}” agent use one agent session; its file is the transcript. One client writes at a time.">Shared with Zed</span>` : ""}
           ${chat.compactions ? `<span class="muted small" title="The agent condensed older turns to stay within the window; the full transcript is kept here">${chat.compactions} compaction${chat.compactions === 1 ? "" : "s"}</span>` : ""}
           <span class="spacer"></span>
           <button class="ghost small-button icon-toggle ${chat.starred ? "on" : ""}" id="chat-star" title="${chat.starred ? "Unstar" : "Star"}" aria-pressed="${!!chat.starred}">${chat.starred ? "★" : "☆"}</button>
@@ -221,6 +260,7 @@
           <button class="ghost small-button" id="chat-tag">Tags</button>
           <details class="chat-menu"><summary>More</summary><div class="chat-menu-list panel tight">
             <button id="chat-fork" title="Copy this conversation into a new chat; the agent gets the transcript as context">Fork conversation</button>
+            <button id="chat-zed" title="Open this chat's workspace in Zed; the matching DwarfStar agent lists this conversation in its history">Open in Zed</button>
             <button id="chat-same" title="A new, empty chat with ${esc(profileName(chat.profile))}">New chat, same settings</button>
             <a href="/api/chats/${esc(chat.id)}/export?format=md" download>Export Markdown</a>
             <a href="/api/chats/${esc(chat.id)}/export?format=json" download>Export JSON</a>
@@ -246,6 +286,12 @@
     main.querySelector("#chat-tag").onclick = () => { C.tagging = !C.tagging; renderTagEdit(); };
     main.querySelector("#chat-fork").onclick = () => fork();
     main.querySelector("#chat-same").onclick = () => fork(null, false);
+    main.querySelector("#chat-zed").onclick = async () => {
+      const result = await D.api(`/api/chats/${chat.id}/share-zed`, {});
+      if (!result.ok) return D.toast(result.error);
+      D.toast(result.how);
+      await openChat(chat.id);
+    };
     main.querySelector("#chat-archive").onclick = async () => {
       const result = await D.api(`/api/chats/${chat.id}/archive`, { archived: !chat.archived });
       if (!result.ok) return D.toast(result.error);
@@ -341,9 +387,9 @@
     const time = new Date(m.t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     if (m.role === "notice") return `<div class="chat-notice-line muted small">${esc(m.text)}</div>`;
     if (m.role === "error") return `<div class="chat-msg error"><div class="chat-msg-head">Not answered <span class="faint">${time}</span></div><div class="chat-msg-text">${esc(m.text)}</div></div>`;
-    const who = m.role === "user" ? "You" : profileName(C.chat.profile);
+    const who = m.role === "user" ? "You" : C.chat ? profileName(C.chat.profile) : "Assistant";
     const tools = (m.tools || []).map(toolChip).join("");
-    const forkHere = m.role === "assistant" && !C.progress ? `<button class="chat-fork-here" data-fork="${index + 1}" title="New chat with the conversation up to here">Fork from here</button>` : "";
+    const forkHere = m.role === "assistant" && !C.progress && C.chat ? `<button class="chat-fork-here" data-fork="${index + 1}" title="New chat with the conversation up to here">Fork from here</button>` : "";
     return `<div class="chat-msg ${m.role}"><div class="chat-msg-head">${esc(who)} <span class="faint">${time}</span>${forkHere}</div>
       ${tools ? `<div class="chat-tools">${tools}</div>` : ""}<div class="chat-msg-text">${esc((m.text || "").trim()) || '<span class="faint">(no text reply)</span>'}</div></div>`;
   }

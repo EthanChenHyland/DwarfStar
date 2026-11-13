@@ -529,6 +529,19 @@ class Service:
                         return self._json({"ok": True, "chats": chats.list_chats(query.get("q", [None])[0], archived, query.get("tag", [None])[0],
                                                                                  query.get("starred", ["0"])[0] == "1"),
                                            "tags": chats.all_tags()})
+                    if path == "/api/zed-threads":
+                        from dwarfstar import shared_sessions
+
+                        return self._json({"ok": True, "threads": shared_sessions.zed_threads()})
+                    if path == "/api/zed-threads/read":
+                        from dwarfstar import shared_sessions
+
+                        session = query.get("session", [""])[0]
+                        thread = next((t for t in shared_sessions.zed_threads() if t["session_id"] == session and t["source"]), None)
+                        if thread is None:
+                            return self._json({"ok": False, "error": "That thread's session file is not on this Mac"}, 404)
+                        return self._json({"ok": True, "read_only": True, "thread": thread,
+                                           "messages": shared_sessions.visible_transcript(Path(thread["source"]))})
                     if path.startswith("/api/chats/") and path.endswith("/export"):
                         from dwarfstar import chats
 
@@ -600,6 +613,10 @@ class Service:
                         state = service.state()
                         profile_id = body.get("profile") or state.get("active_profile") or stored_selection()
                         result = {"ok": True, "chat": chats.summary(chats.create(str(profile_id)))}
+                    elif path == "/api/zed-threads/link":
+                        from dwarfstar import chats
+
+                        result = {"ok": True, "chat": chats.summary(chats.link_zed_thread(str(body.get("session", ""))))}
                     elif path == "/api/chats-bulk":
                         from dwarfstar import chats
 
@@ -621,6 +638,8 @@ class Service:
                             result = service.turns.answer_permission(chat_id, body.get("option"))
                         elif action == "organize":
                             result = {"ok": True, "chat": chats.summary(chats.organize(chat_id, body.get("pinned"), body.get("starred"), body.get("tags")))}
+                        elif action == "share-zed":
+                            result = chats.share_with_zed(chat_id)
                         elif action == "fork":
                             upto = body.get("upto")
                             record = chats.fork(chat_id, int(upto) if upto is not None else None, body.get("messages", True) is not False)
