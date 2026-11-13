@@ -20,18 +20,21 @@
   const profileName = (id) => (S.catalog.profiles.find((p) => p.id === id)?.label || id).replace("DwarfStar ", "");
   const tone = (model) => D.TONE[model] || "var(--accent)";
 
+  const PIN = '<svg class="chat-mark" viewBox="0 0 16 16" aria-label="Pinned"><path d="M6 2.5h4l-.5 4 2 2v1h-7v-1l2-2zM8 9.5V14"/></svg>';
+  const STAR_OUTLINE = '<svg class="chat-mark" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.2l1.7 3.6 3.9.5-2.9 2.7.8 3.9L8 11l-3.5 1.9.8-3.9-2.9-2.7 3.9-.5z"/></svg>';
+  const STAR = '<svg class="chat-mark star" viewBox="0 0 16 16" aria-label="Starred"><path d="M8 2.2l1.7 3.6 3.9.5-2.9 2.7.8 3.9L8 11l-3.5 1.9.8-3.9-2.9-2.7 3.9-.5z"/></svg>';
+
   function mount() {
     C.root = document.querySelector("#view-chats");
     if (!C.mounted) {
       C.root.innerHTML = `
-        <h1>Chats</h1>
-        <p class="lead">Conversations with the running model through the same agent as Zed: tools, Full Auto and automatic context compaction included. Chats are stored on this Mac only.</p>
+        <div class="page-head"><h1>Chats</h1></div>
         <div class="chat-layout">
           <aside class="chat-side panel tight" aria-label="Chats">
             <div class="row chat-side-top"><button class="primary" id="chat-new">New chat</button>
-              <button class="ghost small-button" id="chat-select" title="Select several chats to archive or delete">Select</button></div>
+              <button class="quiet small-button" id="chat-select" title="Select several chats to archive or delete">Select</button></div>
             <input id="chat-search" type="search" placeholder="Search chats" aria-label="Search chats" autocomplete="off">
-            <div class="chat-filter" role="tablist">
+            <div class="chat-filter seg" role="tablist">
               <button class="chip selected" data-filter="recent" role="tab">Recent</button>
               <button class="chip" data-filter="starred" role="tab">Starred</button>
               <button class="chip" data-filter="archived" role="tab">Archived</button>
@@ -151,15 +154,14 @@
     const node = C.root.querySelector("#chat-list");
     if (!C.list.length) {
       node.innerHTML = `<li class="chat-empty muted small">${C.query || C.tag ? "No chats match." : C.filter === "archived" ? "No archived chats."
-        : C.filter === "starred" ? "No starred chats. Star one from its header." : "No chats yet."}</li>`;
+        : C.filter === "starred" ? "No starred chats." : "No chats yet. Start one with New chat."}</li>`;
       return;
     }
     node.innerHTML = C.list.map((c) => `
       <li class="${C.selecting ? "selecting" : ""}">${C.selecting ? `<input type="checkbox" data-pick="${esc(c.id)}" ${C.selected.has(c.id) ? "checked" : ""} aria-label="Select ${esc(c.title)}">` : ""}
         <button class="chat-item ${c.id === C.current ? "active" : ""}" data-id="${esc(c.id)}" style="--tone:${tone(c.model)}">
-        <span class="chat-item-title">${c.pinned ? '<span class="chat-mark" title="Pinned">📌</span>' : ""}${c.starred ? '<span class="chat-mark star" title="Starred">★</span>' : ""}${esc(c.title)}</span>
-        <span class="chat-item-meta"><i></i>${esc(profileName(c.profile))} · ${when(c.updated)}${c.tags.length ? " · " + c.tags.map((t) => "#" + esc(t)).join(" ") : ""}</span>
-        ${c.preview ? `<span class="chat-item-preview">${esc(c.preview)}</span>` : ""}
+        <span class="chat-item-title">${esc(c.title)}${c.pinned ? PIN : ""}${c.starred ? STAR : ""}</span>
+        <span class="chat-item-meta"><i></i>${esc(profileName(c.profile))} · ${when(c.updated)}${c.shared ? " · Zed" : ""}</span>
       </button></li>`).join("");
     node.querySelectorAll(".chat-item").forEach((b) => b.onclick = () => {
       if (C.selecting) { const box = node.querySelector(`[data-pick="${b.dataset.id}"]`); box.checked = !box.checked; box.onchange(); return; }
@@ -237,7 +239,9 @@
     const main = C.root.querySelector("#chat-main");
     const chat = C.chat;
     if (!chat) {
-      main.innerHTML = `<div class="chat-placeholder"><h2>No chat selected</h2><p class="muted">Start a new chat with the model and reasoning level chosen on the Run page, or open one from the list.</p></div>`;
+      main.innerHTML = `<div class="chat-placeholder"><p class="muted">Select a chat, or start a new one with ${esc(profileName(S.state?.selected_profile || ""))}.</p>
+        <button class="ghost small-button" id="chat-new-empty">New chat</button></div>`;
+      main.querySelector("#chat-new-empty").onclick = newChat;
       return;
     }
     const usage = chat.context || {}, pct = usage.window ? Math.min(100, 100 * (usage.tokens || 0) / usage.window) : 0;
@@ -245,36 +249,44 @@
     main.style.setProperty("--tone", tone(chat.model));
     main.innerHTML = `
       <header class="chat-head">
-        <div class="chat-title-wrap" id="chat-title-wrap"></div>
-        <div class="row chat-head-meta">
-          <span class="pill" title="Model and reasoning level of this chat">${esc(profileName(chat.profile))}</span>
-          <span class="chat-context" title="Context the agent is using; it compacts older turns automatically as this fills. ${remaining.toLocaleString()} tokens remaining.">
-            <span class="chat-context-bar"><i style="width:${pct.toFixed(1)}%"></i></span>
-            ${(usage.tokens || 0).toLocaleString()} / ${Math.round((usage.window || 0) / 1024)}K · ${Math.round(remaining / 1024)}K left
-          </span>
-          ${chat.shared ? `<span class="pill" title="This chat and Zed's “${esc(chat.shared.agent)}” agent use one agent session; its file is the transcript. One client writes at a time.">Shared with Zed</span>` : ""}
-          ${chat.compactions ? `<span class="muted small" title="The agent condensed older turns to stay within the window; the full transcript is kept here">${chat.compactions} compaction${chat.compactions === 1 ? "" : "s"}</span>` : ""}
-          <span class="spacer"></span>
-          <button class="ghost small-button icon-toggle ${chat.starred ? "on" : ""}" id="chat-star" title="${chat.starred ? "Unstar" : "Star"}" aria-pressed="${!!chat.starred}">${chat.starred ? "★" : "☆"}</button>
-          <button class="ghost small-button ${chat.pinned ? "on" : ""}" id="chat-pin" aria-pressed="${!!chat.pinned}">${chat.pinned ? "Unpin" : "Pin"}</button>
-          <button class="ghost small-button" id="chat-tag">Tags</button>
-          <details class="chat-menu"><summary>More</summary><div class="chat-menu-list panel tight">
-            <button id="chat-fork" title="Copy this conversation into a new chat; the agent gets the transcript as context">Fork conversation</button>
+        <div class="row chat-title-row"><div class="chat-title-wrap" id="chat-title-wrap"></div>
+          <button class="quiet small-button icon-toggle ${chat.starred ? "on" : ""}" id="chat-star" title="${chat.starred ? "Unstar" : "Star"}" aria-pressed="${!!chat.starred}">${chat.starred ? STAR : STAR_OUTLINE}</button>
+          <details class="chat-menu"><summary aria-label="Chat actions">More</summary><div class="chat-menu-list panel tight">
+            <button id="chat-pin">${chat.pinned ? "Unpin" : "Pin to top"}</button>
+            <button id="chat-tag">Edit tags</button>
             <button id="chat-zed" title="Open this chat's workspace in Zed; the matching DwarfStar agent lists this conversation in its history">Open in Zed</button>
+            <hr>
+            <button id="chat-fork" title="Copy this conversation into a new chat; the agent gets the transcript as context">Fork conversation</button>
             <button id="chat-same" title="A new, empty chat with ${esc(profileName(chat.profile))}">New chat, same settings</button>
             <a href="/api/chats/${esc(chat.id)}/export?format=md" download>Export Markdown</a>
             <a href="/api/chats/${esc(chat.id)}/export?format=json" download>Export JSON</a>
+            <hr>
             <button id="chat-archive">${chat.archived ? "Unarchive" : "Archive"}</button>
-          </div></details>
-          <button class="danger small-button" id="chat-delete">${C.confirmDelete ? "Confirm delete" : "Delete"}</button>
+            <button id="chat-delete" class="destructive">Delete…</button>
+          </div></details></div>
+        <div class="row chat-head-meta">
+          <span class="chat-profile" title="Model and reasoning level of this chat"><i></i>${esc(profileName(chat.profile))}</span>
+          <span class="chat-context" title="Context the agent is using; it compacts older turns automatically as this fills. ${remaining.toLocaleString()} tokens remaining.">
+            <span class="chat-context-bar"><i style="width:${pct.toFixed(1)}%"></i></span>
+            ${Math.round((usage.tokens || 0) / 1024)}K of ${Math.round((usage.window || 0) / 1024)}K
+          </span>
+          ${chat.compactions ? `<span title="The agent condensed older turns to stay within the window; the full transcript is kept">${chat.compactions} compaction${chat.compactions === 1 ? "" : "s"}</span>` : ""}
+          ${chat.shared ? `<span title="This chat and Zed's “${esc(chat.shared.agent)}” agent use one agent session, whose file is the transcript. One client writes at a time.">Shared with Zed</span>` : ""}
+          ${chat.forked_from ? `<span>Forked from “${esc(chat.forked_from.title)}”</span>` : ""}
+          ${(chat.tags || []).length ? `<span>${chat.tags.map((t) => "#" + esc(t)).join(" ")}</span>` : ""}
         </div>
         <div class="chat-tag-edit" id="chat-tag-edit"></div>
-        <div class="faint small">${chat.forked_from ? `Forked from “${esc(chat.forked_from.title)}” · ` : ""}Created ${new Date(chat.created * 1000).toLocaleString()} · updated ${when(chat.updated)}${(chat.tags || []).length ? " · " + chat.tags.map((t) => "#" + esc(t)).join(" ") : ""}</div>
+        <div id="chat-confirm"></div>
       </header>
       <div class="chat-messages" id="chat-messages"></div>
       <div class="chat-notice" id="chat-notice"></div>
       <form class="chat-composer" id="chat-composer">
-        <textarea id="chat-input" rows="3" placeholder="Message ${esc(profileName(chat.profile))}…  (Enter to send, Shift+Enter for a new line)" aria-label="Message"></textarea>
+        <div class="chat-input-wrap">
+          <textarea id="chat-input" rows="3" placeholder="Message ${esc(profileName(chat.profile))}" aria-label="Message"></textarea>
+          <div class="chat-input-foot"><span><i style="background:var(--tone)"></i>${esc(profileName(chat.profile))}</span>
+            <a href="#settings" id="chat-approval" title="Tool approval for agent sessions; change in Settings">${esc(S.state?.permissions?.label || "")}</a>
+            <span class="spacer"></span><span class="faint">Enter to send · Shift+Enter for a new line</span></div>
+        </div>
         <button class="primary" id="chat-send" type="submit">Send</button>
       </form>`;
     renderTitle();
@@ -298,18 +310,21 @@
       D.toast(chat.archived ? "Chat restored" : "Chat archived");
       await openChat(chat.id); loadList();
     };
-    main.querySelector("#chat-delete").onclick = async () => {
-      if (!C.confirmDelete) {
-        C.confirmDelete = setTimeout(() => { C.confirmDelete = 0; const b = main.querySelector("#chat-delete"); if (b) b.textContent = "Delete"; }, 4000);
-        main.querySelector("#chat-delete").textContent = "Confirm delete";
-        return;
-      }
-      clearTimeout(C.confirmDelete); C.confirmDelete = 0;
-      const result = await D.api(`/api/chats/${chat.id}/delete`, { confirm: chat.id });
-      if (!result.ok) return D.toast(result.error);
-      D.toast("Chat deleted");
-      C.current = null; C.chat = null; renderMain(); loadList();
+    main.querySelector("#chat-delete").onclick = () => {
+      main.querySelector(".chat-menu").open = false;
+      const box = main.querySelector("#chat-confirm");
+      box.innerHTML = `<div class="notice bad row" style="gap:10px">Delete “${esc(chat.title)}”? It is moved to the chat trash.
+        <span class="spacer"></span><button class="danger small-button" id="chat-delete-yes">Delete</button><button class="ghost small-button" id="chat-delete-no">Cancel</button></div>`;
+      box.querySelector("#chat-delete-no").onclick = () => { box.innerHTML = ""; };
+      box.querySelector("#chat-delete-yes").onclick = async () => {
+        const result = await D.api(`/api/chats/${chat.id}/delete`, { confirm: chat.id });
+        if (!result.ok) return D.toast(result.error);
+        D.toast("Chat deleted");
+        C.current = null; C.chat = null; renderMain(); loadList();
+      };
     };
+    main.querySelector("#chat-approval").onclick = (event) => { event.preventDefault(); D.show("settings"); };
+    main.querySelectorAll(".chat-menu-list > button").forEach((b) => b.addEventListener("click", () => { if (b.id !== "chat-delete") main.querySelector(".chat-menu").open = false; }));
     const input = main.querySelector("#chat-input");
     input.onkeydown = (event) => { if (event.key === "Enter" && !event.shiftKey && !event.isComposing) { event.preventDefault(); send(); } };
     main.querySelector("#chat-composer").onsubmit = (event) => { event.preventDefault(); send(); };
@@ -378,8 +393,19 @@
     });
   }
 
+  /* Reply text: fenced code, inline code and bold only. Everything is escaped first; no links or HTML. */
+  function richText(text) {
+    const source = String(text || "").trim();
+    if (!source) return '<span class="faint">(no text reply)</span>';
+    return source.split(/(```[\s\S]*?```)/g).map((part) => {
+      const fence = part.match(/^```([\w+-]*)\n?([\s\S]*?)```$/);
+      if (fence) return `<pre class="chat-code"><code>${esc(fence[2].replace(/\n$/, ""))}</code></pre>`;
+      return esc(part).replace(/`([^`\n]+)`/g, "<code>$1</code>").replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>");
+    }).join("");
+  }
+
   function toolChip(t) {
-    const status = t.status === "completed" ? "pass" : t.status === "failed" ? "fail" : "";
+    const status = t.status === "failed" ? "fail" : "";
     return `<span class="pill ${status}" title="${esc(t.title || "")}">${esc((t.title || t.kind || "tool").slice(0, 60))}</span>`;
   }
 
@@ -388,10 +414,14 @@
     if (m.role === "notice") return `<div class="chat-notice-line muted small">${esc(m.text)}</div>`;
     if (m.role === "error") return `<div class="chat-msg error"><div class="chat-msg-head">Not answered <span class="faint">${time}</span></div><div class="chat-msg-text">${esc(m.text)}</div></div>`;
     const who = m.role === "user" ? "You" : C.chat ? profileName(C.chat.profile) : "Assistant";
-    const tools = (m.tools || []).map(toolChip).join("");
+    const list = m.tools || [];
+    const failed = list.filter((t) => t.status === "failed").length;
+    const tools = list.length > 2
+      ? `<details class="chat-tool-group"><summary>${list.length} tool calls${failed ? ` · <span style="color:var(--bad)">${failed} failed</span>` : ""}</summary><div class="chat-tools">${list.map(toolChip).join("")}</div></details>`
+      : list.length ? `<div class="chat-tools">${list.map(toolChip).join("")}</div>` : "";
     const forkHere = m.role === "assistant" && !C.progress && C.chat ? `<button class="chat-fork-here" data-fork="${index + 1}" title="New chat with the conversation up to here">Fork from here</button>` : "";
     return `<div class="chat-msg ${m.role}"><div class="chat-msg-head">${esc(who)} <span class="faint">${time}</span>${forkHere}</div>
-      ${tools ? `<div class="chat-tools">${tools}</div>` : ""}<div class="chat-msg-text">${esc((m.text || "").trim()) || '<span class="faint">(no text reply)</span>'}</div></div>`;
+      ${tools}<div class="chat-msg-text">${m.role === "assistant" ? richText(m.text) : esc((m.text || "").trim())}</div></div>`;
   }
 
   function renderComposerState() {
@@ -428,5 +458,5 @@
   /* The Run page and the service own the model; refresh the composer when its state changes. */
   function stateChanged() { if (C.mounted && S.view === "chats" && C.chat) renderComposerState(); }
 
-  window.Chats = { mount, unmount, stateChanged };
+  window.Chats = { mount, unmount, stateChanged, current: () => C.chat };
 })();

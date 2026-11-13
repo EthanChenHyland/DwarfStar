@@ -31,13 +31,12 @@
   }
 
   function mount() {
-    if (V.mounted) { resize(); return; }
+    if (V.mounted) { V.root.querySelector("#viz-status").innerHTML = D.runningLine(); resize(); return; }
     V.root = document.querySelector("#view-visualizer");
     V.root.innerHTML = `
-      <h1>Visualizer</h1>
-      <p class="lead">A live picture of the running model: where its data lives, which experts the router picks for each token, what the speculative head drafts, and what the agent's tools are doing.</p>
+      <div class="page-head"><h1>Live</h1>${D.liveModeSwitch("visualizer")}<span class="spacer"></span><span id="viz-status"></span></div>
       <div class="row" style="margin-bottom:10px">
-        <div class="chips" id="viz-modes">
+        <div class="seg" id="viz-modes">
           <button class="chip selected" data-mode="overview">Overview</button>
           <button class="chip" data-mode="layer">Layer focus</button>
           <button class="chip" data-mode="heatmap">Routing heatmap</button>
@@ -45,7 +44,7 @@
         <label class="small muted" id="viz-layer-wrap" style="display:none">Layer <input type="range" id="viz-layer" min="0" max="47" value="24" style="vertical-align:middle;width:160px"> <b id="viz-layer-n">24</b></label>
         <span class="spacer"></span>
         <select id="viz-session" aria-label="Session"><option value="">Live</option></select>
-        <button class="ghost" id="viz-pause">Pause</button>
+        <button class="ghost small-button" id="viz-pause">Pause</button>
       </div>
       <canvas id="viz-canvas" style="height:600px" aria-label="Model visualizer"></canvas>
       <div class="row" style="margin-top:8px"><span class="small muted" style="width:70px">Timeline</span>
@@ -56,6 +55,7 @@
         <div class="panel"><h2>What this shows</h2><div class="small muted" id="viz-facts"></div></div>
       </div>
       <div class="panel" style="margin-top:12px"><h2>Requests</h2><div id="viz-requests" class="small"></div></div>`;
+    D.bindLiveModes(V.root);
     V.canvas = V.root.querySelector("#viz-canvas");
     V.g = V.canvas.getContext("2d");
     V.root.querySelectorAll("[data-mode]").forEach((b) => b.onclick = () => {
@@ -78,6 +78,7 @@
     new ResizeObserver(resize).observe(V.canvas);
     S.listeners.push(onEvent);
     V.mounted = true;
+    V.root.querySelector("#viz-status").innerHTML = D.runningLine();
     resize();
     refreshSessions();
     D.api("/api/heat").then((r) => { if (r.ok && r.layers.length) seedHeat(r.layers); });
@@ -213,7 +214,7 @@
     label("stays on disk · read per token", x + 18, pleY + 41, COLORS.faint, "10.5px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", inner);
     hint(x + 10, pleY, w - 20, pleH, `PLE n-gram table: ${assets.ple.file} (${(assets.ple.bytes / 2 ** 30).toFixed(2)} GiB, ${m.quantization.ple})`);
     const ple = live.ple || {};
-    if (!caps().ple) label("read rate not reported by " + backendName(), x + 18, pleY + 60, COLORS.muted, "10.5px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", inner);
+    if (!caps().ple) label("read rate: not reported", x + 18, pleY + 60, COLORS.muted, "10.5px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", inner);
     else label(((ple.bytes_per_s || 0) / 1024).toFixed(0) + " KiB/s", x + 18, pleY + 60, COLORS.text, "600 14px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", inner);
     if (caps().ple) label((ple.reads || 0).toLocaleString() + " row reads · " + ((ple.bytes || 0) / 2 ** 20).toFixed(1) + " MiB", x + 18, pleY + 78, COLORS.faint, "10.5px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", inner);
     let fy = pleY + pleH + 14;
@@ -227,8 +228,10 @@
       fy += 50;
     });
     const kv = live.kv || {};
-    label("KV CHECKPOINTS · disk cache", x + 12, fy + 6, COLORS.faint, "600 9.5px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", w - 24);
-    label((kv.stores || 0) + " stored · " + (kv.hits || 0) + " restored", x + 12, fy + 22, COLORS.muted, undefined, "left", w - 24);
+    const prefix = (S.state?.models?.[D.runningModel()]?.splash || {}).prefix_cache;
+    label(caps().mtp ? "KV CHECKPOINTS · disk cache" : "PREFIX CACHE · reused KV", x + 12, fy + 6, COLORS.faint, "600 9.5px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", w - 24);
+    label(caps().mtp ? (kv.stores || 0) + " stored · " + (kv.hits || 0) + " restored"
+      : prefix ? (prefix.reused_tokens || 0).toLocaleString() + " tokens · " + Math.round(100 * (prefix.hit_rate || 0)) + " % hits" : "–", x + 12, fy + 22, COLORS.muted, undefined, "left", w - 24);
   }
   function drawMemory(x, y, w, h, m, live) {
     const g = V.g, mem = m.memory, plan = m.memory_plan, total = 64, limit = plan.metal_working_set_gib;
@@ -382,7 +385,7 @@
     let px = x + 12; const py = y + 34;
     recent.forEach((t) => { for (let i = 0; i < t.n; i++) { g.fillStyle = i === 0 ? COLORS.text : COLORS.mtp; g.globalAlpha = 0.9; g.beginPath(); g.roundRect(px, py + (i ? 12 : 0), 6, 9, 2); g.fill(); } px += 8; if (t.dp > t.da) { g.fillStyle = COLORS.bad; g.fillRect(px - 8, py + 26, 6, 2); } });
     g.globalAlpha = 1;
-    label("white: verified by the trunk · green: accepted MTP draft · red mark: rejected draft", x + 12, y + 70, COLORS.faint, "10px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", outW - 24);
+    label(caps().mtp ? "white: verified by the trunk · green: accepted MTP draft · red mark: rejected draft" : "token counts only · draft acceptance is reported as a total in the Standard view", x + 12, y + 70, COLORS.faint, "10px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", outW - 24);
     const rates = live.rates || {}, request = live.request || {};
     label((rates.live_tps != null ? rates.live_tps.toFixed(1) : rates.decode_tps != null ? rates.decode_tps.toFixed(1) : "–") + " tok/s", x + 12, y + 88, COLORS.text, "600 15px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif");
     label((request.phase || "IDLE").replace("_", " ") + " · " + (request.generated || 0) + " generated · prompt " + (request.prompt_tokens || 0).toLocaleString(), x + 110, y + 92, COLORS.muted, "10.5px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", outW - 122);
@@ -417,7 +420,7 @@
       if (e.phase === "start") { open = { t: e.t, prompt: e.prompt_tokens, reused: e.reused_tokens, fresh: e.new_prefill_tokens, tools: e.tools }; rows.push(open); }
       else if (e.phase === "finish" && open) { Object.assign(open, { generated: e.generated, finish: e.finish, seconds: e.seconds, decode: e.decode_tps, prefill: e.prefill_tps }); open = null; }
     });
-    if (!rows.length) { node.innerHTML = `<span class="muted">No requests yet in this session. Each model request appears here with its prompt, prefix reuse, prefill and decode rates.</span>`; return; }
+    if (!rows.length) { node.innerHTML = `<span class="muted">No per-request rows in this session. Splash-m1 does not send per-request events; the latest request (from the agent's own record) and Splash's running totals are in the Standard view. Replays of sessions recorded with the earlier native runtime show their rows.</span>`; return; }
     const top = Math.max(1, ...rows.map((r) => r.decode || 0)), n = (v, d = 0) => v == null ? "–" : Number(v).toLocaleString(undefined, { maximumFractionDigits: d });
     node.innerHTML = `<table><thead><tr><th>Time</th><th>Prompt</th><th>Reused prefix</th><th>New prefill</th><th>Prefill tok/s</th><th>Generated</th><th>Decode tok/s</th><th>Total</th><th>End</th></tr></thead><tbody>${rows.slice(-40).reverse().map((r) => `<tr>
       <td class="mono">${new Date(r.t * 1000).toLocaleTimeString()}</td><td>${n(r.prompt)}</td>
@@ -430,10 +433,10 @@
     const key = m.id + (D.runningModel() || ""); if (factsFor === key) return; factsFor = key;
     V.root.querySelector("#viz-facts").innerHTML = `
       <p><b>Storage.</b> Only the PLE n-gram table (${D.esc(m.quantization.ple.split(",")[0])}, ${(S.catalog.details[m.id].assets.ple.bytes / 2 ** 30).toFixed(1)} GiB) is read from disk while the model runs, a few rows per token. The model, the draft model and the vision projector are loaded into unified memory at start and stay resident; experts are <b>not</b> streamed from disk.</p>
-      <p><b>Processor.</b> Each token passes through 48 layers. In every layer a router picks ${10} of 512 experts; the lit cells are the experts actually chosen for the current token, brighter for higher routing weight.</p>
-      <p><b>MTP.</b> A small head drafts the next one or two tokens. The trunk checks them in the same pass; accepted drafts are committed without an extra pass, rejected drafts are discarded.</p>
+      <p><b>Processor.</b> Each token passes through 48 layers; in every layer a router picks 10 of 512 experts. Splash-m1 does not report those selections, so the grid stays empty for live sessions. Sessions recorded with the earlier native runtime replay the selections they recorded.</p>
+      <p><b>Draft.</b> A small DFlash2 draft model proposes tokens and the model verifies them; only verified tokens are output. Splash reports acceptance as a running total (see Standard view), not per verification cycle.</p>
       <p><b>Context.</b> The KV cache (K ${D.esc(m.cache.k_cache_dtype)}, V ${D.esc(m.cache.v_cache_dtype)}) is reserved for the full ${m.context_label} context at load and fills as the conversation grows.</p>
-      <p><b>Runtime.</b> Splash-m1 reports requests, rates, context and its memory plan; it does not report router selections, PLE reads or per-cycle drafts, so those regions say so instead of drawing estimates. Sessions recorded with the earlier native runtime replay with their full detail.</p>
+      <p><b>Runtime.</b> Splash-m1 reports requests, rates, latency, draft acceptance, prefix-cache use and its memory plan. Router selections, PLE reads and per-cycle drafts are not reported; those regions say so instead of drawing estimates.</p>
       <p><b>Privacy.</b> The view shows counts, ids and timings. It never shows token text, reasoning or tool arguments.</p>`;
     renderActions(); renderRequests();
   }

@@ -1,4 +1,4 @@
-/* Command palette (⌘K or Ctrl+K): every view, every profile, stop, new chat, diagnostics. Type to filter,
+/* Command palette (⌘K or Ctrl+K): chats first, then models and reasoning, then actions and views. Type to filter,
  * arrows to move, Enter to run, Esc to close. Switching from here goes through the same pre-switch summary. */
 "use strict";
 (function () {
@@ -6,23 +6,28 @@
   let node = null, items = [], index = 0;
 
   function commands() {
-    const views = [["run", "Run"], ["chats", "Chats"], ["models", "Models"], ["live", "Live"], ["visualizer", "Visualizer"], ["settings", "Diagnostics"]]
-      .map(([id, label]) => ({ group: "Go to", label, run: () => D.show(id) }));
     const running = D.runningModel(), active = S.state?.active_profile;
+    const chat = S.view === "chats" && window.Chats?.current?.();
+    const first = [
+      { group: "Chat", label: "New chat", hint: "with the model chosen on Run", run: () => { D.show("chats"); setTimeout(() => document.querySelector("#chat-new")?.click(), 50); } },
+      { group: "Chat", label: "Search chats", run: () => { D.show("chats"); setTimeout(() => document.querySelector("#chat-search")?.focus(), 50); } },
+      ...(chat ? [{ group: "Chat", label: "Open this chat in Zed", run: () => document.querySelector("#chat-zed")?.click() }] : []),
+    ];
     const profiles = (S.catalog?.profiles || []).map((p) => ({
-      group: "Model", label: (p.id === active ? "Running: " : running === p.model ? "Use " : "Start ") + p.label.replace("DwarfStar ", ""),
+      group: "Model", label: (p.id === active ? "Running: " : running === p.model ? "Switch reasoning: " : running ? "Switch to " : "Start ") + p.label.replace("DwarfStar ", ""),
       hint: p.id === active ? "active" : running === p.model ? "no restart" : running ? "stops " + D.modelOf(running).display_name.replace("DwarfStar ", "") : "",
       disabled: p.id === active,
       run: () => { S.model = p.model; S.effort = p.reasoning_effort; D.show("run"); document.querySelector("#launch")?.click(); },
     }));
     const actions = [
-      { group: "Action", label: "Stop model", disabled: !running, run: () => { D.show("run"); document.querySelector("#stop")?.click(); } },
-      { group: "Action", label: "New chat", hint: "with the model chosen on Run", run: () => { D.show("chats"); setTimeout(() => document.querySelector("#chat-new")?.click(), 50); } },
-      { group: "Action", label: "Search chats", run: () => { D.show("chats"); setTimeout(() => document.querySelector("#chat-search")?.focus(), 50); } },
-      { group: "Action", label: "Copy diagnostics", run: () => { D.show("settings"); setTimeout(() => document.querySelector("#diag-copy")?.click(), 400); } },
-      { group: "Action", label: "Reconcile state", hint: "never stops a model", run: () => { D.show("settings"); setTimeout(() => document.querySelector("#diag-reconcile")?.click(), 400); } },
+      { group: "Model", label: "Stop model", disabled: !running, run: () => { D.show("run"); document.querySelector("#stop")?.click(); } },
+      { group: "Settings", label: "Tool approval", hint: S.state?.permissions?.label || "", run: () => D.show("settings") },
+      { group: "Diagnostics", label: "Copy diagnostics", run: () => { D.show("diagnostics"); setTimeout(() => document.querySelector("#diag-copy")?.click(), 400); } },
+      { group: "Diagnostics", label: "Reconcile state", hint: "never stops a model", run: () => { D.show("diagnostics"); setTimeout(() => document.querySelector("#diag-reconcile")?.click(), 400); } },
     ];
-    return [...views, ...profiles, ...actions];
+    const views = [["chats", "Chats"], ["run", "Run"], ["models", "Models"], ["live", "Live"], ["visualizer", "Live, advanced view"], ["diagnostics", "Diagnostics"], ["settings", "Settings"]]
+      .map(([id, label]) => ({ group: "Go to", label, run: () => D.show(id) }));
+    return [...first, ...profiles, ...actions, ...views];
   }
 
   function open() {
