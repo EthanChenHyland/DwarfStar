@@ -30,18 +30,22 @@ Switch the Workstation to **Visualizer** while the agent works:
 
 **Live** shows the same run as numbers: prefill and decode rates, MTP acceptance, memory.
 
-## 5. Change reasoning without a restart
+## 5. Chat in the Workstation
+
+Open **Chats** → **New chat** and ask the same question. The reply streams in with its tool calls; the header shows the profile and how much of the 128K context the agent is using. Rename the chat by clicking its title; archive or search it from the sidebar.
+
+## 6. Change reasoning without a restart
 
 Select **Swift 1.5**, then **MEDIUM**, and click **Switch to Swift 1.5 MEDIUM**: Scope is stopped first, then Swift starts. Now select **LOW**: the model keeps running; only the Zed entry changes (**DwarfStar Swift 1.5 LOW**).
 
-## 6. Cyber
+## 7. Cyber
 
-Select **Cyber**: four reasoning levels (OFF, LOW, MEDIUM, XHIGH). Switch to it; memory admission shows its larger requirement (about 53 GiB available needed). Cyber's statistics page (**Models → Cyber**) shows how it was converted and its measured limitations.
+Select **Cyber**: four reasoning levels (OFF, LOW, MEDIUM, XHIGH). Switch to it; memory admission shows its larger requirement (about 52 GiB available needed). Cyber's statistics page (**Models → Cyber**) shows how it was converted and its measured limitations.
 
-## 7. Evidence
+## 8. Evidence
 
 **Benchmarks** lists every result behind the decisions, including the production validation of this release. **Diagnostics** shows that generated configuration matches the catalog, the Zed entries match, and the seal is present.
 
-## 8. Stop
+## 9. Stop
 
 Click **Stop model**. No model server remains running.

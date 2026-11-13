@@ -80,15 +80,6 @@
   "text": "The KimiCU Calculator check was not re-run for Cyber XHIGH and Swift MEDIUM (screen locked at the time); it passed on Cyber LOW."
  },
  {
-  "id": "chat-ui",
-  "models": [
-   "scope",
-   "swift",
-   "cyber"
-  ],
-  "text": "Chats are implemented in the service (storage, resume through the agent's own session and compaction, rename, archive, search, confirmed delete; /api/chats) with unit tests; the Workstation chat panel is not built yet and no live chat turn was run."
- },
- {
   "id": "lifecycle-trigger",
   "models": [
    "cyber"

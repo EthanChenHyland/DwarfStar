@@ -18,6 +18,7 @@ Seven profiles, one per model × reasoning effort. Context is a model property; 
 
 * **One Workstation** (`DwarfStar Workstation.app`): pick a model and a reasoning level, start/switch/stop with memory admission, per-model statistics, live telemetry, a compute visualizer, the benchmark history and diagnostics.
 * **One controller** that only ever runs one model, refuses unpinned binaries or model files, and checks each model's own memory plan before loading.
+* **Chats** in the Workstation: durable, searchable conversations that run through the same agent (tools, Full Auto, automatic compaction) and stay on your Mac.
 * **One agent launcher** for every profile: `bin/dwarfstar-acp --profile <id>` (ACP, Full Auto, workspace/shell/browser/computer-use/vision tools, compaction, recovery).
 * **One runtime build** (`ds4-unified`): the pinned Paperniuk ds4 Metal runtime plus optional telemetry hooks, token-identical to the reference builds for all three models.
 * **Real telemetry**: router selections per layer, MTP drafts, PLE disk reads, context occupancy, prefill/decode and tool actions — produced only while someone is watching.
