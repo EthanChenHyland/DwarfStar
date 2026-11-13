@@ -29,7 +29,7 @@ for (const [label, width, height, model] of [["workstation", 1440, 900, "cyber"]
              metalValue: (rec.texts.find((t, i, a) => a[i - 1] && a[i - 1].text === "Metal limit") || {}).text, metalLabel: rec.texts.find(t => t.text === "Metal limit") ? "Metal limit " + (rec.texts.find(t => /GiB · plan/.test(t.text)) || {}).text : null,
              horizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth || document.querySelector("#main").scrollWidth > document.querySelector("#main").clientWidth };
   }, { label, model });
-  await page.screenshot({ path: (process.env.OUT || ".") + `/viz-${label}.png` });
+  await page.screenshot({ path: (process.env.OUT || process.env.TMPDIR || "/tmp") + `/viz-${label}.png` });
   results.push(result);
   await page.close();
 }
