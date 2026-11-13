@@ -6,12 +6,12 @@
 
 | View | Contents |
 |---|---|
-| **Chats** | New chat (uses the model and reasoning chosen on Run), recent and archived lists, search, inline rename (never overwritten by the automatic title), archive/unarchive, two-step delete, timestamps, model/reasoning and context usage per chat. Turns run through the same ACP agent as Zed and resume its session, so tools, Full Auto and the agent's automatic compaction apply; the full transcript is kept separately under `<data>/chats/` (never in Git). Reasoning is not shown. |
-| **Run** | Model selector (Scope Vanilla, Swift 1.5, Cyber), a reasoning selector that changes per model, the model's context as a fixed capability (128K for all three), launch/switch/stop, memory admission, key measured numbers and the matching Zed entry. |
+| **Chats** | New chat (uses the model and reasoning chosen on Run), Recent / Starred / Archived, tag filters and search (titles, tags, messages), pins (kept on top), stars, tags, inline rename (never overwritten by the automatic title), fork the whole chat or from any reply, new chat with the same settings, export as Markdown or JSON, select mode for bulk archive/restore/delete (deleting needs the count typed out; chats are moved aside, not erased), context used and left, compactions. Turns run through the same ACP agent as Zed and resume its session, so tools, the approval mode and the agent's automatic compaction apply; the full transcript is kept separately under `<data>/chats/` (never in Git). In Ask mode a tool call shows an approval card in the chat. Reasoning is not shown. The last chat reopens after a restart. |
+| **Run** | Model selector (Scope Vanilla, Swift 1.5, Cyber), a reasoning selector that changes per model (the last level used with each model is remembered), the model's context as a fixed capability (128K for all three), launch/switch/stop with a stage row (stop current, memory check, load with a timer against the measured load time, health check, ready), a pre-switch summary when a running model or an answering chat would be interrupted, memory admission, key measured numbers, the matching Zed entry and the tool approval presets. |
 | **Models** | One statistics page per model with the same schema: identity, source and revision, quantization, storage, memory plan, context and KV cache dtypes, speed, MTP, capabilities, provenance, and quality/benchmark history. Anything not measured says **Not measured**. |
 | **Live** | Prompt/output tokens, prefill and decode rates, MTP acceptance, context occupancy, PLE disk reads, unified memory, GPU and the tool activity of the running session. |
 | **Visualizer** | See `docs/VISUALIZER.md`. |
-| **Diagnostics** | Generated-config drift, Zed entry check, seal presence, telemetry hub state, server logs, code and data roots. |
+| **Diagnostics** | Running model (reasoning, backend, PID, port, health, context used and left, prefill chunk, KV types); memory as a composition bar plus four separate figures (system RAM, DwarfStar's admission requirement, the Metal working-set limit, the measured peak); chats, agent session, compactions and approval mode; telemetry and the last recovery report; 23 health checks with remedies (machine, software, runtime pins, model files, generated config, Zed, agent browser, KimiCU, app); Refresh, Copy diagnostics (home paths as `~`) and Reconcile state. `bin/dwarfstar doctor` prints the same checks. |
 
 ## Profiles
 
@@ -22,6 +22,20 @@
 | Cyber | OFF, LOW, MEDIUM, XHIGH | 128K | F16 / F16 | no |
 
 Changing reasoning on a running model never restarts it; the effort is carried per request by the agent's provider file. Swift LOW and MEDIUM keep separate session namespaces.
+
+## Tool approval
+
+| Preset | Behaviour |
+|---|---|
+| **Ask** | Every tool call waits for approval: in Zed's panel, or as an approval card in the Workstation chat (declined after 10 minutes). |
+| **Workspace Auto** | Tools run without asking inside the session's workspace folder, in a macOS sandbox; anything outside it is refused. |
+| **Full Auto** | Every tool call runs without asking, outside any sandbox. Turning it on always needs an explicit confirmation. |
+
+The preset is installation-wide (`<data>/config/approval.json`), applies to new agent sessions and the next chat turn, and is the same for every profile. macOS's own permission prompts (screen recording, accessibility) are separate and always apply.
+
+## Recovery
+
+When the service starts, and on **Reconcile state** in Diagnostics, saved state is compared with the real processes; nothing is ever signalled. A ledger whose process has exited is retired; a ledger whose PID now belongs to another program is retired without touching that program; a running server whose command line is exactly this model's generated one but has no ledger (the service or controller died during a start) is health-checked and adopted, so the Workstation reconnects instead of starting a second copy; any other model server is reported as foreign. A chat whose transcript ends with an unanswered message is marked interrupted (its agent session is intact; send again to continue), and telemetry sessions left open by a crash are closed.
 
 ## Memory admission
 

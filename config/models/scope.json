@@ -81,11 +81,12 @@
     "mtp_acceptance_pct": 86.8,
     "mtp_benefit": "+5.34 % median paired decode (20 of 25 parity-qualified synthetic pairs)",
     "tested_context_tokens": 65680,
-    "peak_wired_gib": null,
+    "peak_wired_gib": 45.9,
     "evidence": {
       "load, TTFT, prefill, decode": "runtime parity run 2026-11-12 (5 short prompts and one 8.3K-token agent request, temperature 0)",
       "mtp": "Scope decode and MTP audit 2026-11-11; Swift build matched microcheck",
-      "context": "Scope decode and MTP audit 2026-11-11"
+      "context": "Scope decode and MTP audit 2026-11-11",
+      "peak wired": "backend A/B 2026-11-12 (native, 8K and 32K prompts; whole machine, sampled every 2 s)"
     },
     "quality": [
       {

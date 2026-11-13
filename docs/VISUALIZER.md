@@ -14,6 +14,9 @@ One implementation (`app/workstation/web/visualizer.js`) for every model. It dra
 | Context | request and tick events | Context occupancy against the model's 128K. |
 | Prefill / decode | request phases from the server log stream | Prompt start, prefill progress, decode rate, finish. |
 | Action timeline | agent tool events | Workspace, shell, browser, computer use (KimiCU) and vision actions with duration and result. Names and categories only. |
+| Requests | request `start` / `finish` events | One row per model request: prompt tokens, reused prefix and its share, new prefill, prefill and decode rates, generated tokens, total time and how it ended. Also filled when replaying a recorded session. |
+
+**Backend capabilities.** The catalog tells the page which backend serves the model and what it reports. The native runtime reports router selections, MTP drafts and PLE reads per token. A backend that does not (Splash-m1 reports requests, rates, context and its memory plan only) gets a "not reported by this backend" label in those regions; nothing is drawn from estimates.
 
 Never shown: prompt text, reasoning, tool arguments, file contents or credentials. This is a compute and action view, not a transcript.
 

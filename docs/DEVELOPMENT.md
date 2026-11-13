@@ -22,7 +22,7 @@ bin/dwarfstar assets                              # verify model files against t
 scripts/validate/check.sh
 ```
 
-Runs the unit tests (catalog, lifecycle state machine, memory admission, telemetry hub, approval and redaction policy), parses every Python file, lints, checks generated configuration against the catalog, checks the benchmark index is reproducible, and syntax-checks the JavaScript and TypeScript.
+Runs the unit tests (catalog and backends, lifecycle state machine, memory admission, telemetry hub, chats, crash recovery, approval and redaction policy), parses every Python file, lints, checks generated configuration against the catalog, checks the benchmark index is reproducible, and syntax-checks the JavaScript and TypeScript.
 
 ## Changing a model fact
 

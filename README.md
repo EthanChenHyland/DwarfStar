@@ -16,10 +16,10 @@ Seven profiles, one per model × reasoning effort. Context is a model property; 
 
 ## What is in the box
 
-* **One Workstation** (`DwarfStar Workstation.app`): pick a model and a reasoning level, start/switch/stop with memory admission, per-model statistics, live telemetry, a compute visualizer, the benchmark history and diagnostics.
+* **One Workstation** (`DwarfStar Workstation.app`): pick a model and a reasoning level, start/switch/stop with memory admission and visible stages, per-model statistics, live telemetry, a compute visualizer with per-request history, and diagnostics with health checks and crash recovery.
 * **One controller** that only ever runs one model, refuses unpinned binaries or model files, and checks each model's own memory plan before loading.
-* **Chats** in the Workstation: durable, searchable conversations that run through the same agent (tools, Full Auto, automatic compaction) and stay on your Mac.
-* **One agent launcher** for every profile: `bin/dwarfstar-acp --profile <id>` (ACP, Full Auto, workspace/shell/browser/computer-use/vision tools, compaction, recovery).
+* **Chats** in the Workstation: durable conversations with pins, stars, tags, forks and Markdown/JSON export that run through the same agent (tools, automatic compaction) and stay on your Mac.
+* **One agent launcher** for every profile: `bin/dwarfstar-acp --profile <id>` (ACP, workspace/shell/browser/computer-use/vision tools, compaction, recovery) with three approval presets: Ask, Workspace Auto and Full Auto.
 * **One runtime build** (`ds4-unified`): the pinned Paperniuk ds4 Metal runtime plus optional telemetry hooks, token-identical to the reference builds for all three models.
 * **Real telemetry**: router selections per layer, MTP drafts, PLE disk reads, context occupancy, prefill/decode and tool actions — produced only while someone is watching.
 
@@ -47,6 +47,7 @@ Model weights are not in this repository. See [docs/REPRODUCIBILITY.md](docs/REP
 | [Workstation](docs/WORKSTATION.md) | Views, profiles, memory admission, building the app |
 | [Visualizer](docs/VISUALIZER.md) | What each region shows and where it comes from |
 | [Benchmarks](docs/BENCHMARKS.md) | Results, how they were measured, the production validation |
+| [Backends](docs/BACKENDS.md) | Native vs Splash-m1 vs MLX per model, prefill chunk and prefix reuse |
 | [Cyber conversion](docs/CYBER-CONVERSION.md) | NVFP4 → DwarfStar, fidelity and limitations |
 | [Research history](docs/RESEARCH-HISTORY.md) | How it was built, with dates |
 | [Reproducibility](docs/REPRODUCIBILITY.md) | Pins, data root, rebuilding |
