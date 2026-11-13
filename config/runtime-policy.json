@@ -1,9 +1,9 @@
 {
   "schema": 1,
-  "version": "2026.11.2",
+  "version": "2026.11.3",
   "description": "The one runtime policy every DwarfStar model uses. A model file in config/models may override a model_defaults key only with a reason in its override_reasons; repeating a default is rejected.",
   "model_defaults": {
-    "runtime": "ds4-unified",
+    "runtime": "splash-m1-1.6.1-ds1",
     "context": 131072,
     "max_output": 81920,
     "prefill_chunk": 2048,

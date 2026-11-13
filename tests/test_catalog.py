@@ -38,7 +38,7 @@ class CatalogTests(unittest.TestCase):
 
     def test_same_cache_policy_for_every_model(self):
         policies = {(m["cache"]["k_cache_dtype"], m["cache"]["v_cache_dtype"]) for m in catalog.models().values()}
-        self.assertEqual(policies, {("F16", "F16")})
+        self.assertEqual(policies, {("INT8", "INT8")})  # the default backend's (Splash-m1) cache for every model
 
     def test_cyber_source_is_pinned_and_marked(self):
         source = catalog.model("cyber")["source"]
@@ -121,7 +121,7 @@ class PolicyTests(unittest.TestCase):
     def test_every_model_gets_the_shared_policy(self):
         for model in catalog.models().values():
             self.assertEqual((model["context"], model["max_output"]), (131072, 81920))
-            self.assertEqual((model["cache"]["k_cache_dtype"], model["cache"]["v_cache_dtype"]), ("F16", "F16"))
+            self.assertEqual((model["cache"]["k_cache_dtype"], model["cache"]["v_cache_dtype"]), ("INT8", "INT8"))
 
     def test_an_override_without_a_reason_is_rejected(self):
         defaults = catalog.policy()["model_defaults"]
@@ -148,32 +148,39 @@ if __name__ == "__main__":
 
 
 class BackendTests(unittest.TestCase):
-    def test_native_is_the_default_backend_for_every_model(self):
+    def test_splash_is_the_default_backend_for_every_model(self):
         for model in catalog.models().values():
-            self.assertEqual(model["backend"]["kind"], "native")
+            self.assertEqual((model["backend"]["kind"], model["backend"]["id"]), ("splash", "splash-m1-1.6.1-ds1"))
 
-    def test_selecting_splash_for_scope_switches_only_backend_facts(self):
+    def test_the_native_runtime_stays_selectable_as_the_rollback(self):
         from unittest import mock
 
-        with mock.patch.dict("os.environ", {"DWARFSTAR_RUNTIME_OVERRIDE": "scope=splash-m1-1.6.1-ds1"}):
+        with mock.patch.dict("os.environ", {"DWARFSTAR_RUNTIME_OVERRIDE": "scope=ds4-unified"}):
             catalog.load.cache_clear()
             try:
                 scope = catalog.model("scope")
-                self.assertEqual(scope["backend"]["kind"], "splash")
-                self.assertEqual((scope["cache"]["k_cache_dtype"], scope["cache"]["v_cache_dtype"]), ("INT8", "INT8"))
-                self.assertEqual(scope["context"], 131072)
-                self.assertEqual([p["id"] for p in catalog.profiles("scope")], ["scope-low"])
-                self.assertLess(catalog.memory_plan("scope")["planned_gib"], 43.73)
+                self.assertEqual(scope["backend"]["kind"], "native")
+                self.assertEqual((scope["cache"]["k_cache_dtype"], scope["cache"]["v_cache_dtype"]), ("F16", "F16"))
+                self.assertAlmostEqual(catalog.memory_plan("scope")["planned_gib"], 43.73, places=2)
                 from dwarfstar import instance
 
-                argv, env = instance.server_command("scope")
-                joined = " ".join(argv)
-                for flag in ("--served-model-name qwen3.8-flash-next", "--port 8030", "--max-context 131072", "--offline", "--mmproj", "--draft-model"):
-                    self.assertIn(flag, joined)
-                self.assertIn("backends/splash-m1/home", env["HOME"])
-                self.assertEqual(catalog.model("swift")["backend"]["kind"], "native")
+                self.assertTrue(instance.server_command("scope")[0][0].endswith("ds4-server"))
+                self.assertEqual(catalog.model("swift")["backend"]["kind"], "splash")
             finally:
                 catalog.load.cache_clear()
+
+    def test_splash_serves_each_model_with_its_own_identity(self):
+        from dwarfstar import instance
+
+        scope = catalog.model("scope")
+        self.assertEqual(scope["context"], 131072)
+        self.assertEqual([p["id"] for p in catalog.profiles("scope")], ["scope-low"])
+        self.assertLess(catalog.memory_plan("scope")["planned_gib"], 43.73)
+        argv, env = instance.server_command("scope")
+        joined = " ".join(argv)
+        for flag in ("--served-model-name qwen3.8-flash-next", "--port 8030", "--max-context 131072", "--offline", "--mmproj", "--draft-model"):
+            self.assertIn(flag, joined)
+        self.assertIn("backends/splash-m1/home", env["HOME"])
 
     def test_swift_and_cyber_use_their_own_split_layout_on_splash(self):
         from unittest import mock

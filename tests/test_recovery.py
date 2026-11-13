@@ -43,6 +43,10 @@ class ReconcileTests(unittest.TestCase):
     """runtime_control.reconcile() with the process table and endpoint replaced by fakes."""
 
     def setUp(self):
+        from tests.native_controller import native_controller
+
+        stack = native_controller(runtime_control)
+        self.addCleanup(stack.close)
         self.directory = tempfile.TemporaryDirectory()
         self.state = Path(self.directory.name)
         self.argv = [str(runtime_control.SERVER), "-m", "/models/main.gguf", "--port", "8030"]
