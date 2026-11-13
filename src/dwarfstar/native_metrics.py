@@ -137,7 +137,7 @@ def parse_native(text):
 
 def native_snapshot(row, cache_path):
     """Bounded incremental reads. Cursor persists across short-lived status invocations."""
-    if not row:
+    if not row or not row.get("log"):
         return {}, []
     try:
         path = Path(row["log"])

@@ -329,7 +329,7 @@ def start() -> dict:
 
 
 def native_log(row) -> str:
-    if not row:
+    if not row or not row.get("log"):
         return ""
     try:
         path = Path(row["log"])
@@ -348,6 +348,8 @@ def memory_plan(row) -> dict:
         return {}
     if KIND != "native":
         return splash_memory_plan()
+    if not row.get("log"):
+        return {}
     try:
         with Path(row["log"]).open("rb") as stream:
             head = stream.read(16384).decode(errors="replace")
@@ -507,6 +509,47 @@ def stop() -> dict:
     return {"ok": True, "stopped": row["pid"]}
 
 
+def reconcile() -> dict:
+    """Make the saved ownership record agree with the processes that actually exist. Never signals a process.
+
+    * A ledger whose process has exited is retired (kept as last-stopped).
+    * A ledger whose PID now belongs to a different process (PID reuse) is retired as invalid.
+    * A running ds4-server whose command line is exactly this model's generated command, with no valid
+      ledger (for example after the controller or service crashed during a start), is adopted: it is
+      healthy-checked and recorded, so the Workstation reconnects instead of starting a duplicate.
+    * Any other ds4-server is reported as foreign and left alone.
+    """
+    c = config()
+    report = {"ok": True, "model": MODEL, "ledger": "none", "adopted": None, "foreign": []}
+    row = read(STATE / "server.json")
+    if row:
+        current = identity(row.get("pid"))
+        if current is None:
+            retire_ledger(row, reason="process gone at reconcile")
+            report["ledger"] = "retired: process gone"
+        elif any(row.get(key) != current[key] for key in ("pid", "birth", "argv_sha256")) or \
+                not is_server_command(current["command"]):
+            retire_ledger(row, reason="identity mismatch at reconcile (PID reused)")
+            report["ledger"] = "retired: PID now belongs to another process"
+        else:
+            report["ledger"] = "valid"
+            return report
+    expected = hashlib.sha256(" ".join(c["argv"]).encode()).hexdigest()
+    for pid, name in heavyweight_processes():
+        current = identity(pid)
+        if not current or name != "ds4-server":
+            continue
+        if current["argv_sha256"] == expected and health()["ok"]:
+            logs = sorted(STATE.glob("server-*.log"), key=lambda path: path.stat().st_mtime)
+            save(STATE / "server.json", {**current, "log": str(logs[-1]) if logs else None, "started_at": None, "model": MODEL,
+                                         "adopted_at": time.time()})
+            emit("runtime", phase="running", pid=pid, adopted=True)
+            report.update(ledger="adopted", adopted=pid)
+        elif KIND == "native" and current["argv_sha256"] != expected:
+            report["foreign"].append({"pid": pid, "command": current["command"][:160]})
+    return report
+
+
 def launch_workspace(profile_id: str, folder: str | None = None) -> dict:
     """Start the model if needed and open a workspace in the editor for the selected profile."""
     from dwarfstar.preflight import require
@@ -530,7 +573,7 @@ def launch_workspace(profile_id: str, folder: str | None = None) -> dict:
     }
 
 
-ACTIONS = ("start", "stop", "restart", "status", "health", "logs", "chat", "history", "requirement", "_serve")
+ACTIONS = ("start", "stop", "restart", "status", "health", "logs", "chat", "history", "requirement", "reconcile", "_serve")
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -549,6 +592,8 @@ def main(argv: list[str] | None = None) -> None:
         from dwarfstar.history_compat import list_history, read_history
 
         value = read_history(args.history_id) if args.history_id else list_history()
+    elif args.action == "reconcile":
+        value = reconcile()
     elif args.action == "requirement":
         value = {"ok": True, **memory_requirement(), "available_gib": round(available_memory_gib(), 1)}
     elif args.action in ("status", "health", "logs"):

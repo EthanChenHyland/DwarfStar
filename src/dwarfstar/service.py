@@ -343,6 +343,7 @@ def state_document(lifecycle: Lifecycle | None = None, detail: bool = False) -> 
         "ok": True,
         "selected_profile": selected,
         "active_profile": consistent_active(running),
+        "last_chat": _read_state().get("last_chat"),
         "default_profile": catalog.default_profile()["id"],
         "running_models": running,
         "models": states,
@@ -415,8 +416,28 @@ class Service:
                                  record=False)
             self.stop_flag.wait(1.0)
 
+    def recover(self) -> dict:
+        """Reconcile saved state with reality: ownership ledgers, chats interrupted mid-reply, open telemetry sessions.
+        Never stops or signals a process; a valid running model is kept and reconnected."""
+        from dwarfstar import chats
+
+        report = {"t": time.time(), "models": {}, "interrupted_chats": [], "telemetry_sessions_finalized": getattr(self.hub, "finalized", [])}
+        for model_id in catalog.models():
+            report["models"][model_id] = controller(model_id, "reconcile", timeout=60)
+        if not self.turns.active:
+            report["interrupted_chats"] = chats.recover_interrupted()
+        running = [m for m, row in report["models"].items() if row.get("ledger") in ("valid", "adopted")]
+        if not running:
+            store_active(None)
+        self.recovery = report
+        lifecycle_log({"recovery": report})
+        self.invalidate()
+        return report
+
     def run(self) -> None:
         self.hub.start()
+        self.recovery = {}
+        threading.Thread(target=self.recover, name="recovery", daemon=True).start()
         threading.Thread(target=self._system_loop, name="system-sampler", daemon=True).start()
         service = self
 
@@ -483,11 +504,19 @@ class Service:
                         from dwarfstar import chats
 
                         chat_id = path.split("/")[3]
-                        return self._json({"ok": True, "chat": chats.get(chat_id), "progress": service.turns.progress(chat_id)})
+                        chat = chats.get(chat_id)
+                        if "open" in query:
+                            _write_state(last_chat=chat_id)
+                        return self._json({"ok": True, "chat": chat, "progress": service.turns.progress(chat_id)})
                     if path == "/api/benchmarks":
                         return self._json(service.benchmarks_document())
                     if path == "/api/diagnostics":
                         return self._json(service.diagnostics_document())
+                    if path == "/api/setup":
+                        from dwarfstar import diagnostics
+
+                        rows = diagnostics.checks()
+                        return self._json({"ok": True, "checks": rows, "summary": diagnostics.summary(rows)})
                     if path.startswith("/api/"):
                         return self._json({"ok": False, "error": "Unknown endpoint"}, 404)
                     return self._static(path)
@@ -516,6 +545,8 @@ class Service:
                         catalog.profile(str(body.get("profile", "")))
                         store_selection(body["profile"])
                         result = {"ok": True, "selected_profile": body["profile"]}
+                    elif path == "/api/diagnostics/reconcile":
+                        result = {"ok": True, **service.recover()}
                     elif path == "/api/chats":
                         from dwarfstar import chats
 
@@ -636,33 +667,13 @@ class Service:
             return {"ok": False, "error": "Benchmark index has not been generated (run `dwarfstar bench-index`)."}
 
     def diagnostics_document(self) -> dict:
-        from dwarfstar import instance, zed
+        from dwarfstar import diagnostics
 
-        rows = {}
-        for model_id in catalog.models():
-            problems = []
-            try:
-                problems = instance.check(model_id)
-            except Exception as error:
-                problems = [str(error)]
-            rows[model_id] = {
-                "generated_config": "matches the catalog" if not problems else problems,
-                "instance": str(instance.instance(model_id)),
-                "runtime": catalog.runtime_pin(model_id)["id"],
-            }
-        try:
-            editor = zed.check()
-        except Exception as error:
-            editor = {"ok": False, "error": str(error)}
-        seal = DATA / "DWARFSTAR-PRODUCTION-SEAL.json"
-        return {
-            "ok": True,
-            "code_root": str(CODE), "data_root": str(DATA),
-            "models": rows, "editor_entries": editor,
-            "seal": {"path": str(seal), "present": seal.is_file()},
-            "telemetry": {"hub": self.hub.snapshot()["hub"], "sessions_directory": str(DATA / "telemetry" / "sessions")},
-            "state": self.state(detail=True),
-        }
+        document = diagnostics.document(self.state(detail=True), self.hub.snapshot(), self.system_cache or self.sampler.sample(None),
+                                        self.hub.snapshot()["hub"], self.turns)
+        document["recovery"] = self.recovery
+        document["backends"] = {m: catalog.model(m)["backend"] for m in catalog.models()}
+        return document
 
 
 def main(argv: list[str]) -> int:

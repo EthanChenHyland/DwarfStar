@@ -86,6 +86,8 @@ class Hub:
     # ------------------------------------------------------------- lifecycle
 
     def start(self) -> None:
+        if self.record:
+            self.finalized = finalize_open_sessions()
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.socket.bind(("127.0.0.1", self.event_port))
@@ -381,9 +383,10 @@ class Hub:
         for old in files[:-SESSION_FILE_LIMIT]:
             old.unlink(missing_ok=True)
 
-    def _close_session(self) -> None:
+    def _close_session(self, reason: str = "model stopped") -> None:
         if self.session_file is not None:
             try:
+                self.session_file.write(json.dumps({"t": time.time(), "kind": "session_end", "reason": reason}) + "\n")
                 self.session_file.close()
             except OSError:
                 pass
@@ -420,6 +423,26 @@ class Hub:
     def recent(self, after: int = 0, limit: int = 500) -> list[dict]:
         with self.lock:
             return [event for event in self.ring if event["id"] > after][-limit:]
+
+
+def finalize_open_sessions(directory: Path | None = None) -> list[str]:
+    """A session file whose last record is not `session_end` was left open by a crash (service, Workstation or
+    machine). Close it with a recovered marker so replay and history know where it really ended."""
+    directory = directory or TELEMETRY / "sessions"
+    finalized = []
+    for path in sorted(directory.glob("*.jsonl"))[-SESSION_FILE_LIMIT:]:
+        try:
+            with path.open("rb") as stream:
+                stream.seek(max(0, path.stat().st_size - 4096))
+                lines = [line for line in stream.read().splitlines() if line.strip()]
+            last = json.loads(lines[-1]) if lines else {}
+        except (OSError, ValueError):
+            continue
+        if last.get("kind") != "session_end":
+            with path.open("a") as stream:
+                stream.write(json.dumps({"t": time.time(), "kind": "session_end", "reason": "recovered after an unclean shutdown"}) + "\n")
+            finalized.append(path.stem)
+    return finalized
 
 
 def list_sessions() -> list[dict]:

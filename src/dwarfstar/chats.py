@@ -168,6 +168,24 @@ def add_message(record: dict, role: str, text: str, **fields) -> dict:
 # --------------------------------------------------------------------- turns
 
 
+def recover_interrupted() -> list[str]:
+    """Called when the service starts, before any turn can run: a chat whose transcript ends with the user's message
+    lost its reply to a crash. Say so in the chat; the agent session itself is intact and the next message resumes it."""
+    recovered = []
+    for path in ROOT.glob("c*/chat.json"):
+        try:
+            record = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        messages = record.get("messages") or []
+        if messages and messages[-1].get("role") == "user":
+            add_message(record, "error", "Interrupted: DwarfStar stopped before this reply finished. Send the message again to continue; "
+                                         "the conversation and the agent's session are intact.", interrupted=True)
+            _write(record)
+            recovered.append(record["id"])
+    return recovered
+
+
 class AgentSession:
     """One short-lived ACP agent process for one turn of one chat."""
 
