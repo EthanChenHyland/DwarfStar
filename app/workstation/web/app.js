@@ -107,6 +107,7 @@ async function refreshState() {
     S.renderedKey = key;
     if (S.view === "run") renderRun();
     if (S.view === "models") renderModels();
+    window.Chats?.stateChanged();
   } catch { /* service restarting */ }
 }
 
@@ -127,7 +128,8 @@ function show(view) {
   document.querySelectorAll("#nav button").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
   document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === "view-" + view));
   connect(view === "visualizer" ? 2 : 1);
-  ({ run: renderRun, models: renderModels, live: renderLive, visualizer: () => window.Visualizer?.mount(), benchmarks: renderBenchmarks, research: renderResearch, settings: renderSettings })[view]?.();
+  if (view !== "chats") window.Chats?.unmount();
+  ({ run: renderRun, chats: () => window.Chats?.mount(), models: renderModels, live: renderLive, visualizer: () => window.Visualizer?.mount(), benchmarks: renderBenchmarks, research: renderResearch, settings: renderSettings })[view]?.();
   if (view !== "visualizer") window.Visualizer?.unmount();
   $("#main").scrollTop = 0;
 }
@@ -488,7 +490,7 @@ async function boot() {
   S.model = selected.model; S.effort = selected.reasoning_effort;
   connect(1);
   const initial = location.hash.slice(1);
-  show(["run", "models", "live", "visualizer", "benchmarks", "research", "settings"].includes(initial) ? initial : "run");
+  show(["run", "chats", "models", "live", "visualizer", "benchmarks", "research", "settings"].includes(initial) ? initial : "run");
   window.addEventListener("hashchange", () => { const v = location.hash.slice(1); if (v && v !== S.view && document.querySelector("#view-" + v)) show(v); });
   setInterval(refreshState, 4000);
   api("/api/benchmarks").then((r) => { S.benchmarks = r; });

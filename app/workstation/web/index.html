@@ -18,6 +18,7 @@
       <div><b>DwarfStar</b><span>Workstation</span></div>
     </div>
     <button data-view="run" class="active"><i>▶</i>Run</button>
+    <button data-view="chats"><i>✎</i>Chats</button>
     <button data-view="models"><i>◈</i>Models</button>
     <button data-view="live"><i>∿</i>Live</button>
     <button data-view="visualizer"><i>▦</i>Visualizer</button>
@@ -31,6 +32,7 @@
   </nav>
   <main id="main" tabindex="-1">
     <section id="view-run" class="view active"></section>
+    <section id="view-chats" class="view"></section>
     <section id="view-models" class="view"></section>
     <section id="view-live" class="view"></section>
     <section id="view-visualizer" class="view"></section>
@@ -42,5 +44,6 @@
 <div id="toast" role="status" aria-live="polite"></div>
 <script src="app.js"></script>
 <script src="visualizer.js"></script>
+<script src="chats.js"></script>
 </body>
 </html>
