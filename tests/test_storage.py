@@ -48,9 +48,18 @@ class StorageTests(unittest.TestCase):
         self.assertFalse(service.rotate_log(log, limit=10, keep=3))
 
     def test_the_report_names_production_files_and_flags_unreferenced_ones(self):
-        value = storage.report()
+        assets = self.root / "assets"
+        (assets / "Models" / "Old").mkdir(parents=True)
+        (assets / "Models" / "Old" / "stray.gguf").write_bytes(b"\0" * (storage.LARGE + 1))
+        (assets / "Leftovers").mkdir()
+        names = {"ASSETS": assets, "MODELS": assets / "Models", "RUNTIMES": assets / "Runtimes", "SOURCES": assets / "Sources",
+                 "MANIFESTS": assets / "Manifests", "ARCHIVE": assets / "Archive", "DATA": self.root / "data",
+                 "CHATS": self.root / "data" / "chats", "CACHE": self.root / "cache", "LOGS": self.root / "logs"}
+        with mock.patch.multiple(paths, **names):
+            value = storage.report()
         self.assertIn("production models", value["bytes"])
-        self.assertEqual(set(value["roots"]), {"code", "assets", "data", "cache", "logs"})
+        whys = {Path(row["path"]).name: row["why"] for row in value["unreferenced"]}
+        self.assertEqual(whys, {"Leftovers": "unknown folder in the assets root", "stray.gguf": "not referenced by the catalog"})
 
 
 if __name__ == "__main__":
