@@ -6,7 +6,11 @@ metadata, part 2 holds only `per_layer_token_embd.weight`. This tool writes that
 single weight: tensor payloads are copied byte for byte (gguf-py's own copy routine), the split keys follow
 the published Scope files exactly, and the result is verified tensor by tensor against the sources.
 
-    repack_split_gguf.py MAIN.gguf PLE.gguf OUT_DIR STEM
+    repack_split_gguf.py MAIN.gguf PLE.gguf OUT_DIR STEM [--link-part2]
+
+--link-part2 writes only part 1 and makes part 2 a symlink to the unchanged PLE GGUF. Splash's engine keeps only the
+first part's metadata and, in a later part, checks nothing but an optional split.no (runtime/model/GgufFile.cpp
+GgufFile::parse), so the standalone PLE file serves as part 2 byte for byte and the repack costs the main file only.
 
 Run it with the gguf-py from the pinned llama.cpp checkout (the Cyber conversion toolchain) on PYTHONPATH.
 Writes OUT_DIR/STEM-00001-of-00002.gguf and OUT_DIR/STEM-00002-of-00002.gguf, then prints a JSON receipt.
@@ -58,6 +62,8 @@ def digest(reader: GGUFReader) -> dict[str, str]:
 
 
 def main(argv: list[str]) -> int:
+    link = "--link-part2" in argv
+    argv = [a for a in argv if a != "--link-part2"]
     main_path, ple_path, out_dir, stem = Path(argv[0]), Path(argv[1]), Path(argv[2]), argv[3]
     out_dir.mkdir(parents=True, exist_ok=True)
     main_reader, ple_reader = GGUFReader(str(main_path), "r"), GGUFReader(str(ple_path), "r")
@@ -68,14 +74,20 @@ def main(argv: list[str]) -> int:
     total = len(main_reader.tensors) + 1
     part1, part2 = out_dir / f"{stem}-00001-of-00002.gguf", out_dir / f"{stem}-00002-of-00002.gguf"
     write_part(part1, main_reader, 0, total, metadata=True)
-    write_part(part2, ple_reader, 1, total, metadata=False)
+    if link:
+        if part2.exists() or part2.is_symlink():
+            part2.unlink()
+        part2.symlink_to(ple_path.resolve())
+    else:
+        write_part(part2, ple_reader, 1, total, metadata=False)
     # verification: same tensors, same bytes, same metadata (apart from the split keys)
     new1, new2 = GGUFReader(str(part1), "r"), GGUFReader(str(part2), "r")
     tensors_equal = digest(main_reader) == digest(new1) and digest(ple_reader) == digest(new2)
     meta = lambda r: {f.name: str(f.contents()) for f in r.fields.values() if not f.name.startswith("GGUF.") and f.name not in SPLIT_KEYS}  # noqa: E731
     receipt = {"sources": {"main": str(main_path), "ple": str(ple_path)}, "parts": [str(part1), str(part2)],
                "tensors": total, "tensor_payloads_identical": tensors_equal, "metadata_identical": meta(main_reader) == meta(new1),
-               "part2_keys": sorted(f.name for f in new2.fields.values() if not f.name.startswith("GGUF."))}
+               "part2_keys": sorted(f.name for f in new2.fields.values() if not f.name.startswith("GGUF.")),
+               "part2_symlink": str(ple_path.resolve()) if link else None}
     print(json.dumps(receipt, indent=1))
     return 0 if tensors_equal and receipt["metadata_identical"] else 1
 
