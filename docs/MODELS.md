@@ -16,7 +16,7 @@ All three are Qwen3.8-Flash-Next-family (`qwen4exp`) models: 48 layers mixing li
 | On disk | 63.9 GiB | 63.9 GiB | 72.0 GiB |
 | Context | 128K (131072) | 128K (131072) | 128K (131072) |
 | Output ceiling | 80K | 80K | 80K |
-| K / V cache | F16 / F16 | F16 / F16 | F16 / F16 |
+| K / V cache | INT8 / INT8 | INT8 / INT8 | INT8 / INT8 |
 | Prefill chunk | 2048 | 2048 | 1024 |
 | Memory plan at 128K | 43.16 GiB + 0.57 vision | 43.16 GiB + 0.57 vision | 49.14 GiB + 1.67 vision |
 | Metal headroom (51.84 GiB limit) | 8.11 GiB | 8.11 GiB | 1.03 GiB |
@@ -27,7 +27,7 @@ All three are Qwen3.8-Flash-Next-family (`qwen4exp`) models: 48 layers mixing li
 
 ## KV cache
 
-Every model uses the same cache policy, fixed by the runtime's Qwen4Exp graph: K and V in F16 (34,176 bytes per token across the full-attention layers, 4.17 GiB at 128K including the F32 indexer keys), block keys F16. **A Q8 KV cache was requested for this release; the runtime has no quantized KV path for this architecture**, so F16 remains. Disk KV checkpoints (12 GiB budget) are enabled for all three.
+Every model uses the same cache policy, Splash-m1's: symmetric INT8 K and V with per-token-head F32 scales in 32-token pages (13,248 bytes per token, 1.62 GiB at 128K), a prefix cache, and long requests' KV spilled to an SSD cache. This also delivers the 8-bit KV cache requested earlier, which the native runtime could not (its Qwen4Exp graph only has F16 K/V: 34,176 bytes per token, 4.17 GiB at 128K). Backend evaluation and measurements: [BACKENDS.md](BACKENDS.md).
 
 ## Measured performance
 

@@ -17,9 +17,9 @@
 
 | Model | Reasoning | Context | K / V cache | Default |
 |---|---|---:|---|---|
-| Scope Vanilla | LOW | 128K | F16 / F16 | yes |
-| Swift 1.5 | LOW, MEDIUM | 128K | F16 / F16 | no |
-| Cyber | OFF, LOW, MEDIUM, XHIGH | 128K | F16 / F16 | no |
+| Scope Vanilla | LOW | 128K | INT8 / INT8 | yes |
+| Swift 1.5 | LOW, MEDIUM | 128K | INT8 / INT8 | no |
+| Cyber | OFF, LOW, MEDIUM, XHIGH | 128K | INT8 / INT8 | no |
 
 Changing reasoning on a running model never restarts it; the effort is carried per request by the agent's provider file. Swift LOW and MEDIUM keep separate session namespaces.
 

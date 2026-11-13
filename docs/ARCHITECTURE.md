@@ -13,7 +13,7 @@ DwarfStar is one product with three models. Everything that is not a model fact 
           dwarfstar runtime --model {scope|swift|cyber} │
                              │ start/stop/health/status │
                              ▼                          │
-   ds4-server (ds4-unified build) ──── port 8030 / 8031 / 8032 ──┘
+   Splash-m1 (1.6.1-m1-ds1) ───────── port 8030 / 8031 / 8032 ──┘
                              ▲
    Zed ── bin/dwarfstar-acp --profile <id> ── Oh My Pi ACP agent + DwarfStar tools
 ```
@@ -27,7 +27,7 @@ DwarfStar is one product with three models. Everything that is not a model fact 
 | Controller | `src/dwarfstar/runtime_control.py` | Starts, stops and health-checks one model's server. Refuses unpinned binaries or assets, enforces per-model memory admission and never loads a second model. |
 | Lifecycle | `src/dwarfstar/service.py` (`Lifecycle`) | Switches profiles: stops the other model, waits for its port, checks memory, starts, health-checks. Same-model effort changes do not restart. |
 | Agent | `src/dwarfstar/agent.py`, `acp/`, `agent-tools/` | One ACP launcher for every profile. Full Auto, workspace/shell/browser/KimiCU/vision tools, compaction and recovery are identical across profiles; only the provider file (model + effort) differs. |
-| Runtime | `native/` → `<data>/runtime/ds4-unified/` | The pinned Paperniuk ds4 build plus the Swift tokenizer adapter and optional telemetry hooks (inactive unless enabled by environment). Token-identical to the reference builds for all three models. |
+| Runtime | `backends/splash-m1/` → `<data>/backends/splash-m1/1.6.1-m1-ds1/` | Splash-m1 1.6.1-m1 built from source with DwarfStar's patches (`scripts/backends/build_splash.sh`), pinned by engine, shader and metadata-adapter hashes. The native ds4 build (`native/` → `<data>/runtime/ds4-unified/`) stays installed as the rollback (`runtime_overrides`). |
 | Telemetry | `src/dwarfstar/telemetry/`, `native/telemetry/` | Fire-and-forget UDP events from runtime, controller and agent; the hub aggregates and streams them. Detail (router rows) is only produced while a subscriber asks for it. |
 | UI | `app/workstation/web/` | Run, Chats, Models, Live, Visualizer, Diagnostics. Benchmark data is engineering infrastructure (`research/`, `scripts/`), not a Workstation page. Plain JS, served only on loopback. |
 | Editor | `src/dwarfstar/zed.py` | Seven generated Zed entries, all `bin/dwarfstar-acp --profile <id>`. |
@@ -39,9 +39,9 @@ DwarfStar is one product with three models. Everything that is not a model fact 
 
 | Common to every model | Value |
 |---|---|
-| Runtime build | `ds4-unified` (pinned ds4 + Swift tokenizer adapter + optional telemetry) |
+| Runtime build | `splash-m1-1.6.1-ds1` for every model (rollback: `ds4-unified`) |
 | Context / output ceiling | 131072 / 81920 tokens |
-| K / V cache | F16 / F16 (the Qwen4Exp graph has no quantized KV; Q8 KV is future runtime work) |
+| K / V cache | INT8 / INT8 (Splash-m1; the native rollback runs F16) |
 | Prefill chunk | 2048 tokens |
 | Sampling | temperature 1.0, top-p 0.95, top-k 20 |
 | MTP, vision, PLE | MTP on (adaptive); projector resident; n-gram table read from disk |

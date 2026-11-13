@@ -46,15 +46,17 @@ Same machine, same GGUF, same prompts, temperature 0, reasoning LOW, one request
 
 Splash clears the 15 % bar on effective generation and end-to-end time and saves 4 GiB, with the same answers. It costs ~9 s more load and the visualizer's router/PLE/MTP detail.
 
-## Recommendation
+## Decision (2026-11-13): one runtime, Splash-m1, for every model
 
-| Model | Native | Splash-m1 | Native oMLX | Recommended |
+| Model | Native ds4 | Splash-m1 1.6.1-m1-ds1 | MLX / oMLX | Production |
 |---|---|---|---|---|
-| Scope | works (control) | **faster, leaner, equal answers** | not practical | **Splash-m1**, once integrated behind DwarfStar's lifecycle and validated |
-| Swift 1.5 | works | tokenizer profile unsupported | not practical | **Native** |
-| Cyber | works at 128K | BF16 trunk unsupported | not practical | **Native** |
+| Scope | works | faster, leaner, equal answers | not practical | **Splash-m1** |
+| Swift 1.5 | works | faster, leaner, equal answers (tokenizer patch) | not practical | **Splash-m1** |
+| Cyber | works at 128K | faster, 4.5 GiB leaner, equal answers (exact-BF16 patch) | not practical | **Splash-m1** |
 
-Native remains production for every model until the Splash adapter passes the lifecycle matrix and the user approves moving the default model's backend.
+`config/runtime-policy.json` (version 2026.11.3) makes `splash-m1-1.6.1-ds1` the runtime of every model. Validation on the promoted default: lifecycle matrix 14/14, same-family 14/14, cross-family 9/9, regression 4/4; 120K needle passed on Swift (428.8 s) and Cyber (431.6 s vs native's 453.8 s; decode 37.8 vs 20.0 tok/s; peak 49.4 vs 52.9 GiB); vision on all three; agent shell-tool turns through the Workstation on Swift MEDIUM and Cyber XHIGH.
+
+**Rollback.** The native runtime stays installed and pinned. Per model: `"runtime_overrides": {"scope": "ds4-unified"}` in `config/local.json` (or `DWARFSTAR_RUNTIME_OVERRIDE=scope=ds4-unified`), then `bin/dwarfstar generate`; verified (Scope started on ds4-server and answered). Whole product: the tag `rollback/native-default-20261113`.
 
 ## Reproducing
 

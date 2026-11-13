@@ -1,12 +1,20 @@
 [
  {
-  "id": "kv-q8-unsupported",
+  "id": "splash-telemetry",
   "models": [
    "scope",
    "swift",
    "cyber"
   ],
-  "text": "Q8 KV cache was requested but the pinned runtime's Qwen4Exp graph has no quantized KV path (K/V allocated and read as F16). K and V stay F16 for every model; adding Q8 KV would be a new cache backend."
+  "text": "Splash-m1 reports requests, prefill/decode rates, context and its memory plan, but not per-token router selections, PLE reads or draft acceptance; the Visualizer labels those regions instead of drawing them. The native rollback runtime reports them."
+ },
+ {
+  "id": "splash-dflash-draft",
+  "models": [
+   "swift",
+   "cyber"
+  ],
+  "text": "Speculative decoding uses the DFlash2 draft trained for the base Qwen3.8-Flash-Next; it is verified by each model, so outputs are unaffected, but acceptance (and so the speed-up) is that of a base-model draft for the fine-tuned Swift and Cyber."
  },
  {
   "id": "cyber-opening-robustness",
