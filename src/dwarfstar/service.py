@@ -27,7 +27,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from dwarfstar import catalog, telemetry
-from dwarfstar.paths import CODE, DATA, child_environment
+from dwarfstar.paths import CODE, DATA, LOGS, child_environment
 
 WEB_ROOT = CODE / "app" / "workstation" / "web"
 STATE_FILE = DATA / "state" / "workstation.json"
@@ -76,10 +76,11 @@ def model_states(detail: bool = False) -> dict[str, dict]:
         row = {"ok": True, "running": status["running"], "healthy": status["healthy"], "pid": status.get("pid"),
                "endpoint": status.get("endpoint"), "uptime_s": status.get("uptime_s"), "phase": status.get("phase"),
                "memory_plan": status.get("memory_plan"), "load_seconds": status.get("load_seconds"),
-               "mtp_state": status.get("mtp_state"), "collection_errors": status.get("collection_errors", [])}
+               "speculative": status.get("speculative"), "splash": status.get("splash") or {},
+               "last_request": status.get("last_request") or {},
+               "collection_errors": status.get("collection_errors", [])}
         if detail:
             row["request"] = status.get("request")
-            row["native"] = status.get("native")
             row["resources"] = status.get("resources")
             row["log"] = status.get("log")
             row["permissions"] = status.get("permissions")
@@ -148,11 +149,33 @@ def consistent_active(running: list[str]) -> str | None:
     return None
 
 
-def lifecycle_log(record: dict) -> None:
-    """Append-only lifecycle journal in the data root, so a failed switch can be diagnosed afterwards."""
+LIFECYCLE_LOG_BYTES = 5 << 20  # rotated at this size; the current file and LIFECYCLE_LOG_KEEP older ones are kept
+LIFECYCLE_LOG_KEEP = 3
+
+
+def rotate_log(path: Path, limit: int = LIFECYCLE_LOG_BYTES, keep: int = LIFECYCLE_LOG_KEEP) -> bool:
+    """lifecycle.jsonl -> lifecycle.1.jsonl -> ... -> lifecycle.<keep>.jsonl, the oldest dropped."""
     try:
-        path = DATA / "logs" / "lifecycle.jsonl"
+        if path.stat().st_size < limit:
+            return False
+    except OSError:
+        return False
+    for index in range(keep, 0, -1):
+        older = path.with_name(f"{path.stem}.{index}{path.suffix}")
+        if index == keep:
+            older.unlink(missing_ok=True)
+        newer = path if index == 1 else path.with_name(f"{path.stem}.{index - 1}{path.suffix}")
+        if newer.exists():
+            newer.rename(older)
+    return True
+
+
+def lifecycle_log(record: dict) -> None:
+    """Append-only lifecycle journal in the logs root (rotated), so a failed switch can be diagnosed afterwards."""
+    try:
+        path = LOGS / "lifecycle.jsonl"
         path.parent.mkdir(parents=True, exist_ok=True)
+        rotate_log(path)
         with path.open("a") as stream:
             stream.write(json.dumps({"t": time.time(), **record}, default=str) + "\n")
     except OSError:
@@ -248,7 +271,7 @@ class Lifecycle:
     def _stop_model(self, model_id: str) -> str | None:
         """Stop one model through its controller and wait until its process and port are gone. Returns an error or None."""
         name = catalog.model(model_id)["display_name"]
-        self._step(f"Stopping {name}")
+        self._step(f"Stopping {name}", stage="stop")
         before = controller(model_id, "status", timeout=30)
         stopped = controller(model_id, "stop")
         if not stopped.get("ok"):
@@ -261,7 +284,7 @@ class Lifecycle:
             time.sleep(0.5)
         else:
             return f"{name} did not exit within {PORT_CLOSE_TIMEOUT_S} s"
-        self._step(f"{name} exited", pid=before.get("pid"), exited_model=model_id)
+        self._step(f"{name} exited", pid=before.get("pid"), exited_model=model_id, stage="stop")
         return None
 
     def _switch(self, profile_id: str) -> dict:
@@ -287,8 +310,8 @@ class Lifecycle:
             requirement = controller(target, "requirement", timeout=30)
             if requirement.get("ok"):
                 self._step(f"Memory check: needs {requirement['required_gib']:.1f} GiB, "
-                           f"{requirement['available_gib']:.1f} GiB available", requirement=requirement)
-            self._step(f"Starting {catalog.model(target)['display_name']}")
+                           f"{requirement['available_gib']:.1f} GiB available", requirement=requirement, stage="memory")
+            self._step(f"Starting {catalog.model(target)['display_name']}", stage="load")
             started = controller(target, "start")
             if not started.get("ok"):
                 # A start can be reported as failed while the server actually came up (for example a controller
@@ -303,7 +326,8 @@ class Lifecycle:
                         controller(target, "stop")
                     return self._fail(started.get("error", "start failed"))
             else:
-                self._step(f"Loaded in {started.get('load_seconds', 0):.1f} s", load_seconds=started.get("load_seconds"))
+                self._step(f"Loaded in {started.get('load_seconds', 0):.1f} s", load_seconds=started.get("load_seconds"), stage="load")
+        self._step("Health check", stage="health")
         health = {}
         for _attempt in range(catalog.policy()["lifecycle"]["health_attempts_after_start"]):
             health = controller(target, "health", timeout=30)
@@ -315,7 +339,7 @@ class Lifecycle:
             store_active(None)
             return self._fail("Health check failed after start; the model was stopped.")
         store_active(profile_id)
-        self._step(f"Ready: {profile['label']}", ready=True)
+        self._step(f"Ready: {profile['label']}", ready=True, stage="ready")
         return {"ok": True, "profile": profile}
 
     def _stop_all(self) -> dict:
@@ -343,6 +367,7 @@ def state_document(lifecycle: Lifecycle | None = None, detail: bool = False) -> 
         "ok": True,
         "selected_profile": selected,
         "active_profile": consistent_active(running),
+        "last_chat": _read_state().get("last_chat"),
         "default_profile": catalog.default_profile()["id"],
         "running_models": running,
         "models": states,
@@ -415,8 +440,28 @@ class Service:
                                  record=False)
             self.stop_flag.wait(1.0)
 
+    def recover(self) -> dict:
+        """Reconcile saved state with reality: ownership ledgers, chats interrupted mid-reply, open telemetry sessions.
+        Never stops or signals a process; a valid running model is kept and reconnected."""
+        from dwarfstar import chats
+
+        report = {"t": time.time(), "models": {}, "interrupted_chats": [], "telemetry_sessions_finalized": getattr(self.hub, "finalized", [])}
+        for model_id in catalog.models():
+            report["models"][model_id] = controller(model_id, "reconcile", timeout=60)
+        if not self.turns.active:
+            report["interrupted_chats"] = chats.recover_interrupted()
+        running = [m for m, row in report["models"].items() if row.get("ledger") in ("valid", "adopted")]
+        if not running:
+            store_active(None)
+        self.recovery = report
+        lifecycle_log({"recovery": report})
+        self.invalidate()
+        return report
+
     def run(self) -> None:
         self.hub.start()
+        self.recovery = {}
+        threading.Thread(target=self.recover, name="recovery", daemon=True).start()
         threading.Thread(target=self._system_loop, name="system-sampler", daemon=True).start()
         service = self
 
@@ -458,7 +503,12 @@ class Service:
                     if path == "/api/catalog":
                         return self._json(service.catalog_document())
                     if path == "/api/state":
-                        return self._json(service.state(detail="detail" in query))
+                        with service.turns.lock:  # chats mid-reply: a switch would interrupt them
+                            answering = sorted(service.turns.active)
+                        from dwarfstar.approval_policy import status as permission_status
+
+                        return self._json({**service.state(detail="detail" in query), "answering_chats": answering,
+                                           "permissions": permission_status()})
                     if path == "/api/live":
                         return self._json({"ok": True, "live": service.hub.snapshot(), "system": service.system_cache})
                     if path == "/api/heat":
@@ -478,16 +528,52 @@ class Service:
 
                         flag = query.get("archived", ["0"])[0]
                         archived = None if flag == "all" else flag == "1"
-                        return self._json({"ok": True, "chats": chats.list_chats(query.get("q", [None])[0], archived)})
+                        return self._json({"ok": True, "chats": chats.list_chats(query.get("q", [None])[0], archived, query.get("tag", [None])[0],
+                                                                                 query.get("starred", ["0"])[0] == "1"),
+                                           "tags": chats.all_tags()})
+                    if path == "/api/zed-threads":
+                        from dwarfstar import shared_sessions
+
+                        return self._json({"ok": True, "threads": shared_sessions.zed_threads()})
+                    if path == "/api/zed-threads/read":
+                        from dwarfstar import shared_sessions
+
+                        session = query.get("session", [""])[0]
+                        thread = next((t for t in shared_sessions.zed_threads() if t["session_id"] == session and t["source"]), None)
+                        if thread is None:
+                            return self._json({"ok": False, "error": "That thread's session file is not on this Mac"}, 404)
+                        return self._json({"ok": True, "read_only": True, "thread": thread,
+                                           "messages": shared_sessions.visible_transcript(Path(thread["source"]))})
+                    if path.startswith("/api/chats/") and path.endswith("/export"):
+                        from dwarfstar import chats
+
+                        name, media, body = chats.export(path.split("/")[3], query.get("format", ["md"])[0])
+                        data = body.encode()
+                        self.send_response(200)
+                        self.send_header("Content-Type", media)
+                        self.send_header("Content-Disposition", f'attachment; filename="{name}"')
+                        self.send_header("Content-Length", str(len(data)))
+                        self.send_header("Cache-Control", "no-store")
+                        self.end_headers()
+                        self.wfile.write(data)
+                        return
                     if path.startswith("/api/chats/"):
                         from dwarfstar import chats
 
                         chat_id = path.split("/")[3]
-                        return self._json({"ok": True, "chat": chats.get(chat_id), "progress": service.turns.progress(chat_id)})
+                        chat = chats.get(chat_id)
+                        if "open" in query:
+                            _write_state(last_chat=chat_id)
+                        return self._json({"ok": True, "chat": chat, "progress": service.turns.progress(chat_id)})
                     if path == "/api/benchmarks":
                         return self._json(service.benchmarks_document())
                     if path == "/api/diagnostics":
                         return self._json(service.diagnostics_document())
+                    if path == "/api/setup":
+                        from dwarfstar import diagnostics
+
+                        rows = diagnostics.checks()
+                        return self._json({"ok": True, "checks": rows, "summary": diagnostics.summary(rows)})
                     if path.startswith("/api/"):
                         return self._json({"ok": False, "error": "Unknown endpoint"}, 404)
                     return self._static(path)
@@ -516,12 +602,27 @@ class Service:
                         catalog.profile(str(body.get("profile", "")))
                         store_selection(body["profile"])
                         result = {"ok": True, "selected_profile": body["profile"]}
+                    elif path == "/api/permissions":
+                        from dwarfstar import approval_policy
+
+                        result = {"ok": True, "permissions": approval_policy.set_mode(str(body.get("mode", "")), body.get("confirm"))}
+                        lifecycle_log({"event": "approval_mode", "mode": body.get("mode")})
+                    elif path == "/api/diagnostics/reconcile":
+                        result = {"ok": True, **service.recover()}
                     elif path == "/api/chats":
                         from dwarfstar import chats
 
                         state = service.state()
                         profile_id = body.get("profile") or state.get("active_profile") or stored_selection()
                         result = {"ok": True, "chat": chats.summary(chats.create(str(profile_id)))}
+                    elif path == "/api/zed-threads/link":
+                        from dwarfstar import chats
+
+                        result = {"ok": True, "chat": chats.summary(chats.link_zed_thread(str(body.get("session", ""))))}
+                    elif path == "/api/chats-bulk":
+                        from dwarfstar import chats
+
+                        result = chats.bulk(body.get("ids") or [], str(body.get("action", "")), str(body.get("confirm", "")))
                     elif path.startswith("/api/chats/"):
                         from dwarfstar import chats
 
@@ -535,6 +636,16 @@ class Service:
                             result = {"ok": True, "chat": chats.summary(chats.set_archived(chat_id, bool(body.get("archived", True))))}
                         elif action == "delete":
                             result = chats.delete(chat_id, str(body.get("confirm", "")))
+                        elif action == "permission":
+                            result = service.turns.answer_permission(chat_id, body.get("option"))
+                        elif action == "organize":
+                            result = {"ok": True, "chat": chats.summary(chats.organize(chat_id, body.get("pinned"), body.get("starred"), body.get("tags")))}
+                        elif action == "share-zed":
+                            result = chats.share_with_zed(chat_id)
+                        elif action == "fork":
+                            upto = body.get("upto")
+                            record = chats.fork(chat_id, int(upto) if upto is not None else None, body.get("messages", True) is not False)
+                            result = {"ok": True, "chat": chats.summary(record)}
                         else:
                             return self._json({"ok": False, "error": "Unknown endpoint"}, 404)
                     elif path == "/api/launch":
@@ -636,33 +747,13 @@ class Service:
             return {"ok": False, "error": "Benchmark index has not been generated (run `dwarfstar bench-index`)."}
 
     def diagnostics_document(self) -> dict:
-        from dwarfstar import instance, zed
+        from dwarfstar import diagnostics
 
-        rows = {}
-        for model_id in catalog.models():
-            problems = []
-            try:
-                problems = instance.check(model_id)
-            except Exception as error:
-                problems = [str(error)]
-            rows[model_id] = {
-                "generated_config": "matches the catalog" if not problems else problems,
-                "instance": str(instance.instance(model_id)),
-                "runtime": catalog.runtime_pin(model_id)["id"],
-            }
-        try:
-            editor = zed.check()
-        except Exception as error:
-            editor = {"ok": False, "error": str(error)}
-        seal = DATA / "DWARFSTAR-PRODUCTION-SEAL.json"
-        return {
-            "ok": True,
-            "code_root": str(CODE), "data_root": str(DATA),
-            "models": rows, "editor_entries": editor,
-            "seal": {"path": str(seal), "present": seal.is_file()},
-            "telemetry": {"hub": self.hub.snapshot()["hub"], "sessions_directory": str(DATA / "telemetry" / "sessions")},
-            "state": self.state(detail=True),
-        }
+        document = diagnostics.document(self.state(detail=True), self.hub.snapshot(), self.system_cache or self.sampler.sample(None),
+                                        self.hub.snapshot()["hub"], self.turns)
+        document["recovery"] = self.recovery
+        document["backends"] = {m: catalog.model(m)["backend"] for m in catalog.models()}
+        return document
 
 
 def main(argv: list[str]) -> int:

@@ -1,0 +1,56 @@
+diff --git a/dev/tests/install/test_gguf_metadata.py b/dev/tests/install/test_gguf_metadata.py
+index 8ed6a58..329938e 100644
+--- a/dev/tests/install/test_gguf_metadata.py
++++ b/dev/tests/install/test_gguf_metadata.py
+@@ -194,6 +194,25 @@ class GgufMetadataTests(unittest.TestCase):
+             metadata.values["tokenizer.chat_template"],
+         )
+ 
++    def test_qwen2_profile_keeps_qwen2_letters_and_nfc(self):
++        # Qwen2-family GGUFs (Swift 1.5's) declare tokenizer.ggml.pre qwen2:
++        # NFC, then Qwen2's letter class without combining marks.
++        files = gguf.tokenizer_files(
++            self.metadata(fixture() | {"tokenizer.ggml.pre": "qwen2"})
++        )
++        backend = Tokenizer.from_str(files["tokenizer/tokenizer.json"].decode())
++        self.assertEqual(backend.encode("e\u0301").ids, backend.encode("é").ids)
++        for word in ("क्", "a\u035c"):
++            self.assertEqual(len(backend.pre_tokenizer.pre_tokenize_str(word)), 2)
++        self.assertEqual(
++            backend.encode("ab<think><|im_end|>", add_special_tokens=False).ids,
++            [256, 259, 258],
++        )
++        self.assertEqual(
++            [piece for piece, _ in backend.pre_tokenizer.pre_tokenize_str("it's 42")],
++            ["it", "'s", "Ġ", "4", "2"],
++        )
++
+     def test_invalid_tokenizer_metadata_is_rejected(self):
+         types = fixture()["tokenizer.ggml.token_type"]
+         for key, value in (
+diff --git a/install/gguf.py b/install/gguf.py
+index 6801b45..0c6f802 100644
+--- a/install/gguf.py
++++ b/install/gguf.py
+@@ -161,6 +161,13 @@ QWEN35_PATTERN = (
+     r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?[\p{L}\p{M}]+|\p{N}"
+     r"| ?[^\s\p{L}\p{M}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+"
+ )
++# The qwen2 profile, as Qwen2-family tokenizer.json files (Swift 1.5's among
++# them) split text: Qwen2's letter class without combining marks, after the
++# same NFC normalizer and before the same byte-level BPE.
++QWEN2_PATTERN = (
++    r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}"
++    r"| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+"
++)
+ # The flint profile, as Flint's own tokenizer.json splits text before its
+ # byte-level BPE, without a normalizer: digits in runs of up to three, runs
+ # of Han, hiragana and katakana, then o200k's pattern.
+@@ -177,6 +184,7 @@ FLINT_PATTERNS = (
+ # for: the patterns that split text, each isolating its matches, in order,
+ # and whether text is NFC-normalized before them.
+ TOKENIZER_PROFILES = {
++    "qwen2": ((QWEN2_PATTERN,), True),
+     "qwen35": ((QWEN35_PATTERN,), True),
+     "flint": (FLINT_PATTERNS, False),
+ }

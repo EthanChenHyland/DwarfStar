@@ -32,9 +32,9 @@ sys.path.insert(0, str(HERE))
 
 from api_client import chat  # noqa: E402
 from dwarfstar import catalog  # noqa: E402
-from dwarfstar.paths import DATA, scratch_root  # noqa: E402
+from dwarfstar.paths import EVIDENCE, scratch_root  # noqa: E402
 
-OUT = DATA / "evidence" / "production-validation"
+OUT = EVIDENCE / "production-validation"
 STEPS = OUT / "steps"
 SERVICE = "http://127.0.0.1:8038"
 

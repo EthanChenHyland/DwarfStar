@@ -47,11 +47,13 @@ def entries(path):
 def catalog():
     mapping = {"state_namespaces": namespaces()}
     rows = sidebar()
-    roots = {Path.home() / "Library/Application Support/DwarfStar Workstation/scratch", scratch_root(), *INSTANCES.glob("*/scratch")}
+    from dwarfstar.shared_sessions import MOVED_WORKSPACES, _locate
+
+    roots = {*MOVED_WORKSPACES.values(), scratch_root(), *INSTANCES.glob("*/scratch")}
     for row in rows:
         for path in (row.get("folder_paths") or "").split("\n"):
-            p = Path(path)
-            if p.is_dir():
+            p, _ = _locate(path) if path else (Path(), False)
+            if path and p.is_dir():
                 roots.add(p)
     sessions = {}
     seen = set()

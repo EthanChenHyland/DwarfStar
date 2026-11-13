@@ -11,7 +11,12 @@ import hashlib, json, os, sys, time
 from dwarfstar.paths import SHARED_CONFIG
 
 CONFIG = SHARED_CONFIG / "approval.json"
-MODES = {"full_auto": "Full Auto", "safe_auto": "Safe Auto", "ask": "Ask"}
+MODES = {"full_auto": "Full Auto", "safe_auto": "Workspace Auto", "ask": "Ask"}
+DESCRIPTIONS = {
+    "ask": "Every tool call waits for your approval (in Zed's panel, or as a prompt in the Workstation chat).",
+    "safe_auto": "Tools run without asking inside the chat's workspace folder, in a macOS sandbox; anything outside it is refused.",
+    "full_auto": "Every tool call runs without asking, outside any sandbox: shell, files anywhere, browser and computer use.",
+}
 
 
 def mode(value=None):
@@ -23,11 +28,27 @@ def mode(value=None):
     return selected
 
 
+def set_mode(value, confirm=None):
+    """Change the installation's approval mode for new agent sessions. Full Auto needs explicit confirmation."""
+    if value not in MODES:
+        raise ValueError("Invalid DwarfStar approval mode")
+    if value == "full_auto" and confirm != "full_auto":
+        raise ValueError("Full Auto lets the agent run any tool without asking; confirm it explicitly")
+    CONFIG.parent.mkdir(parents=True, exist_ok=True)
+    temporary = CONFIG.with_suffix(".tmp")
+    temporary.write_text(json.dumps({"schema": 1, "approval_mode": value, "changed": time.time()}, indent=2) + "\n")
+    temporary.replace(CONFIG)
+    return status()
+
+
 def status():
     selected = mode()
     return {
         "approval_mode": selected,
         "label": MODES[selected],
+        "description": DESCRIPTIONS[selected],
+        "modes": [{"id": k, "label": MODES[k], "description": DESCRIPTIONS[k]} for k in ("ask", "safe_auto", "full_auto")],
+        "environment_override": os.environ.get("DWARFSTAR_APPROVAL_MODE") is not None,
         "default": selected,
         "scope": "New DwarfStar ACP sessions; historical sessions unchanged",
         "os_authorization": "External OS authorization required when enforced by macOS",

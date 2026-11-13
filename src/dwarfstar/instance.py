@@ -7,7 +7,7 @@ runtime root under ``<data>/instances/<model>/`` containing:
 * ``acp/profiles.json``       the model's selectable profiles, agent-facing
 * ``acp/providers/<id>.yml``  one provider file per profile (pins the effort)
 * ``assets.json``             verified identity of the model files in use
-* ``state/ cache/ home/ scratch/ benchmarks/``  mutable local state
+* ``state/ home/ scratch/``  mutable local state
 
 Generated files are never edited by hand: ``check`` reports drift and
 ``generate`` rewrites them.
@@ -17,14 +17,13 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import shutil
 import time
 from pathlib import Path
 
 from dwarfstar import catalog
-from dwarfstar.paths import CODE, DATA, RUNTIMES, instance, scratch_root
+from dwarfstar.paths import ASSETS, CACHE, CODE, DATA, STATE, instance, scratch_root
 
-MUTABLE_DIRECTORIES = ("state", "cache/native-kv", "home", "scratch", "benchmarks", "acp/providers")
+MUTABLE_DIRECTORIES = ("state", "home", "scratch", "acp/providers")
 
 
 def sha256_file(path: Path, chunk: int = 8 << 20) -> str:
@@ -47,74 +46,40 @@ def atomic_write(path: Path, text: str, mode: int = 0o644) -> None:
 
 
 def runtime_directory(model_id: str) -> Path:
-    return DATA / catalog.runtime_pin(model_id)["directory"]
+    return ASSETS / catalog.runtime_pin(model_id)["directory"]
 
 
 def runtime_manifest(model_id: str) -> dict:
-    path = runtime_directory(model_id) / "manifest.json"
-    try:
-        return json.loads(path.read_text())
-    except (OSError, ValueError):
-        raise RuntimeError(f"Native runtime is not installed: {path}. Run `dwarfstar runtime-install`.") from None
-
-
-def install_runtime(runtime_id: str, binary: Path, shaders: Path, provenance: str) -> dict:
-    """Copy a built server and its shader sources into the data root and record their hashes."""
-    pins = catalog.load()["runtimes"]["runtimes"]
-    pin = pins[runtime_id]
-    digest = sha256_file(binary)
-    if digest != pin["binary_sha256"]:
-        raise RuntimeError(f"{binary} is {digest}, but the catalog pins {pin['binary_sha256']} for {runtime_id}")
-    target = DATA / pin["directory"]
-    target.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(binary, target / "ds4-server")
-    (target / "ds4-server").chmod(0o755)
-    metal = target / "metal"
-    if metal.exists():
-        shutil.rmtree(metal)
-    shutil.copytree(shaders, metal, symlinks=False)
-    manifest = {
-        "schema": 1,
-        "runtime": runtime_id,
-        "binary_sha256": digest,
-        "shader_sha256": {p.name: sha256_file(p) for p in sorted(metal.iterdir()) if p.is_file()},
-        "installed_at": time.time(),
-        "provenance": provenance,
-    }
-    atomic_write(target / "manifest.json", json.dumps(manifest, indent=2) + "\n")
-    return manifest
+    """The pinned hashes of the installed runtime (config/runtimes.json); the controller re-checks the files."""
+    pin = catalog.runtime_pin(model_id)
+    return {"schema": 1, "runtime": pin["id"], "binary_sha256": pin["binary_sha256"], "shader_sha256": pin["shader_sha256"],
+            "adapter_sha256": pin["adapter_sha256"]}
 
 
 # ------------------------------------------------------------- generated files
 
 
 def server_command(model_id: str) -> tuple[list[str], dict[str, str]]:
+    """Splash-m1 serving one model: its split GGUF, draft model and projector from the assets root, its port, served
+    id and context. HOME is the runtime's own state directory under the data root."""
     model = catalog.model(model_id)
-    root = instance(model_id)
+    pin = catalog.runtime_pin(model_id)
+    root = runtime_directory(model_id)
     assets = catalog.asset_paths(model_id)
     argv = [
-        str(runtime_directory(model_id) / "ds4-server"),
-        "-m", str(assets["main"]),
-        "--mtp",
-        "--mtp-timing",
-        "--ctx", str(model["context"]),
-        "--prefill-chunk", str(model["prefill_chunk"]),
-        "--host", "127.0.0.1",
-        "--port", str(model["port"]),
-        "--kv-disk-dir", str(root / "cache/native-kv"),
-        "--kv-disk-space-mb", str(model["cache"]["disk_checkpoints"]["budget_mb"]),
-        "--kv-cache-continued-interval-tokens", str(model["cache"]["disk_checkpoints"]["continued_interval_tokens"]),
-        "--vision", str(assets["vision"]),
-        "--tokens", str(model["max_output"]),
+        str(root / "python/bin/python3"), "-u", str(root / "install/launcher.py"), "serve",
+        "--model", model["splash_model_name"],
+        "--model-dir", str(assets["main"]),  # part 1; Splash finds part 2 beside it by its -00002-of-00002 name
+        "--mmproj", str(assets["vision"]),
+        "--draft-model", str(assets["draft"].parent),
+        "--offline", "--no-webui",
+        "--host", "127.0.0.1", "--port", str(model["port"]),
+        "--max-context", str(model["context"]),
+        "--served-model-name", model["served_model_id"],
+        # Splash keeps long requests' KV in a transient SSD cache in the per-user temp folder, removed when it exits
+        # (a fixed --cache-dir needs --persistent-cache, which would change that behaviour).
     ]
-    environment = {
-        "HOME": str(root / "home"),
-        "DS4_QWEN_NGRAM_GGUF": str(assets["ple"]),
-        "DS4_QWEN_MTP_GGUF": str(assets["mtp"]),
-        **catalog.policy()["runtime"]["environment"],
-    }
-    environment.update(model.get("runtime_environment", {}))
-    return argv, environment
+    return argv, {"HOME": str(DATA / pin["home"])}
 
 
 def runtime_config(model_id: str) -> dict:
@@ -138,14 +103,15 @@ def runtime_config(model_id: str) -> dict:
         "thinking": True,
         "reasoning_effort": "per profile",
         "reasoning_efforts": model["reasoning_efforts"],
-        "mtp": "native enabled; default adaptive depth; no depth/acceptance tuning",
+        "speculative": model["backend"]["speculative"],
         "sampling": model["sampling"],
         "argv": argv,
         "environment": environment,
         "server_sha256": manifest["binary_sha256"],
         "shader_sha256": manifest["shader_sha256"],
-        "output_budgeting": "native server_decode_budget uses exact session context room; no client arithmetic patch",
+        "adapter_sha256": manifest["adapter_sha256"],
         "model_files": {role: str(path) for role, path in catalog.asset_paths(model_id).items()},
+        "backend": {k: model["backend"][k] for k in ("id", "kind", "release")},
         "scratch_directory": str(scratch_root()),
         "memory": model["memory"],
     }
@@ -251,11 +217,12 @@ def expected(model_id: str) -> dict[str, str]:
 
 
 def link_agent_tool_data() -> None:
-    """agent-tools keeps its mutable state and browser cache under the data root (machine-local, not in Git)."""
-    for name in ("state", "cache"):
-        target = DATA / name / "agent-tools"
+    """agent-tools keeps its mutable state in DATA and its browser cache in CACHE (machine-local, not in Git)."""
+    for name, target in (("state", STATE / "agent-tools"), ("cache", CACHE / "agent-tools")):
         target.mkdir(parents=True, exist_ok=True)
         link = CODE / "agent-tools" / name
+        if link.is_symlink() and Path(os.readlink(link)) != target:
+            link.unlink()  # roots moved: point the link at the current one
         if not link.exists() and not link.is_symlink():
             link.symlink_to(target)
     from dwarfstar.paths import omp_packages
@@ -315,7 +282,7 @@ def verify_assets(model_id: str, full_hash: bool = False) -> dict:
         previous = {}
     rows, errors = [], []
     for role, asset in model["assets"].items():
-        path = DATA / asset["path"]
+        path = ASSETS / asset["path"]
         if not path.is_file():
             errors.append(f"{role}: missing {asset['path']}")
             continue

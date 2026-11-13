@@ -1,17 +1,17 @@
 # Benchmarks
 
-All results come from the canonical reports on the reference machine (M1 Max, 64 GiB) and are collected into `research/benchmark-index.json` by `dwarfstar bench-index` (87 entries). The Workstation's **Benchmarks** view renders the same index. Raw evidence stays outside the repository.
-
-![Benchmarks](assets/benchmarks.png)
+All results come from the canonical reports on the reference machine (M1 Max, 64 GiB) and are collected into `research/benchmark-index.json` by `dwarfstar bench-index` (87 entries). It is engineering infrastructure: the Workstation shows each model's measured numbers on its Models page and has no benchmark browser. Raw evidence stays outside the repository.
 
 ## How to read them
 
 * **One natural attempt.** Agent tasks are scored on the first attempt with frozen validators; no repair, retry or fallback unless stated.
 * **Timing.** Load, time to first token, prefill, decode and task wall measure different intervals and are never added. Client-measured decode on long answers includes reasoning tokens.
-* **MTP acceptance** is the share of drafted tokens accepted by the main model.
+* **Draft/MTP acceptance** is the share of drafted tokens accepted by the main model. The 2026-11-12 validation below ran on the native runtime (MTP head); the production runtime is now Splash-m1 with a DFlash2 draft, whose current per-model numbers are in [MODELS.md](MODELS.md) and [DRAFT-MODELS.md](DRAFT-MODELS.md).
 * **Not measured** means not measured; nothing is estimated.
 
-## Production validation (2026-11-12)
+> The validation below is the 2026-11-12 release pass on the **native** runtime, kept as the dated record for that release. Native was retired on 2026-11-13 after Splash-m1 passed the backend A/B, the lifecycle matrix and the 120K-depth runs on all three models (see [BACKENDS.md](BACKENDS.md)); the cross-runtime equivalence and the current Splash measurements supersede these numbers. Its router/MTP/PLE telemetry reflects the native runtime, which reported that detail.
+
+## Production validation (2026-11-12, native runtime)
 
 The release's own runtime pass, driven through the product (Workstation switch, `dwarfstar-acp`, live telemetry): `scripts/validate/production_validation.py`. **15 of 15 passed.** Ten model sessions in total.
 

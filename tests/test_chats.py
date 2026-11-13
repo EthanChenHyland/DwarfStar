@@ -132,6 +132,136 @@ class ChatTests(unittest.TestCase):
             chats.Turns().start(chat["id"], "hello", ["cyber"], agent_factory=FakeAgent)
         self.assertIn("Swift", str(caught.exception))
 
+    def test_pins_stars_and_tags_organize_without_reordering_by_activity(self):
+        a, b = chats.create("cyber-low"), chats.create("scope-low")
+        chats.organize(a["id"], pinned=True, starred=True, tags=["work", " work ", "pcap 2"])
+        rows = chats.list_chats()
+        self.assertEqual(rows[0]["id"], a["id"])  # pinned first although b is newer
+        self.assertEqual(rows[0]["tags"], ["work", "pcap 2"])
+        self.assertEqual([c["id"] for c in chats.list_chats(tag="work")], [a["id"]])
+        self.assertEqual([c["id"] for c in chats.list_chats(starred=True)], [a["id"]])
+        self.assertEqual([c["id"] for c in chats.list_chats(query="pcap")], [a["id"]])
+        self.assertEqual(chats.all_tags(), [{"tag": "pcap 2", "chats": 1}, {"tag": "work", "chats": 1}])
+        with self.assertRaises(chats.ChatError):
+            chats.organize(b["id"], tags=["<script>"])
+
+    def test_a_fork_copies_the_transcript_and_hands_it_to_a_fresh_agent_session(self):
+        turns = chats.Turns()
+        chat = chats.create("cyber-low")
+        self.turn(turns, chat["id"], "What is in the capture?")
+        forked = chats.fork(chat["id"])
+        self.assertEqual([m["role"] for m in forked["messages"]], ["user", "assistant"])
+        self.assertIsNone(forked["agent_session_id"])
+        self.assertEqual(forked["forked_from"]["id"], chat["id"])
+        prompts = []
+        original = FakeAgent.request
+
+        def capture(agent, method, params, timeout, on_update=None):
+            if method == "session/prompt":
+                prompts.append(params["prompt"][0]["text"])
+            return original(agent, method, params, timeout, on_update)
+
+        with mock.patch.object(FakeAgent, "request", capture):
+            self.turn(turns, forked["id"], "Go on")
+            self.turn(turns, forked["id"], "And then?")
+        self.assertIn("What is in the capture?", prompts[0])
+        self.assertTrue(prompts[0].endswith("Go on"))
+        self.assertEqual(prompts[1], "And then?")  # later turns resume the fork's own agent session
+        self.assertEqual(chats.get(forked["id"])["messages"][2]["text"], "Go on")  # the stored message is what was typed
+        self.assertEqual(len(chats.get(chat["id"])["messages"]), 2)  # the original is untouched
+        blank = chats.fork(chat["id"], keep_messages=False)
+        self.assertEqual((blank["messages"], blank["profile"]), ([], "cyber-low"))
+
+    def test_export_shows_messages_and_tools_but_no_reasoning(self):
+        turns = chats.Turns()
+        chat = chats.create("cyber-low")
+        self.turn(turns, chat["id"], "List files")
+        name, media, body = chats.export(chat["id"], "md")
+        self.assertTrue(name.endswith(".md"))
+        self.assertIn("## Assistant", body)
+        self.assertIn("tool: $ ls", body)
+        self.assertNotIn("secret reasoning", body)
+        self.assertEqual(json.loads(chats.export(chat["id"], "json")[2])["id"], chat["id"])
+
+    def test_bulk_delete_needs_the_exact_count_confirmation(self):
+        ids = [chats.create("cyber-low")["id"] for _ in range(3)]
+        chats.bulk(ids[:2], "archive")
+        self.assertEqual([c["id"] for c in chats.list_chats()], [ids[2]])
+        with self.assertRaises(chats.ChatError):
+            chats.bulk(ids, "delete", "yes")
+        with self.assertRaises(chats.ChatError):
+            chats.bulk([ids[0], "c20990101000000-abcdef"], "archive")  # nothing changes if any id is unknown
+        chats.bulk(ids, "delete", "delete 3 chats")
+        self.assertEqual(chats.list_chats(archived=None), [])
+
+    def test_tool_approvals_wait_for_the_user_in_ask_mode(self):
+        class AskingAgent(FakeAgent):
+            def request(self, method, params, timeout, on_update=None):
+                if method == "session/prompt":
+                    AskingAgent.choice = self.on_permission({"toolCall": {"toolCallId": "t9", "title": "$ rm -rf build", "kind": "execute"},
+                                                             "options": [{"optionId": "yes", "name": "Allow", "kind": "allow_once"},
+                                                                         {"optionId": "no", "name": "Reject", "kind": "reject_once"}]})
+                return super().request(method, params, timeout, on_update)
+
+        turns = chats.Turns()
+        chat = chats.create("cyber-low")
+        turns.start(chat["id"], "clean up", ["cyber"], agent_factory=AskingAgent)
+        deadline = time.time() + 5
+        while not (turns.progress(chat["id"]) or {}).get("permission") and time.time() < deadline:
+            time.sleep(0.01)
+        pending = turns.progress(chat["id"])["permission"]
+        self.assertEqual((pending["title"], [o["id"] for o in pending["options"]]), ("$ rm -rf build", ["yes", "no"]))
+        turns.answer_permission(chat["id"], "no")
+        while turns.progress(chat["id"]) and time.time() < deadline:
+            time.sleep(0.01)
+        self.assertEqual(AskingAgent.choice, "no")
+        with self.assertRaises(chats.ChatError):
+            turns.answer_permission(chat["id"], "yes")  # nothing is waiting any more
+
+    def test_a_moved_chat_keeps_its_agent_session(self):
+        workspace = Path(self.directory.name) / "moved" / "workspace"
+        old = workspace / ".omp-dwarfstar-cyber-low-agent/sessions/-old-place-workspace"
+        old.mkdir(parents=True)
+        (old / "2026-11-13T02-05-59-248Z_sess-1.jsonl").write_text('{"type":"title","v":1}\n{"type":"session","id":"sess-1","cwd":"/old/place/workspace"}\n{"type":"message","x":1}\n')
+        (old / ".2026-11-13T02-05-59-248Z_sess-1.jsonl.lock.os").write_text("")
+        (old / "2026-11-13T00-00-00-000Z_other.jsonl").write_text("{}\n")
+        self.assertEqual(chats.relocate_agent_session(workspace, "sess-1"), ["2026-11-13T02-05-59-248Z_sess-1.jsonl"])
+        target = workspace / ".omp-dwarfstar-cyber-low-agent/sessions" / chats.session_folder_name(workspace)
+        lines = (target / "2026-11-13T02-05-59-248Z_sess-1.jsonl").read_text().splitlines()
+        self.assertEqual(json.loads(lines[1])["cwd"], str(workspace))  # the header names the new place
+        self.assertEqual((lines[0], lines[2]), ('{"type":"title","v":1}', '{"type":"message","x":1}'))  # the rest is untouched
+        self.assertTrue((old / "2026-11-13T00-00-00-000Z_other.jsonl").is_file())  # other sessions untouched
+        self.assertEqual(chats.relocate_agent_session(workspace, "sess-1"), [])  # idempotent
+
+    def test_a_lost_agent_session_is_never_replaced_silently(self):
+        prompts = []
+
+        class LostAgent(FakeAgent):
+            def request(self, method, params, timeout, on_update=None):
+                if method in ("session/resume", "session/load"):
+                    raise chats.ChatError("session not found")
+                if method == "session/prompt":
+                    prompts.append(params["prompt"][0]["text"])
+                return super().request(method, params, timeout, on_update)
+
+        turns = chats.Turns()
+        chat = chats.create("cyber-low")
+        self.turn(turns, chat["id"], "What is in the capture?")
+        record = chats.get(chat["id"])
+        record["agent_session_id"] = "gone-session"
+        chats._write(record)
+        turns.start(chat["id"], "Continue", ["cyber"], agent_factory=LostAgent)
+        deadline = time.time() + 5
+        while turns.progress(chat["id"]) and time.time() < deadline:
+            time.sleep(0.01)
+        record = chats.get(chat["id"])
+        notices = [m for m in record["messages"] if m["role"] == "notice"]
+        self.assertEqual(len(notices), 1)
+        self.assertEqual(notices[0]["previous_session"], "gone-session")
+        self.assertIn("What is in the capture?", prompts[-1])  # the new session gets the transcript
+        self.assertTrue(prompts[-1].endswith("Continue"))
+        self.assertEqual(record["agent_session_id"], "agent-session-1")
+
     def test_ids_cannot_escape_the_chat_directory(self):
         with self.assertRaises(chats.ChatError):
             chats.get("../../etc/passwd")

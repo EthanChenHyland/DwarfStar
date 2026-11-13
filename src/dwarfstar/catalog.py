@@ -5,12 +5,14 @@ Everything that describes a model or a selectable profile lives in ``config/``:
 * ``config/models/<id>.json`` holds the static facts of one model family.
 * ``config/profiles.json`` lists the selectable profiles. A profile is a model
   plus a reasoning effort and nothing else.
-* ``config/runtimes.json`` pins the native runtime builds.
+* ``config/runtimes.json`` pins the one runtime build (Splash-m1 with DwarfStar's patches).
 * ``config/runtime-policy.json`` is the one runtime policy shared by every model:
-  context, output ceiling, prefill chunk, sampling, KV cache, capabilities,
+  context, output ceiling, sampling, KV cache, capabilities,
   agent policy, lifecycle and the memory formula. A model file may override a
   shared value only with a written reason (``override_reasons``).
 
+Every model file names its production assets (the two parts of its split GGUF, the draft model and the vision
+projector) with their size and SHA-256, as paths relative to the assets root (``dwarfstar.paths.ASSETS``).
 Per-model runtime configuration, agent provider files and editor entries are
 generated from this catalog (see ``dwarfstar.instance`` and ``dwarfstar.zed``).
 Nothing else is a source of truth.
@@ -21,32 +23,15 @@ import json
 from functools import lru_cache
 from pathlib import Path
 
-from dwarfstar.paths import CODE, DATA
+from dwarfstar.paths import ASSETS, CODE
 
 CONFIG = CODE / "config"
 EFFORTS = ("off", "low", "medium", "xhigh")
-ASSET_ROLES = ("main", "ple", "mtp", "vision")
+ASSET_ROLES = ("main", "ple", "draft", "vision")
 
 
 class CatalogError(ValueError):
     pass
-
-
-def _runtime_overrides() -> dict[str, str]:
-    """Local choice of native runtime build per model, for example to fall back to the reference build.
-
-    Read from ``runtime_overrides`` in ``config/local.json`` and from the
-    ``DWARFSTAR_RUNTIME_OVERRIDE`` environment variable (``model=runtime,...``).
-    """
-    import os
-
-    from dwarfstar.paths import local_config
-
-    overrides = dict(local_config().get("runtime_overrides", {}))
-    for pair in filter(None, os.environ.get("DWARFSTAR_RUNTIME_OVERRIDE", "").split(",")):
-        model_id, _, runtime_id = pair.partition("=")
-        overrides[model_id.strip()] = runtime_id.strip()
-    return overrides
 
 
 def _read(path: Path) -> dict:
@@ -76,6 +61,14 @@ def _apply_policy(raw: dict, defaults: dict) -> dict:
     return {**copy.deepcopy(defaults), **raw, "overrides": overrides}
 
 
+def _backend(model: dict, runtimes: dict) -> dict:
+    """What the runtime serving every model reports, for the user interfaces."""
+    pin = runtimes["runtimes"][model["runtime"]]
+    return {"id": model["runtime"], "kind": pin["kind"], "release": pin.get("release"), "model_name": model["splash_model_name"],
+            "telemetry": {"router": False, "ple": False, "mtp": False, "requests": True, "memory_plan": True},
+            "speculative": "DFlash2 draft model, verified by the target"}
+
+
 @lru_cache(maxsize=1)
 def load() -> dict:
     policy_file = _read(CONFIG / "runtime-policy.json")
@@ -85,11 +78,12 @@ def load() -> dict:
         if model.get("id") != path.stem:
             raise CatalogError(f"{path.name}: id must equal the file name")
         models[model["id"]] = _apply_policy(model, policy_file["model_defaults"])
-    for model_id, runtime_id in _runtime_overrides().items():
-        if model_id in models:
-            models[model_id]["runtime"] = runtime_id
-    profile_file = _read(CONFIG / "profiles.json")
     runtimes = _read(CONFIG / "runtimes.json")
+    for model in models.values():
+        if model["runtime"] not in runtimes["runtimes"]:
+            raise CatalogError(f"{model['id']}: unknown runtime {model['runtime']}")
+        model["backend"] = _backend(model, runtimes)
+    profile_file = _read(CONFIG / "profiles.json")
     models = dict(sorted(models.items(), key=lambda item: item[1].get("order", 99)))
     catalog = {"models": models, "profile_file": profile_file, "runtimes": runtimes, "policy": policy_file}
     _validate(catalog)
@@ -177,7 +171,6 @@ def memory_plan(model_id: str) -> dict:
         "metal_working_set_gib": round(metal, 2),
         "metal_working_set_source": metal_source,
         "metal_headroom_gib": round(metal - planned, 2),
-        "prefill_chunk": model(model_id)["prefill_chunk"],
         "context": model(model_id)["context"],
     }
 
@@ -224,7 +217,7 @@ def default_profile() -> dict:
 
 
 def asset_path(model_id: str, role: str) -> Path:
-    return DATA / model(model_id)["assets"][role]["path"]
+    return ASSETS / model(model_id)["assets"][role]["path"]
 
 
 def asset_paths(model_id: str) -> dict[str, Path]:
@@ -257,12 +250,12 @@ def summary() -> dict:
             "disk_bytes": disk_bytes(item["id"]),
             "memory": item["memory"],
             "memory_plan": memory_plan(item["id"]),
-            "prefill_chunk": item["prefill_chunk"],
             "overrides": item["overrides"],
             "quantization": item["quantization"],
             "source": {k: item["source"][k] for k in ("repository", "revision", "derivation") if k in item["source"]},
             "capabilities": item["capabilities"],
             "cache": item["cache"],
+            "backend": {k: item["backend"][k] for k in ("id", "kind", "release", "telemetry", "speculative")},
             "summary": item["summary"],
         })
     shared = policy()

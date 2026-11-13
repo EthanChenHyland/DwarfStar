@@ -1,14 +1,23 @@
-"""Where things live: product code, local data, and external tools.
+"""Where things live. Five roots, never mixed; only ``CODE`` is tracked by Git.
 
-Two roots, never mixed:
+=========  ==============================================  ==========================================================
+Root       Default                                         Holds
+=========  ==============================================  ==========================================================
+CODE       the repository (``~/Developer/DwarfStar``)      source, tests, scripts, docs, catalog
+ASSETS     ``~/AI/DwarfStar``                              Models/ (production weights), Runtimes/ (the Splash
+                                                           build), Manifests/ (hashes, seal, evidence), Sources/
+                                                           (build and provenance inputs), Archive/
+DATA       ``~/Library/Application Support/DwarfStar``    user data: chats, settings, per-model state and
+                                                           generated configuration, telemetry sessions, backups
+CACHE      ``~/Library/Caches/DwarfStar``                  anything recreatable: build scratch, agent and browser
+                                                           caches, the runtime's SSD KV cache
+LOGS       ``~/Library/Logs/DwarfStar``                    service, lifecycle and model-server logs (rotated)
+=========  ==============================================  ==========================================================
 
-* ``CODE`` is the repository. It holds source, configuration and documentation
-  and nothing that is large or machine-specific.
-* ``DATA`` is the local data root. It holds model files, source checkpoints,
-  caches, runtime state and logs. It is never tracked by git.
-
-The data root is resolved from, in order: the ``DWARFSTAR_DATA`` environment
-variable, ``config/local.json`` in the repository, then ``<repo>/local-data``.
+Each root is resolved from, in order: its environment variable (``DWARFSTAR_ASSETS``, ``DWARFSTAR_DATA``,
+``DWARFSTAR_CACHE``, ``DWARFSTAR_LOGS``), its key in ``config/local.json`` (``assets_root``, ``data_root``,
+``cache_root``, ``logs_root``; machine-local, never in Git), then the default. Catalog paths are relative to their
+root, so moving the model set means changing one setting.
 
 Every running process serves one model. The model id is taken from the
 ``DWARFSTAR_MODEL`` environment variable, which the command-line entry point
@@ -38,16 +47,42 @@ def local_config() -> dict:
     return value
 
 
+def _root(variable: str, setting: str, default: Path) -> Path:
+    explicit = os.environ.get(variable) or local_config().get(setting)
+    return Path(explicit).expanduser() if explicit else default
+
+
 def data_root() -> Path:
-    explicit = os.environ.get("DWARFSTAR_DATA") or local_config().get("data_root")
-    return Path(explicit).expanduser() if explicit else CODE / "local-data"
+    return _root("DWARFSTAR_DATA", "data_root", Path.home() / "Library/Application Support/DwarfStar")
 
 
+ASSETS = _root("DWARFSTAR_ASSETS", "assets_root", Path.home() / "AI/DwarfStar")
 DATA = data_root()
+CACHE = _root("DWARFSTAR_CACHE", "cache_root", Path.home() / "Library/Caches/DwarfStar")
+LOGS = _root("DWARFSTAR_LOGS", "logs_root", Path.home() / "Library/Logs/DwarfStar")
+
+# ASSETS
+MODELS = ASSETS / "Models"
+RUNTIMES = ASSETS / "Runtimes"
+MANIFESTS = ASSETS / "Manifests"
+SOURCES = ASSETS / "Sources"
+ARCHIVE = ASSETS / "Archive"
+EVIDENCE = MANIFESTS / "evidence"
+SEAL_DIRECTORY = MANIFESTS / "seal"
+# DATA
 INSTANCES = DATA / "instances"
-RUNTIMES = DATA / "runtime"
 SHARED_CONFIG = DATA / "config"
 TELEMETRY = DATA / "telemetry"
+CHATS = DATA / "chats"
+STATE = DATA / "state"
+BACKUPS = DATA / "backups"
+# CACHE
+BUILD = CACHE / "build"
+
+
+def roots() -> dict[str, Path]:
+    """Every root, for diagnostics and the storage report."""
+    return {"code": CODE, "assets": ASSETS, "data": DATA, "cache": CACHE, "logs": LOGS}
 
 
 def model_id() -> str:
@@ -117,7 +152,7 @@ def admission_lock() -> Path:
     configured = local_config().get("admission_lock")
     if configured:
         return Path(configured).expanduser()
-    path = DATA / "state" / "admission.lock"
+    path = STATE / "admission.lock"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.touch(exist_ok=True)
     return path
@@ -128,7 +163,7 @@ def metal_info() -> dict:
     import json as _json
     import subprocess as _subprocess
 
-    cache = DATA / "state" / "metal.json"
+    cache = CACHE / "metal.json"
     try:
         boot = _subprocess.run(["/usr/sbin/sysctl", "-n", "kern.boottime"], capture_output=True, text=True, timeout=5).stdout.strip()
     except (OSError, _subprocess.SubprocessError):
@@ -162,12 +197,13 @@ def workstation_binary() -> Path:
 
 def scratch_root() -> Path:
     configured = local_config().get("scratch_root")
-    return Path(configured).expanduser() if configured else DATA / "scratch"
+    return Path(configured).expanduser() if configured else CACHE / "scratch"
 
 
 def child_environment() -> dict[str, str]:
     """Variables every child process needs to find the same code, data and model."""
-    env = {"DWARFSTAR_HOME": str(CODE), "DWARFSTAR_DATA": str(DATA), "DWARFSTAR_PYTHON": sys.executable}
+    env = {"DWARFSTAR_HOME": str(CODE), "DWARFSTAR_ASSETS": str(ASSETS), "DWARFSTAR_DATA": str(DATA),
+           "DWARFSTAR_CACHE": str(CACHE), "DWARFSTAR_LOGS": str(LOGS), "DWARFSTAR_PYTHON": sys.executable}
     if os.environ.get("DWARFSTAR_MODEL"):
         env["DWARFSTAR_MODEL"] = os.environ["DWARFSTAR_MODEL"]
         env["DWARFSTAR_INSTANCE"] = str(instance())

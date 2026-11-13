@@ -3,9 +3,9 @@
 "use strict";
 
 const S = {
-  catalog: null, state: null, live: null, system: null, benchmarks: null, diagnostics: null,
+  catalog: null, state: null, live: null, system: null, diagnostics: null,
   model: null, effort: null, view: "run", modelTab: null, busy: false,
-  series: { tps: [], prefill: [], gpu: [], wired: [], ple: [], accept: [] },
+  series: { tps: [], prefill: [], gpu: [], wired: [], ple: [], accept: [] },  // tps/ple/accept: replayed native sessions only
   events: [], ticks: [], tools: [], source: null, sourceLevel: 0, connected: false,
   listeners: [],
 };
@@ -20,7 +20,7 @@ const plain = (value, digits = 1) => value == null || Number.isNaN(value) ? "–
 const ktok = (tokens) => tokens == null ? "–" : Math.round(tokens / 1024) + "K";
 const modelOf = (id) => S.catalog.models.find((m) => m.id === id);
 const profileOf = (model, effort) => S.catalog.profiles.find((p) => p.model === model && p.reasoning_effort === effort);
-const profileLabel = (id) => (S.catalog.profiles.find((p) => p.id === id)?.label || id).replace("DwarfStar ", "");
+const profileLabel = (id) => id ? (S.catalog.profiles.find((p) => p.id === id)?.label || id).replace("DwarfStar ", "") : "";
 const runningModel = () => (S.state?.running_models || [])[0] || null;
 
 async function api(path, body) {
@@ -107,6 +107,7 @@ async function refreshState() {
     S.renderedKey = key;
     if (S.view === "run") renderRun();
     if (S.view === "models") renderModels();
+    if (S.view === "settings") renderSettings();
     window.Chats?.stateChanged();
   } catch { /* service restarting */ }
 }
@@ -118,23 +119,38 @@ function renderNav() {
   const busy = S.state?.lifecycle?.busy;
   const state = running ? S.state.models[running] : null;
   dot.className = "dot " + (busy ? "busy" : running ? (state.healthy ? "ready" : "bad") : "");
-  $("#nav-model").textContent = running ? modelOf(running).display_name : "No model running";
+  $("#nav-model").textContent = running ? (profileLabel(S.state.active_profile) || modelOf(running).display_name.replace("DwarfStar ", "")) : "No model running";
   const phase = S.live?.request?.active ? S.live.request.phase : null;
   $("#nav-phase").textContent = busy ? "Switching…" : running ? (phase ? phase.replace("_", " ").toLowerCase() : state.healthy ? "Ready" : "Not healthy") : (S.connected ? "Offline" : "Connecting…");
 }
 function show(view) {
   S.view = view;
   if (location.hash.slice(1) !== view) history.replaceState(null, "", "#" + view);
-  document.querySelectorAll("#nav button").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
+  document.querySelectorAll("#nav button[data-view]").forEach((b) => b.classList.toggle("active", b.dataset.view === view || b.dataset.also === view));
   document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === "view-" + view));
   connect(view === "visualizer" ? 2 : 1);
   if (view !== "chats") window.Chats?.unmount();
-  ({ run: renderRun, chats: () => window.Chats?.mount(), models: renderModels, live: renderLive, visualizer: () => window.Visualizer?.mount(), benchmarks: renderBenchmarks, research: renderResearch, settings: renderSettings })[view]?.();
+  ({ run: renderRun, chats: () => window.Chats?.mount(), models: renderModels, live: renderLive, visualizer: () => window.Visualizer?.mount(),
+     diagnostics: () => window.Diagnostics?.mount(), settings: renderSettings })[view]?.();
   if (view !== "visualizer") window.Visualizer?.unmount();
+  clearInterval(S.livePoll);
+  if (view === "live") S.livePoll = setInterval(async () => { S.renderedKey = null; await refreshState(); renderLive(); }, 2000);
   $("#main").scrollTop = 0;
 }
 
 /* -------------------------------------------------------------------- run */
+/* One-line guidance per model; the numbers next to it come from the catalog's measurements. */
+const GUIDE = { scope: "Dependable default for everyday work.", swift: "Fastest decode here; LOW or MEDIUM reasoning.",
+                cyber: "Security-focused and the heaviest; OFF through XHIGH reasoning." };
+const shortName = (text) => String(text || "").replace("DwarfStar ", "");
+function runningLine() {
+  const running = runningModel(), busy = S.state?.lifecycle?.busy;
+  if (busy) return `<span class="status busy">Switching…</span>`;
+  if (!running) return `<span class="status">No model running</span>`;
+  const st = S.state.models[running];
+  return `<span class="status ${st.healthy ? "ok" : "bad"}"><b>${esc(profileLabel(S.state.active_profile) || shortName(modelOf(running).display_name))}</b>
+    &nbsp;${st.healthy ? "running" : "not healthy"}${st.uptime_s != null ? ` · up ${fmtDuration(st.uptime_s)}` : ""}</span>`;
+}
 function renderRun() {
   const root = $("#view-run");
   if (!S.catalog || !S.state) { root.innerHTML = "<h1>Run</h1><p class='lead'>Connecting to the local service…</p>"; return; }
@@ -144,76 +160,126 @@ function renderRun() {
   const activeProfile = S.state.active_profile, isActive = isRunning && activeProfile === profile.id;
   const requirement = S.state.requirements[S.model];
   const available = S.system?.memory?.available_bytes ? S.system.memory.available_bytes / 2 ** 30 : null;
-  const cards = S.catalog.models.map((m) => `
-    <button class="model-card ${m.id === S.model ? "selected" : ""}" style="--tone:${TONE[m.id]}" data-model="${m.id}" aria-pressed="${m.id === S.model}">
-      <div class="name">${esc(m.display_name.replace("DwarfStar ", ""))}
-        ${m.default ? '<span class="badge default">Default</span>' : ""}${running === m.id ? '<span class="badge live">Running</span>' : ""}</div>
-      <div class="meta">${esc(m.quantization.label)} · ${m.context_label} context · ${(m.disk_bytes / 2 ** 30).toFixed(0)} GiB on disk</div>
-      <div class="meta">${esc(m.summary)}</div>
-    </button>`).join("");
+  const cards = S.catalog.models.map((m) => {
+    const measured = S.catalog.details[m.id].measured || {};
+    const speed = measured.decode_range_tok_s ? measured.decode_range_tok_s.map((v) => Math.round(v)).join("–") + " tok/s" : "";
+    return `<button class="model-card ${m.id === S.model ? "selected" : ""}" style="--tone:${TONE[m.id]}" data-model="${m.id}" aria-pressed="${m.id === S.model}">
+      <div class="name">${esc(shortName(m.display_name))}${running === m.id ? '<span class="badge live">Running</span>' : m.default ? '<span class="badge">Default</span>' : ""}</div>
+      <div class="guide">${esc(GUIDE[m.id] || "")}</div>
+      <div class="meta">${[speed, m.memory_plan.planned_gib.toFixed(1) + " GiB memory", m.context_label + " context"].filter(Boolean).join(" · ")}</div>
+    </button>`;
+  }).join("");
   const chips = model.reasoning_efforts.map((e) => `<button class="chip ${e === S.effort ? "selected" : ""}" data-effort="${e}" aria-pressed="${e === S.effort}">${e.toUpperCase()}</button>`).join("");
-  const overrideNote = Object.entries(model.overrides || {}).map(([k, o]) => `${k === "prefill_chunk" ? "Prefill chunk" : k} ${o.value} instead of the shared ${o.default}: ${o.reason}`).join(" ");
-  const steps = (S.state.lifecycle?.steps || []).map((s) => `<li class="${s.error ? "error" : s.ready ? "ready" : ""}">${new Date(s.t * 1000).toLocaleTimeString()}  ${esc(s.text)}</li>`).join("");
+  const steps = (S.state.lifecycle?.steps || []).map((s) => `<li class="${s.error ? "error" : ""}">${new Date(s.t * 1000).toLocaleTimeString()}  ${esc(s.text)}</li>`).join("");
+  const permissions = S.state.permissions || {};
   // Switching stops the running model first, so its planned memory counts as available for the target.
   const freed = running && !isRunning ? (S.state.requirements?.[running]?.planned_gib || 0) : 0;
   const short = available != null && !isRunning && available + freed < requirement.required_gib;
+  const label = shortName(profile.label);
+  const action = isActive
+    ? `<button class="ghost" id="open-zed">Open in Zed</button><button class="danger" id="stop" ${busy ? "disabled" : ""}>Stop</button>`
+    : isRunning
+      ? `<button class="primary" id="launch" ${busy ? "disabled" : ""}>${busy ? "Working…" : "Use " + esc(label)}</button><button class="danger" id="stop" ${busy ? "disabled" : ""}>Stop</button>`
+      : `<button class="primary" id="launch" ${busy ? "disabled" : ""}>${busy ? "Working…" : (running ? "Switch to " : "Start ") + esc(label)}</button>`;
+  const consequence = isActive ? "This profile is running."
+    : isRunning ? "Same model: changes the reasoning level without a restart."
+    : running ? `Stops ${esc(shortName(modelOf(running).display_name))}, then loads ${esc(shortName(model.display_name))} (about ${Math.round(S.catalog.details[S.model].measured?.start_s || 25)} s).`
+    : `Loads ${esc(shortName(model.display_name))} in about ${Math.round(S.catalog.details[S.model].measured?.start_s || 25)} s.`;
   root.innerHTML = `
-    <h1>Run</h1>
-    <p class="lead">Choose a model and a reasoning level. One model runs at a time; switching stops the current one first.</p>
-    <h2>Model</h2>
-    <div class="grid cols-3" style="margin-bottom:18px">${cards}</div>
-    <div class="panel" style="--tone:${TONE[S.model]}">
+    <div class="page-head"><h1>Run</h1><span class="spacer"></span>${runningLine()}</div>
+    <div class="grid cols-3">${cards}</div>
+    <div class="panel section" style="--tone:${TONE[S.model]}">
       <div class="row">
         <div><h2>Reasoning</h2><div class="chips">${chips}</div></div>
-        <div style="margin-left:26px"><h2>Context</h2><div style="font-size:17px;font-weight:600">${model.context_label}
-          <span class="muted small" style="font-weight:400">· up to ${ktok(model.max_output)} output</span></div></div>
         <div class="spacer"></div>
-        ${isActive
-          ? `<button class="ghost" id="open-zed">Open a workspace in Zed</button><button class="danger" id="stop" ${busy ? "disabled" : ""}>Stop model</button>`
-          : isRunning
-            ? `<button class="primary" id="launch" ${busy ? "disabled" : ""}>${busy ? "Working…" : "Use " + esc(profile.label.replace("DwarfStar ", "")) + " (no restart)"}</button><button class="danger" id="stop" ${busy ? "disabled" : ""}>Stop model</button>`
-            : `<button class="primary" id="launch" ${busy ? "disabled" : ""}>${busy ? "Working…" : (running ? "Switch to " : "Launch ") + esc(profile.label.replace("DwarfStar ", ""))}</button>`}
+        <div class="row" style="gap:8px">${action}</div>
       </div>
-      ${overrideNote ? `<div class="notice info" style="margin-top:14px">${esc(overrideNote)}</div>` : ""}
-      ${short ? `<div class="notice" style="margin-top:14px">${esc(model.display_name.replace("DwarfStar ", ""))} requires approximately ${requirement.required_gib.toFixed(1)} GiB available for the configured ${model.context_label} context; ${available.toFixed(1)} GiB is currently available${freed ? ` after stopping the running model (${(available + freed).toFixed(1)} GiB)` : ""}.</div>` : ""}
+      <p class="muted small" style="margin:var(--sp-3) 0 0">${consequence}</p>
+      ${stageBar()}
+      ${S.pendingSwitch ? switchSummary(profile, running, requirement, available, freed) : ""}
+      ${short ? `<div class="notice" style="margin-top:14px">${esc(shortName(model.display_name))} needs about ${requirement.required_gib.toFixed(1)} GiB available for its ${model.context_label} context; ${available.toFixed(1)} GiB is available now${freed ? ` (${(available + freed).toFixed(1)} GiB after stopping the running model)` : ""}.</div>` : ""}
+      <hr class="divider">
+      <div class="metrics" id="run-stats"></div>
     </div>
-    <div class="grid cols-4" style="margin:14px 0" id="run-stats"></div>
-    <div class="grid cols-2">
+    <div class="grid cols-2 section">
       <div class="panel"><h2>Runtime</h2>
         <dl class="kv">
-          <dt>Status</dt><dd>${isRunning ? (state.healthy ? '<span class="pill pass">Ready</span>' : '<span class="pill fail">Not healthy</span>') : '<span class="pill">Offline</span>'}
-            ${isRunning && activeProfile && !isActive ? `<span class="muted small"> · active profile ${esc(profileLabel(activeProfile))}</span>` : ""}
-            ${running && !isRunning ? `<span class="muted small"> · ${esc(modelOf(running).display_name)} is running</span>` : ""}</dd>
-          <dt>Endpoint</dt><dd class="mono">${esc(state.endpoint || "–")}</dd>
-          <dt>Process</dt><dd class="mono">${isRunning ? "pid " + state.pid + (state.uptime_s != null ? " · up " + fmtDuration(state.uptime_s) : "") : "–"}</dd>
+          <dt>Status</dt><dd>${isRunning ? (state.healthy ? '<span class="status ok">Healthy</span>' : '<span class="status bad">Not healthy</span>') : '<span class="status">Stopped</span>'}
+            ${isRunning && activeProfile && !isActive ? `<span class="muted small"> · running as ${esc(profileLabel(activeProfile))}</span>` : ""}
+            ${running && !isRunning ? `<span class="muted small"> · ${esc(shortName(modelOf(running).display_name))} is running</span>` : ""}</dd>
+          <dt>${isRunning ? "Process" : "Endpoint"}</dt><dd class="mono">${isRunning ? "pid " + state.pid + " · " : ""}${esc((state.endpoint || "–").replace("http://", ""))}</dd>
           <dt>Load time</dt><dd>${isRunning && state.load_seconds != null ? state.load_seconds.toFixed(1) + " s" : "–"}</dd>
-          <dt>Memory plan</dt><dd>${requirement.planned_gib.toFixed(2)} GiB planned · needs ${requirement.required_gib.toFixed(1)} GiB available</dd>
+          <dt>Memory</dt><dd>${requirement.planned_gib.toFixed(1)} GiB planned · start needs ${requirement.required_gib.toFixed(1)} GiB available</dd>
+          <dt>Draft</dt><dd>${esc(model.quantization.speculative || "DFlash2 draft model")}</dd>
         </dl>
-        ${steps ? `<h2 style="margin-top:14px">Last switch</h2><ul class="steps">${steps}</ul>` : ""}
+        ${steps ? `<details class="disclosure" style="margin-top:var(--sp-3)"><summary class="small">Last switch</summary><ul class="steps" style="margin-top:6px">${steps}</ul></details>` : ""}
       </div>
-      <div class="panel"><h2>Agent connection</h2>
+      <div class="panel"><h2>Agent</h2>
         <dl class="kv">
-          <dt>Profile</dt><dd><b>${esc(profile.label)}</b></dd>
-          <dt>In Zed</dt><dd>Agent Panel → <b>+</b> → External Agents → <b>${esc(profile.label)}</b></dd>
+          <dt>In Zed</dt><dd>Agent panel → + → <b>${esc(profile.label)}</b></dd>
           <dt>Launcher</dt><dd class="mono">dwarfstar-acp --profile ${esc(profile.id)}</dd>
-          <dt>Tools</dt><dd>Workspace · Shell · Browser · Computer use · Vision</dd>
-          <dt>Approval</dt><dd>${esc(S.state.models[S.model].permissions?.label || "Full Auto")} <span class="muted small">(same for every profile)</span></dd>
+          <dt>Tools</dt><dd>Workspace, shell, browser, computer use, vision</dd>
+          <dt>Tool approval</dt><dd><b>${esc(permissions.label || "–")}</b> · <a href="#settings" id="run-approval">Change</a></dd>
         </dl>
-        <p class="muted small" style="margin:12px 0 0">The reasoning level is fixed per agent entry. Choosing another level here changes which entry to open; the running model does not restart.</p>
+        <p class="muted small" style="margin:var(--sp-3) 0 0">Each reasoning level is its own agent entry; choosing another level here does not restart the model.</p>
       </div>
     </div>`;
   root.querySelectorAll("[data-model]").forEach((b) => b.onclick = () => selectModel(b.dataset.model));
-  root.querySelectorAll("[data-effort]").forEach((b) => b.onclick = () => { S.effort = b.dataset.effort; api("/api/select", { profile: profileOf(S.model, S.effort).id }); renderRun(); });
+  root.querySelectorAll("[data-effort]").forEach((b) => b.onclick = () => { S.effort = b.dataset.effort; S.pendingSwitch = null; rememberEffort(); api("/api/select", { profile: profileOf(S.model, S.effort).id }); renderRun(); });
   const launch = $("#launch", root), stop = $("#stop", root), zed = $("#open-zed", root);
-  if (launch) launch.onclick = () => lifecycle("/api/switch", { profile: profile.id });
+  if (launch) launch.onclick = () => {
+    // Pre-switch summary whenever something would be interrupted: another model, or chats still answering.
+    const interrupts = (running && running !== S.model) || (S.state.answering_chats || []).length;
+    if (interrupts && !S.pendingSwitch) { S.pendingSwitch = profile.id; renderRun(); return; }
+    S.pendingSwitch = null; lifecycle("/api/switch", { profile: profile.id });
+  };
+  const confirmSwitch = $("#switch-confirm", root), cancelSwitch = $("#switch-cancel", root);
+  if (confirmSwitch) confirmSwitch.onclick = () => { S.pendingSwitch = null; lifecycle("/api/switch", { profile: profile.id }); };
+  if (cancelSwitch) cancelSwitch.onclick = () => { S.pendingSwitch = null; renderRun(); };
   if (stop) stop.onclick = () => lifecycle("/api/stop", {});
   if (zed) zed.onclick = async () => { const r = await api("/api/launch", { profile: profile.id }); toast(r.ok ? r.instruction : r.error); };
+  $("#run-approval", root).onclick = (event) => { event.preventDefault(); show("settings"); };
   renderRunStats();
 }
+async function setApproval(mode, confirm) {
+  const result = await api("/api/permissions", { mode, ...(confirm ? { confirm } : {}) });
+  S.confirmFullAuto = false;
+  toast(result.ok ? `Tool approval: ${result.permissions.label}` : result.error);
+  await refreshState(); S.renderedKey = null; if (S.view === "settings") renderSettings(); else renderRun();
+}
+/* Switch stages, from the service's step records: the current one pulses while a job runs. */
+const STAGES = [["stop", "Stop current"], ["memory", "Memory check"], ["load", "Load weights"], ["health", "Health check"], ["ready", "Ready"]];
+function stageBar() {
+  const job = S.state.lifecycle;
+  if (!job || job.kind !== "switch" || !(job.steps || []).length) return "";
+  const seen = new Set(job.steps.map((s) => s.stage).filter(Boolean)), failed = job.steps.some((s) => s.error);
+  const current = [...job.steps].reverse().find((s) => s.stage)?.stage;
+  const startedStep = job.steps.find((s) => s.stage === "load" && !s.load_seconds);
+  const expected = S.catalog.details[S.model]?.measured?.cold_load_s;
+  const elapsed = job.busy && startedStep ? Date.now() / 1000 - startedStep.t : null;
+  if (!job.busy && !failed && Date.now() / 1000 - (job.finished || 0) > 30) return "";  // the step list below keeps the record
+  return `<ol class="stages ${failed ? "failed" : ""}" aria-label="Switch progress">${STAGES.filter(([id]) => id !== "stop" || seen.has("stop")).map(([id, label]) => {
+    const state = id === current && job.busy ? "active" : seen.has(id) ? (failed && id === current ? "error" : "done") : "";
+    const extra = id === "load" && elapsed != null ? ` · ${Math.round(elapsed)} s${expected ? " of ~" + Math.round(expected) + " s" : ""}` : "";
+    return `<li class="${state}">${label}${extra}</li>`;
+  }).join("")}</ol>`;
+}
+function switchSummary(profile, running, requirement, available, freed) {
+  const answering = (S.state.answering_chats || []).length;
+  const runningLabel = running ? (profileLabel(S.state.active_profile) || modelOf(running).display_name) : null;
+  return `<div class="notice switch-summary" style="margin-top:14px"><b>Before switching to ${esc(profile.label.replace("DwarfStar ", ""))}</b>
+    <ul>${running && running !== S.model ? `<li>${esc(runningLabel.replace("DwarfStar ", ""))} will be stopped (pid ${S.state.models[running].pid}); Zed sessions on it lose their model until you switch back.</li>` : ""}
+      ${answering ? `<li>${answering} chat${answering === 1 ? " is" : "s are"} still answering and will be interrupted.</li>` : ""}
+      <li>Needs ${requirement.required_gib.toFixed(1)} GiB available${available != null ? `; ${(available + freed).toFixed(1)} GiB will be` : ""}.</li></ul>
+    <div class="row"><button class="primary small-button" id="switch-confirm">Switch now</button><button class="ghost small-button" id="switch-cancel">Cancel</button></div></div>`;
+}
+/* The reasoning level last used with each model is remembered on this Mac. */
+function rememberEffort() { try { const all = JSON.parse(localStorage.getItem("dwarfstar.effort") || "{}"); all[S.model] = S.effort; localStorage.setItem("dwarfstar.effort", JSON.stringify(all)); } catch {} }
+function rememberedEffort(id) { try { return JSON.parse(localStorage.getItem("dwarfstar.effort") || "{}")[id]; } catch { return null; } }
 function selectModel(id) {
-  S.model = id;
-  const efforts = modelOf(id).reasoning_efforts;
-  if (!efforts.includes(S.effort)) S.effort = efforts.includes("low") ? "low" : efforts[0];
+  S.model = id; S.pendingSwitch = null;
+  const efforts = modelOf(id).reasoning_efforts, remembered = rememberedEffort(id);
+  S.effort = efforts.includes(remembered) ? remembered : efforts.includes(S.effort) ? S.effort : efforts.includes("low") ? "low" : efforts[0];
   renderRun();
 }
 /* The service owns the lifecycle. The UI submits a job, then follows the service's record of that job,
@@ -226,9 +292,12 @@ async function lifecycle(path, body) {
     for (;;) {
       await new Promise((resolve) => setTimeout(resolve, 700));
       await refreshState();
+      const bar = document.querySelector("#view-run .stages");
+      if (bar) bar.outerHTML = stageBar() || "<span></span>";  // keep the load timer moving between steps
       const job = S.state?.lifecycle;
       if (!job || job.job > accepted.job) break;
       if (job.job === accepted.job && !job.busy) {
+        S.pendingSwitch = null;
         toast(job.result?.ok ? (path.endsWith("stop") ? "Model stopped" : "Ready") : (job.result?.error || "Failed"));
         break;
       }
@@ -241,15 +310,18 @@ function fmtDuration(seconds) { const s = Math.round(seconds); return s < 90 ? s
 function renderRunStats() {
   const node = $("#run-stats"); if (!node || !S.catalog) return;
   const measured = S.catalog.details[S.model].measured || {};
-  const isRunning = runningModel() === S.model, live = isRunning ? S.live : null;
-  const tps = live?.rates?.live_tps ?? live?.rates?.decode_tps;
+  const since = runningModel() === S.model ? S.state?.models?.[S.model]?.splash?.since_start : null;
+  const live = since && since.decode_output_tokens > 0 ? since : null;  // nothing measured yet: show the catalog's measurement
   const memory = S.system?.memory;
   const headroom = memory?.available_bytes != null ? memory.available_bytes / 2 ** 30 : null;
-  node.innerHTML = `
-    <div class="stat"><div class="label">Decode</div><div class="value">${num(tps ?? measured.decode_tok_s, 1, "tok/s")}</div><div class="sub">${tps != null ? "live" : measured.decode_tok_s != null ? "measured" : ""}</div></div>
-    <div class="stat"><div class="label">Time to first token</div><div class="value">${num(measured.ttft_s, 2, "s")}</div><div class="sub">short prompt, measured</div></div>
-    <div class="stat"><div class="label">MTP acceptance</div><div class="value">${num(live?.mtp?.acceptance_pct ?? measured.mtp_acceptance_pct, 1, "%")}</div><div class="sub">${live?.mtp?.proposed ? live.mtp.accepted + " of " + live.mtp.proposed + " drafts" : "measured"}</div></div>
-    <div class="stat"><div class="label">Memory available</div><div class="value">${num(headroom, 1, "GiB")}</div><div class="sub">${memory?.swap_used_bytes != null ? "swap " + (memory.swap_used_bytes / 2 ** 30).toFixed(1) + " GiB" : ""}</div></div>`;
+  const metric = (label, value, sub) => `<div class="metric"><div class="label">${label}</div><div class="value">${value}</div><div class="sub">${sub}</div></div>`;
+  node.innerHTML = [
+    metric("Decode", num(live?.decode_tokens_per_second ?? measured.decode_tok_s, 1, "tok/s"), live?.decode_tokens_per_second != null ? "this run" : "measured, short prompt"),
+    metric("First token", num(measured.ttft_s, 2, "s"), "measured, short prompt"),
+    metric("Prefill", num(live?.prefill_tokens_per_second ?? measured.prefill_tok_s, 0, "tok/s"), live?.prefill_tokens_per_second != null ? "this run" : "measured, 8K prompt"),
+    metric("Context", `${S.catalog.models.find((m) => m.id === S.model).context_label}`, "up to " + ktok(modelOf(S.model).max_output) + " output"),
+    metric("Memory free", num(headroom, 1, "GiB"), memory?.swap_used_bytes ? "swap " + (memory.swap_used_bytes / 2 ** 30).toFixed(1) + " GiB" : "no swap"),
+  ].join("");
 }
 
 /* ----------------------------------------------------------------- models */
@@ -257,99 +329,78 @@ function renderModels() {
   const root = $("#view-models"); if (!S.catalog) return;
   S.modelTab = S.modelTab || S.model;
   const m = modelOf(S.modelTab), d = S.catalog.details[S.modelTab], measured = d.measured || {};
-  const assets = d.assets, memory = m.memory;
-  const total = m.disk_bytes;
-  const order = [["main", "Main model"], ["ple", "PLE (n-gram) sidecar"], ["mtp", "MTP block"], ["vision", "Vision projector"]];
-  const colors = { main: TONE[m.id], ple: "#3d6f8f", mtp: "#7fd6a3", vision: "#e58f8f" };
-  const plan = m.memory_plan, planned = plan.planned_gib, limit = plan.metal_working_set_gib;
+  const assets = d.assets, total = m.disk_bytes;
+  const order = [["main", "Model, part 1"], ["ple", "PLE table, part 2"], ["draft", "Draft model"], ["vision", "Vision projector"]];
+  const colors = { main: TONE[m.id], ple: "#3d6f8f", draft: "#6fb59a", vision: "#c98a8a" };
+  const plan = m.memory_plan, limit = plan.metal_working_set_gib;
   const state = S.state?.models[m.id];
-  const runningPlan = state?.memory_plan || {};
-  const memParts = [["Resident model", plan.resident_model_gib, TONE[m.id]], ["KV cache", plan.kv_gib, "#4fd695"], ["Graph buffers", plan.buffers_gib, "#ffc857"], ["Vision projector", plan.projector_gib || 0, "#e58f8f"]];
-  const policy = S.catalog.policy, overrides = Object.entries(m.overrides || {});
-  const settingName = { prefill_chunk: "Prefill chunk", context: "Context", max_output: "Output ceiling", runtime: "Runtime build" };
+  const splash = state?.running ? (state.splash || {}) : {};
+  const memParts = [["Resident model", plan.resident_model_gib, TONE[m.id]], ["KV cache", plan.kv_gib, "#3f8f73"], ["Graph buffers", plan.buffers_gib, "#c9a75a"], ["Vision projector", plan.projector_gib || 0, "#c98a8a"]];
   const availableNow = S.system?.memory?.available_bytes != null ? S.system.memory.available_bytes / 2 ** 30 : null;
   const quality = (measured.quality || []).map((q) => `<tr><td>${esc(q.name)}</td><td>${esc(q.result)}</td><td class="muted">${esc(q.note || "")}</td></tr>`).join("");
+  const metric = (label, value, sub = "") => `<div class="metric"><div class="label">${label}</div><div class="value">${value}</div><div class="sub">${sub}</div></div>`;
+  const policy = S.catalog.policy;
   root.innerHTML = `
-    <h1>Models</h1>
-    <p class="lead">Static facts come from the model catalog. Speeds and quality results are measured on this machine; anything not measured says so.</p>
-    <div class="tabs">${S.catalog.models.map((x) => `<button class="chip ${x.id === S.modelTab ? "selected" : ""}" style="--tone:${TONE[x.id]}" data-tab="${x.id}">${esc(x.display_name.replace("DwarfStar ", ""))}</button>`).join("")}</div>
-    <div class="grid cols-2">
+    <div class="page-head"><h1>Models</h1><div class="seg" role="tablist">${S.catalog.models.map((x) => `<button class="chip ${x.id === S.modelTab ? "selected" : ""}" data-tab="${x.id}" role="tab">${esc(shortName(x.display_name))}</button>`).join("")}</div></div>
+    <div class="panel" style="--tone:${TONE[m.id]}">
+      <div class="row" style="align-items:baseline"><h2 style="margin:0;font-size:15px">${esc(m.display_name)}</h2>${m.default ? '<span class="badge">Default</span>' : ""}${state?.running ? '<span class="badge live">Running</span>' : ""}
+        <span class="muted">${esc(GUIDE[m.id] || "")}</span></div>
+      <p class="muted small" style="margin:6px 0 var(--sp-4)">${esc(m.summary)}</p>
+      <div class="metrics">
+        ${metric("Decode", measured.decode_range_tok_s ? measured.decode_range_tok_s.map((v) => Math.round(v)).join("–") + "<small>tok/s</small>" : NA, "depends on draft acceptance")}
+        ${metric("First token", num(measured.ttft_s, 2, "s"), "short prompt")}
+        ${metric("Prefill", num(measured.prefill_tok_s, 0, "tok/s"), measured.prefill_32k_tok_s ? `8K prompt · ${measured.prefill_32k_tok_s} at 32K` : "8K prompt")}
+        ${metric("Start", num(measured.start_s, 0, "s"), "idle to ready")}
+        ${metric("Memory", plan.planned_gib.toFixed(1) + "<small>GiB</small>", measured.peak_wired_gib ? `peak ${measured.peak_wired_gib.toFixed(1)} GiB wired` : "planned")}
+        ${metric("Reasoning", m.reasoning_efforts.length + (m.reasoning_efforts.length === 1 ? "<small>level</small>" : "<small>levels</small>"), m.reasoning_efforts.map((e) => e.toUpperCase()).join(" · "))}
+      </div>
+      <p class="faint small" style="margin:var(--sp-3) 0 0">Measured on this Mac with Splash-m1. ${esc(measured.evidence?.["speed and memory"] ? "Source: " + measured.evidence["speed and memory"].split("(")[0].trim() + "." : "")}</p>
+    </div>
+    <div class="grid cols-2 section">
       <div class="panel"><h2>Identity</h2><dl class="kv">
-        <dt>Display name</dt><dd><b>${esc(m.display_name)}</b> ${m.default ? '<span class="badge default">Default</span>' : ""}</dd>
-        <dt>Family</dt><dd>${esc(m.family)}</dd>
-        <dt>Architecture</dt><dd>${esc(d.architecture.name)}<div class="muted small">${esc(d.architecture.type)} · ${d.architecture.layers} layers · ${d.architecture.experts_per_layer} experts per layer, ${d.architecture.experts_active} active per token</div></dd>
-        <dt>Source</dt><dd class="mono">${esc(d.source.repository)}</dd>
-        <dt>Revision</dt><dd class="mono">${esc(d.source.revision)}</dd>
+        <dt>Architecture</dt><dd>${esc(d.architecture.name)}<div class="muted small">${d.architecture.layers} layers · ${d.architecture.experts_per_layer} experts per layer, ${d.architecture.experts_active} active per token</div></dd>
+        <dt>Source</dt><dd class="mono">${esc(d.source.repository)}<div class="faint">${esc(String(d.source.revision).slice(0, 12))}</div></dd>
         <dt>Derivation</dt><dd>${esc(d.source.derivation || "")}</dd>
-        <dt>Reasoning</dt><dd>${m.reasoning_efforts.map((e) => `<span class="pill">${e.toUpperCase()}</span>`).join(" ")}</dd>
+        <dt>Context</dt><dd>${m.context.toLocaleString()} tokens · tested to ${measured.tested_context_tokens != null ? measured.tested_context_tokens.toLocaleString() : "–"} · output up to ${m.max_output.toLocaleString()}</dd>
       </dl></div>
       <div class="panel"><h2>Quantization</h2><dl class="kv">
-        <dt>Label</dt><dd><b>${esc(m.quantization.label)}</b></dd>
         <dt>Routed experts</dt><dd>${esc(m.quantization.experts)}</dd>
         <dt>Dense trunk</dt><dd>${esc(m.quantization.dense)}</dd>
         <dt>PLE</dt><dd>${esc(m.quantization.ple)}</dd>
-        <dt>MTP</dt><dd>${esc(m.quantization.mtp)}</dd>
         <dt>Vision</dt><dd>${esc(m.quantization.vision)}</dd>
-        <dt>KV cache</dt><dd>K ${esc(m.cache.k_cache_dtype)} · V ${esc(m.cache.v_cache_dtype)} · ${(m.cache.kv_bytes_per_token / 1024).toFixed(1)} KiB per token<div class="muted small">${esc(m.cache.policy)}</div></dd>
+        <dt>Draft</dt><dd>${esc(m.quantization.speculative || "")}${splash.since_start?.draft_acceptance_rate != null ? ` · <b>${Math.round(100 * splash.since_start.draft_acceptance_rate)} %</b> accepted this run` : ""}</dd>
+        <dt>KV cache</dt><dd>${esc(m.cache.k_cache_dtype)} K and V · ${(m.cache.kv_bytes_per_token / 1024).toFixed(1)} KiB per token</dd>
       </dl></div>
-      <div class="panel"><h2>Storage</h2>
-        <div class="bar">${order.map(([k]) => `<span style="width:${100 * assets[k].bytes / total}%;background:${colors[k]}"></span>`).join("")}</div>
-        <div class="legend">${order.map(([k, label]) => `<span><i style="background:${colors[k]}"></i>${label} ${gib(assets[k].bytes)}</span>`).join("")}</div>
-        <dl class="kv" style="margin-top:12px"><dt>Total on disk</dt><dd><b>${gib(total)}</b></dd>
-          <dt>Resident</dt><dd>Main model, MTP block and projector are resident in unified memory. The PLE sidecar stays on disk and is read row by row.</dd></dl>
-        <details style="margin-top:10px"><summary>Files and hashes</summary>
-          <table style="margin-top:8px"><tbody>${order.map(([k, label]) => `<tr><td>${label}</td><td class="mono">${esc(assets[k].file)}<div class="faint">${esc(assets[k].sha256)}</div></td></tr>`).join("")}</tbody></table></details>
-      </div>
-      <div class="panel"><h2>Memory</h2>
+      <div class="panel"><h2>Memory <span class="muted small">of the ${limit.toFixed(2)} GiB Metal working set</span></h2>
         <div class="bar">${memParts.map(([, g, c]) => `<span style="width:${100 * g / limit}%;background:${c}"></span>`).join("")}</div>
         <div class="legend">${memParts.map(([l, g, c]) => `<span><i style="background:${c}"></i>${l} ${g.toFixed(2)} GiB</span>`).join("")}</div>
-        <dl class="kv" style="margin-top:12px">
-          <dt>Planned working set</dt><dd><b>${planned.toFixed(2)} GiB</b> <span class="muted small">model + KV + buffers + projector</span></dd>
-          <dt>Metal limit</dt><dd>${limit.toFixed(2)} GiB <span class="muted small">GPU recommended working set, ${esc(plan.metal_working_set_source)}; ${plan.metal_headroom_gib.toFixed(2)} GiB headroom</span></dd>
-          <dt>Start requires</dt><dd>${plan.required_gib.toFixed(1)} GiB available <span class="muted small">plan + ${plan.system_reserve_gib} GiB shared system reserve</span></dd>
-          <dt>Available now</dt><dd>${availableNow != null ? availableNow.toFixed(1) + " GiB of unified memory" : NA}</dd>
-          <dt>Measured peak</dt><dd>${measured.peak_wired_gib != null ? measured.peak_wired_gib.toFixed(2) + " GiB system wired (whole machine)" : NA}</dd>
-          <dt>Now</dt><dd>${state?.running ? `running · runtime reports ${runningPlan.planned_gib ?? "–"} GiB planned` : "not running"}</dd>
+        <dl class="kv" style="margin-top:var(--sp-3)">
+          <dt>Planned</dt><dd><b>${plan.planned_gib.toFixed(2)} GiB</b> · ${plan.metal_headroom_gib.toFixed(2)} GiB headroom</dd>
+          <dt>Start needs</dt><dd>${plan.required_gib.toFixed(1)} GiB available${availableNow != null ? ` · ${availableNow.toFixed(1)} GiB available now` : ""}</dd>
         </dl>
       </div>
-      <div class="panel"><h2>Runtime policy</h2>
-        <p class="muted small" style="margin:0 0 10px">Every model runs the same DwarfStar runtime policy (version ${esc(policy.version)}). Only the settings below differ, each for a stated reason.</p>
-        <dl class="kv">
-          <dt>Common</dt><dd>${(policy.model_defaults.context / 1024)}K context · K/V ${esc(policy.model_defaults.cache.k_cache_dtype)}/${esc(policy.model_defaults.cache.v_cache_dtype)} · prefill ${policy.model_defaults.prefill_chunk} · output ${policy.model_defaults.max_output.toLocaleString()} · MTP on · vision resident · Full Auto · telemetry on demand</dd>
-          <dt>This model</dt><dd>${overrides.length ? overrides.map(([k, o]) => `<b>${esc(settingName[k] || k)} ${esc(String(o.value))}</b> <span class="muted small">(shared ${esc(String(o.default))})</span><div class="muted small">${esc(o.reason)}</div>`).join("") : "No overrides: the shared policy unchanged."}</dd>
-          <dt>Model-specific</dt><dd class="small">Weights and quantization, MTP head, vision projector, resident memory, reasoning levels (${m.reasoning_efforts.map((e) => e.toUpperCase()).join(", ")}), endpoint port ${m.port}</dd>
-        </dl>
+      <div class="panel"><h2>Storage <span class="muted small">${gib(total)} on disk</span></h2>
+        <div class="bar">${order.map(([k]) => `<span style="width:${100 * assets[k].bytes / total}%;background:${colors[k]}"></span>`).join("")}</div>
+        <div class="legend">${order.map(([k, label]) => `<span><i style="background:${colors[k]}"></i>${label} ${gib(assets[k].bytes)}</span>`).join("")}</div>
+        <p class="muted small" style="margin:var(--sp-3) 0 0">The model, draft and vision projector stay in unified memory; the PLE table stays on disk and is read row by row.</p>
+        <details class="disclosure" style="margin-top:var(--sp-3)"><summary class="small">Files and hashes</summary>
+          <table class="files" style="margin-top:var(--sp-2)"><tbody>${order.map(([k, label]) => `<tr><td class="muted">${label}</td><td class="mono small">${esc(assets[k].file)}<div class="faint">${esc(assets[k].sha256)}</div></td></tr>`).join("")}</tbody></table></details>
       </div>
-      <div class="panel"><h2>Context</h2><dl class="kv">
-        <dt>Configured</dt><dd><b>${m.context.toLocaleString()} tokens</b> (${m.context_label})</dd>
-        <dt>Tested depth</dt><dd>${measured.tested_context_tokens != null ? measured.tested_context_tokens.toLocaleString() + " tokens" : NA}</dd>
-        <dt>Output ceiling</dt><dd>${m.max_output.toLocaleString()} tokens</dd>
-        <dt>Current use</dt><dd>${state?.running && S.live?.context?.used != null ? S.live.context.used.toLocaleString() + " tokens" : "–"}</dd>
-        <dt>Prefill chunk</dt><dd>${m.prefill_chunk} tokens${m.overrides?.prefill_chunk ? ' <span class="muted small">(model-specific; see Runtime policy)</span>' : ""}</dd>
-      </dl></div>
-      <div class="panel"><h2>Speed</h2><dl class="kv">
-        <dt>Cold load</dt><dd>${num(measured.cold_load_s, 1, " s")}</dd>
-        <dt>Warm load</dt><dd>${num(measured.warm_load_s, 1, " s")}</dd>
-        <dt>Time to first token</dt><dd>${num(measured.ttft_s, 2, " s")}</dd>
-        <dt>Prefill</dt><dd>${num(measured.prefill_tok_s, 0, " tok/s")}</dd>
-        <dt>Decode</dt><dd>${num(measured.decode_tok_s, 1, " tok/s")}</dd>
-        <dt>Decode, long context</dt><dd>${num(measured.decode_long_tok_s, 1, " tok/s")} ${measured.decode_long_context ? `<span class="muted small">at ${esc(measured.decode_long_context)}</span>` : ""}</dd>
-      </dl></div>
-      <div class="panel"><h2>MTP (speculative decoding)</h2><dl class="kv">
-        <dt>Enabled</dt><dd>Yes, native adaptive depth</dd>
-        <dt>Sidecar format</dt><dd>${esc(m.quantization.mtp)}</dd>
-        <dt>Acceptance</dt><dd>${num(measured.mtp_acceptance_pct, 1, " %")}</dd>
-        <dt>Speed benefit</dt><dd>${measured.mtp_benefit ? esc(measured.mtp_benefit) : NA}</dd>
-      </dl></div>
-      <div class="panel"><h2>Capabilities</h2>${m.capabilities.map((c) => `<span class="cap">${esc(CAPABILITY[c] || c)}</span>`).join("")}</div>
     </div>
-    <div class="panel" style="margin-top:14px"><h2>Quality and benchmark history</h2>
-      ${quality ? `<table><thead><tr><th>Measurement</th><th>Result</th><th>Notes</th></tr></thead><tbody>${quality}</tbody></table>` : `<p class="muted">No results recorded.</p>`}
-      <p class="small muted" style="margin:10px 0 0">Full history is on the Benchmarks page.</p>
-    </div>`;
+    <div class="panel section"><h2>Measured quality</h2>
+      ${quality ? `<table><thead><tr><th>Measurement</th><th>Result</th><th>Notes</th></tr></thead><tbody>${quality}</tbody></table>` : `<p class="muted" style="margin:0">No results recorded.</p>`}
+    </div>
+    <details class="disclosure section"><summary>Runtime policy and capabilities</summary>
+      <div class="panel" style="margin-top:var(--sp-2)"><dl class="kv">
+        <dt>Runtime</dt><dd>${esc(policy.model_defaults.runtime || policy.runtime || "")} for every model (policy ${esc(policy.version)})</dd>
+        <dt>Shared settings</dt><dd>${policy.model_defaults.context / 1024}K context · ${esc(policy.model_defaults.cache.k_cache_dtype)} KV · output ${policy.model_defaults.max_output.toLocaleString()} · temperature ${policy.model_defaults.sampling.temperature}, top-p ${policy.model_defaults.sampling.top_p}, top-k ${policy.model_defaults.sampling.top_k}</dd>
+        <dt>This model</dt><dd>${Object.keys(m.overrides || {}).length ? Object.entries(m.overrides).map(([k, o]) => `${esc(k)} ${esc(String(o.value))}: ${esc(o.reason)}`).join("<br>") : "No overrides"} · port ${m.port}</dd>
+        <dt>KV policy</dt><dd class="small">${esc(m.cache.policy)}</dd>
+        <dt>Capabilities</dt><dd>${m.capabilities.map((c) => `<span class="cap">${esc(CAPABILITY[c] || c)}</span>`).join("")}</dd>
+      </dl></div></details>`;
   root.querySelectorAll("[data-tab]").forEach((b) => b.onclick = () => { S.modelTab = b.dataset.tab; renderModels(); });
 }
-const CAPABILITY = { acp: "ACP agent", full_auto: "Full Auto", native_tool_calls: "Native tool calls", workspace: "Workspace files", shell: "Shell", browser: "Browser automation", computer_use: "Computer use (KimiCU)", vision: "Vision", mtp: "MTP", compaction: "Compaction", recovery: "Recovery", telemetry: "Telemetry" };
+const CAPABILITY = { chats: "Workstation chats", acp: "ACP agent", full_auto: "Full Auto", native_tool_calls: "Native tool calls", workspace: "Workspace files", shell: "Shell", browser: "Browser automation", computer_use: "Computer use (KimiCU)", vision: "Vision", speculative_decoding: "Speculative decoding", compaction: "Compaction", recovery: "Recovery", telemetry: "Telemetry" };
 
 /* ------------------------------------------------------------------- live */
 function sparkline(canvas, values, color, max) {
@@ -364,136 +415,159 @@ function sparkline(canvas, values, color, max) {
   g.strokeStyle = color; g.lineWidth = 1.6; g.stroke();
   g.lineTo(w, h); g.lineTo(0, h); g.closePath(); g.globalAlpha = .12; g.fillStyle = color; g.fill(); g.globalAlpha = 1;
 }
+/* Live: what is happening now, from the runtime's own counters (Splash /status) and the agent's request receipts.
+ * Standard view here; the Advanced view is the Visualizer. Nothing is estimated: what Splash does not report says so. */
+function liveModeSwitch(current) {
+  return `<div class="seg" role="tablist" aria-label="Live view">
+    <button class="chip ${current === "live" ? "selected" : ""}" data-live-mode="live" role="tab">Standard</button>
+    <button class="chip ${current === "visualizer" ? "selected" : ""}" data-live-mode="visualizer" role="tab">Advanced</button></div>`;
+}
+function bindLiveModes(root) { root.querySelectorAll("[data-live-mode]").forEach((b) => b.onclick = () => show(b.dataset.liveMode)); }
 function renderLive() {
   const root = $("#view-live"); if (!S.catalog) return;
-  const running = runningModel(), live = S.live || {}, request = live.request || {}, rates = live.rates || {}, mtp = live.mtp || {}, ple = live.ple || {};
+  const running = runningModel(), live = S.live || {}, request = live.request || {}, rates = live.rates || {};
   const model = running ? modelOf(running) : null, system = S.system || {}, memory = system.memory || {}, gpu = system.gpu || {}, process = system.process || {};
+  const splash = running ? (S.state?.models?.[running]?.splash || {}) : {};
   if (!root.dataset.built) {
     root.dataset.built = "1";
-    root.innerHTML = `<h1>Live</h1><p class="lead">Measurements from the running model and this machine. Rates come from the runtime's own counters; nothing is estimated.</p>
-      <div id="live-head"></div>
-      <div class="grid cols-4" id="live-stats" style="margin:14px 0"></div>
-      <div class="grid cols-2">
-        <div class="panel"><h2>Generation rate</h2><canvas class="spark" id="spark-tps"></canvas><div class="legend"><span><i style="background:var(--accent)"></i>tokens per second (per verify cycle, smoothed)</span></div></div>
-        <div class="panel"><h2>MTP acceptance</h2><canvas class="spark" id="spark-accept"></canvas><div class="legend" id="mtp-legend"></div></div>
-        <div class="panel"><h2>Context</h2><div id="live-context"></div></div>
-        <div class="panel"><h2>PLE disk reads</h2><canvas class="spark" id="spark-ple"></canvas><div class="legend" id="ple-legend"></div></div>
-        <div class="panel"><h2>Unified memory</h2><div id="live-memory"></div></div>
-        <div class="panel"><h2>Processor</h2><canvas class="spark" id="spark-gpu"></canvas><div class="legend" id="gpu-legend"></div></div>
-      </div>
-      <div class="panel" style="margin-top:14px"><h2>Tool activity</h2><div class="timeline" id="live-tools"></div></div>`;
+    root.innerHTML = `<div class="page-head"><h1>Live</h1>${liveModeSwitch("live")}<span class="spacer"></span><span id="live-status"></span></div>
+      <div id="live-body"></div>`;
+    bindLiveModes(root);
   }
-  $("#live-head").innerHTML = running
-    ? `<div class="panel tight row"><b>${esc(model.display_name)}</b><span class="pill">${esc(live.agent?.profile || "no agent session")}</span>
-        <span class="pill ${request.active ? "pass" : ""}">${esc((request.phase || "IDLE").replace("_", " "))}</span>
-        <span class="muted small">request ${request.sequence ?? "–"}</span><span class="spacer"></span>
-        <span class="muted small">${S.connected ? "telemetry connected" : "telemetry reconnecting…"}</span></div>`
-    : `<div class="notice info">No model is running. Start one from the Run page; live values appear here as soon as it serves a request.</div>`;
-  $("#live-stats").innerHTML = `
-    <div class="stat"><div class="label">Prompt tokens</div><div class="value">${request.prompt_tokens?.toLocaleString() ?? "–"}</div><div class="sub">${request.reused_tokens ? request.reused_tokens.toLocaleString() + " reused from cache" : ""}</div></div>
-    <div class="stat"><div class="label">Output tokens</div><div class="value">${(request.generated ?? 0).toLocaleString()}</div><div class="sub">${request.finish ? "finish: " + esc(request.finish) : ""}</div></div>
-    <div class="stat"><div class="label">Prefill</div><div class="value">${num(rates.prefill_tps, 0, "tok/s")}</div><div class="sub">${request.prefill_seconds != null ? request.prefill_seconds.toFixed(2) + " s to first token" : ""}</div></div>
-    <div class="stat"><div class="label">Decode</div><div class="value">${num(rates.live_tps ?? rates.decode_tps, 1, "tok/s")}</div><div class="sub">${rates.decode_tps != null ? "request average " + rates.decode_tps.toFixed(1) : ""}</div></div>`;
-  sparkline($("#spark-tps"), S.series.tps, "#5cc8ff");
-  sparkline($("#spark-accept"), S.series.accept, "#4fd695", 100);
-  sparkline($("#spark-ple"), S.series.ple, "#ffb454");
-  sparkline($("#spark-gpu"), S.series.gpu, "#b98cff", 100);
-  $("#mtp-legend").innerHTML = `<span>${mtp.cycles ?? 0} verify cycles</span><span>${mtp.proposed ?? 0} drafts proposed</span><span>${mtp.accepted ?? 0} accepted</span><span>${mtp.rejected ?? 0} rejected</span><span><b>${plain(mtp.acceptance_pct)} %</b></span>`;
-  $("#ple-legend").innerHTML = `<span>${((ple.bytes_per_s || 0) / 1024).toFixed(0)} KiB/s</span><span>${(ple.reads ?? 0).toLocaleString()} row reads</span><span>${((ple.bytes ?? 0) / 2 ** 20).toFixed(1)} MiB this session</span><span>process disk read ${process.disk_read_bytes_per_s != null ? (process.disk_read_bytes_per_s / 2 ** 20).toFixed(2) + " MiB/s" : "–"}</span>`;
-  const capacity = model?.context, used = live.context?.used ?? 0;
-  $("#live-context").innerHTML = model ? `
-    <div class="bar"><span style="width:${100 * (request.prompt_tokens ?? 0) / capacity}%;background:var(--accent)"></span><span style="width:${100 * (request.generated ?? 0) / capacity}%;background:var(--good)"></span></div>
-    <div class="legend"><span><i style="background:var(--accent)"></i>prompt ${(request.prompt_tokens ?? 0).toLocaleString()}</span><span><i style="background:var(--good)"></i>generated ${(request.generated ?? 0).toLocaleString()}</span>
-      <span>${used.toLocaleString()} of ${capacity.toLocaleString()} (${(100 * used / capacity).toFixed(1)} %)</span></div>
-    <dl class="kv" style="margin-top:10px"><dt>KV cache</dt><dd>K ${model.cache.k_cache_dtype} · V ${model.cache.v_cache_dtype} · ${(used * model.cache.kv_bytes_per_token / 2 ** 30).toFixed(2)} of ${model.memory.kv_gib.toFixed(2)} GiB filled (allocated up front)</dd>
-      <dt>Disk checkpoints</dt><dd>${live.kv?.hits ?? 0} restored · ${live.kv?.stores ?? 0} stored</dd></dl>` : `<span class="muted">–</span>`;
+  $("#live-status").innerHTML = runningLine();
+  const body = $("#live-body");
+  if (!running) {
+    body.dataset.mode = "empty";
+    body.innerHTML = `<div class="panel empty"><b>No model running.</b> Start one and its measurements appear here as it serves requests.
+      <div style="margin-top:var(--sp-3)"><button class="ghost small-button" id="live-run">Open Run</button></div></div>`;
+    $("#live-run").onclick = () => show("run");
+    return;
+  }
+  if (body.dataset.mode !== "running") {
+    body.dataset.mode = "running";
+    body.innerHTML = `
+      <div class="panel"><h2>Current request <span class="muted small" id="live-phase"></span></h2><div class="metrics" id="live-request"></div></div>
+      <div class="panel section"><h2>Since the model started <span class="faint small">measured by Splash</span></h2><div class="metrics" id="live-runtime"></div></div>
+      <div class="grid cols-2 section">
+        <div class="panel"><h2>Context</h2><div id="live-context"></div></div>
+        <div class="panel"><h2>Memory</h2><div id="live-memory"></div></div>
+        <div class="panel"><h2>Processor</h2><canvas class="spark" id="spark-gpu"></canvas><div class="legend" id="gpu-legend"></div></div>
+        <div class="panel"><h2>Tool activity</h2><div class="timeline" id="live-tools"></div></div>
+      </div>
+      <p class="faint small section">Not reported by Splash: router selections, expert activity and PLE reads. The Advanced view labels these regions instead of drawing estimates.</p>`;
+  }
+  const metric = (label, value, sub = "") => `<div class="metric"><div class="label">${label}</div><div class="value">${value}</div><div class="sub">${sub}</div></div>`;
+  const ms = (v) => v == null ? NA : v >= 1000 ? (v / 1000).toFixed(2) + "<small>s</small>" : Math.round(v) + "<small>ms</small>";
+  const sched = splash.scheduler || {};
+  const last = S.state?.models?.[running]?.last_request || {};
+  const now = sched.decoding ? "decoding" : sched.prefilling ? "prefilling" : sched.queued ? "queued" : request.active ? String(request.phase || "").replace("_", " ").toLowerCase() : "idle";
+  $("#live-phase").textContent = "· " + (now === "idle" && last.started_at ? "idle · latest at " + new Date(last.started_at * 1000).toLocaleTimeString() : now);
+  // The latest request as the agent recorded it (its own receipt: API usage and stream timing), else the telemetry hub's.
+  const prompt = last.input_tokens ?? request.prompt_tokens, reused = last.reused_tokens ?? request.reused_tokens;
+  const output = last.output_tokens ?? request.generated, decode = last.provider_decode_tps ?? rates.live_tps ?? rates.decode_tps;
+  $("#live-request").innerHTML = [
+    metric("Prompt", prompt != null ? prompt.toLocaleString() + "<small>tokens</small>" : "–", reused ? reused.toLocaleString() + " reused from the prefix cache" : ""),
+    metric("New prefill", last.new_prefill_tokens != null ? last.new_prefill_tokens.toLocaleString() + "<small>tokens</small>" : "–", ""),
+    metric("First token", last.ttft_s != null ? last.ttft_s.toFixed(2) + "<small>s</small>" : "–", ""),
+    metric("Output", output != null ? output.toLocaleString() + "<small>tokens</small>" : "–", last.outcome ? "ended: " + esc(last.outcome) : ""),
+    metric("Decode", decode != null ? num(decode, 1, "tok/s") : "–", last.provider_decode_tps != null ? "tokens over stream time" : ""),
+  ].join("");
+  const since = splash.since_start || {}, req = splash.requests || {}, cache = splash.prefix_cache || {};
+  $("#live-runtime").innerHTML = splash.source ? [
+    metric("Requests", (req.completed ?? 0).toLocaleString(), `${splash.active_requests || 0} active${req.failed ? ` · <span style="color:var(--bad)">${req.failed} failed</span>` : ""}${req.cancelled ? ` · ${req.cancelled} cancelled` : ""}`),
+    metric("First token", ms(splash.ttft_ms?.p50), splash.ttft_ms?.p95 != null ? "median · p95 " + (splash.ttft_ms.p95 / 1000).toFixed(1) + " s" : "median"),
+    metric("Between tokens", ms(splash.inter_token_ms?.p50), splash.inter_token_ms?.p95 != null ? "median · p95 " + Math.round(splash.inter_token_ms.p95) + " ms" : "median"),
+    metric("Prefill", num(since.prefill_tokens_per_second, 0, "tok/s"), (since.prefill_input_tokens ?? 0).toLocaleString() + " tokens"),
+    metric("Decode", num(since.decode_tokens_per_second, 1, "tok/s"), (since.decode_output_tokens ?? 0).toLocaleString() + " tokens"),
+    metric("Draft accepted", since.draft_acceptance_rate != null ? Math.round(100 * since.draft_acceptance_rate) + "<small>%</small>" : NA, since.drafted_tokens != null ? `${since.accepted_draft_tokens} of ${since.drafted_tokens} drafted` : ""),
+    metric("Prefix cache", cache.hit_rate != null ? Math.round(100 * cache.hit_rate) + "<small>% hits</small>" : NA, cache.reused_tokens != null ? cache.reused_tokens.toLocaleString() + " tokens reused" : ""),
+  ].join("") : `<span class="muted">Waiting for the runtime's first status report…</span>`;
+  const capacity = model.context, used = (prompt ?? 0) + (output ?? 0);
+  $("#live-context").innerHTML = `
+    <div class="bar"><span style="width:${100 * (prompt ?? 0) / capacity}%;background:var(--accent)"></span><span style="width:${100 * (output ?? 0) / capacity}%;background:var(--good)"></span></div>
+    <div class="legend"><span><i style="background:var(--accent)"></i>prompt ${(prompt ?? 0).toLocaleString()}</span><span><i style="background:var(--good)"></i>generated ${(output ?? 0).toLocaleString()}</span>
+      <span>${used.toLocaleString()} of ${capacity.toLocaleString()} tokens, latest request</span></div>
+    <dl class="kv" style="margin-top:var(--sp-3)"><dt>KV cache</dt><dd>${esc(model.cache.k_cache_dtype)} · ${(model.cache.kv_bytes_per_token / 1024).toFixed(1)} KiB per token · ${(used * model.cache.kv_bytes_per_token / 2 ** 30).toFixed(2)} GiB for this request</dd></dl>`;
   const total = memory.total_bytes || 1;
   $("#live-memory").innerHTML = memory.total_bytes ? `
-    <div class="bar"><span style="width:${100 * memory.wired_bytes / total}%;background:#5cc8ff"></span><span style="width:${100 * memory.active_bytes / total}%;background:#4fd695"></span><span style="width:${100 * (memory.compressed_bytes || 0) / total}%;background:#ffc857"></span></div>
-    <div class="legend"><span><i style="background:#5cc8ff"></i>wired ${gib(memory.wired_bytes, 1)}</span><span><i style="background:#4fd695"></i>active ${gib(memory.active_bytes, 1)}</span><span><i style="background:#ffc857"></i>compressed ${gib(memory.compressed_bytes, 1)}</span></div>
-    <dl class="kv" style="margin-top:10px"><dt>Available</dt><dd>${gib(memory.available_bytes, 1)} of ${gib(memory.total_bytes, 0)}</dd><dt>Swap used</dt><dd>${gib(memory.swap_used_bytes, 2)}</dd>
-      <dt>GPU memory in use</dt><dd>${gib(gpu.in_use_bytes, 1)}</dd><dt>Model process</dt><dd>${process.footprint_bytes != null ? gib(process.footprint_bytes, 1) + " footprint" : "–"}</dd></dl>` : `<span class="muted">Waiting for the first sample…</span>`;
-  $("#gpu-legend").innerHTML = `<span><i style="background:var(--cyber)"></i>GPU ${gpu.utilization_pct ?? "–"} %</span><span>model process CPU ${process.cpu_pct ?? "–"} %</span>`;
+    <div class="bar"><span style="width:${100 * memory.wired_bytes / total}%;background:var(--accent)"></span><span style="width:${100 * memory.active_bytes / total}%;background:#4f8f7a"></span><span style="width:${100 * (memory.compressed_bytes || 0) / total}%;background:#8a7a4a"></span></div>
+    <div class="legend"><span><i style="background:var(--accent)"></i>wired ${gib(memory.wired_bytes, 1)}</span><span><i style="background:#4f8f7a"></i>active ${gib(memory.active_bytes, 1)}</span><span><i style="background:#8a7a4a"></i>compressed ${gib(memory.compressed_bytes, 1)}</span></div>
+    <dl class="kv" style="margin-top:var(--sp-3)"><dt>Available</dt><dd>${gib(memory.available_bytes, 1)} of ${gib(memory.total_bytes, 0)}${memory.swap_used_bytes ? " · swap " + gib(memory.swap_used_bytes, 2) : ""}</dd>
+      <dt>Runtime</dt><dd>${splash.memory_bytes?.current_bytes != null ? gib(splash.memory_bytes.current_bytes, 1) + " in use · peak " + gib(splash.memory_bytes.peak_bytes, 1) : NA}${splash.memory_pressure && splash.memory_pressure !== "normal" ? ` · <span style="color:var(--warn)">pressure ${esc(splash.memory_pressure)}</span>` : ""}</dd>
+      <dt>Thermal</dt><dd>${splash.thermal_state ? (splash.thermal_state === "nominal" ? "nominal" : `<span style="color:var(--warn)">${esc(splash.thermal_state)}</span>`) : NA}</dd></dl>` : `<span class="muted">Waiting for the first sample…</span>`;
+  sparkline($("#spark-gpu"), S.series.gpu, "#b98cff", 100);
+  $("#gpu-legend").innerHTML = `<span><i style="background:var(--cyber)"></i>GPU ${gpu.utilization_pct ?? "–"} %</span><span>model process CPU ${process.cpu_pct ?? "–"} %</span>${splash.scheduler ? `<span>scheduler: ${splash.scheduler.decoding || 0} decoding · ${splash.scheduler.prefilling || 0} prefilling · ${splash.scheduler.queued || 0} queued</span>` : ""}`;
   const tools = [...(live.tools?.timeline || [])].slice(-40).reverse();
   $("#live-tools").innerHTML = (live.tools?.active ? [`<div class="item"><span class="muted">running</span><span class="tag ${esc(live.tools.active.category)}">${esc(live.tools.active.category)}</span><b>${esc(live.tools.active.name)}</b><span></span><span>…</span></div>`] : [])
-    .concat(tools.map((t) => `<div class="item"><span class="muted">${new Date(t.t * 1000).toLocaleTimeString()}</span><span class="tag ${esc(t.category)}">${esc(t.category)}</span><span>${esc(t.name)}</span><span class="muted">${t.ms != null ? t.ms + " ms" : ""}</span><span>${t.ok === false ? "✗" : "✓"}</span></div>`)).join("") || `<span class="muted">No tool calls in this session yet.</span>`;
-}
-
-/* ------------------------------------------------------------- benchmarks */
-async function renderBenchmarks() {
-  const root = $("#view-benchmarks");
-  if (!S.benchmarks) S.benchmarks = await api("/api/benchmarks");
-  const data = S.benchmarks;
-  if (!data.ok) { root.innerHTML = `<h1>Benchmarks</h1><div class="notice">${esc(data.error)}</div>`; return; }
-  const filter = renderBenchmarks.filter || "all";
-  const rows = data.entries.filter((e) => filter === "all" || e.model === filter);
-  root.innerHTML = `<h1>Benchmarks</h1>
-    <p class="lead">Measured results, generated from the canonical reports (${data.entries.length} entries, index built ${esc(data.generated)}). Raw evidence stays on this machine.</p>
-    <div class="tabs">${["all", ...S.catalog.models.map((m) => m.id)].map((id) => `<button class="chip ${id === filter ? "selected" : ""}" data-filter="${id}">${id === "all" ? "All" : esc(modelOf(id).family)}</button>`).join("")}</div>
-    <div class="panel" style="padding:0;overflow:auto;max-height:70vh"><table><thead><tr><th>Date</th><th>Experiment</th><th>Model</th><th>Profile</th><th>Task / measure</th><th>Result</th><th class="num">Wall s</th><th class="num">Decode tok/s</th><th class="num">MTP %</th><th>Context</th></tr></thead>
-      <tbody>${rows.map((e) => `<tr><td class="mono">${esc(e.date || "")}</td><td>${esc(e.experiment)}</td><td>${esc(e.model || "")}</td><td>${esc(e.profile || "")}</td><td>${esc(e.task || "")}</td>
-        <td>${e.acceptance == null ? esc(e.result || "") : `<span class="pill ${e.acceptance ? "pass" : "fail"}">${e.acceptance ? "pass" : "fail"}</span> ${esc(e.result || "")}`}</td>
-        <td class="num">${e.wall_s != null ? e.wall_s.toFixed(1) : ""}</td><td class="num">${e.decode_tok_s != null ? e.decode_tok_s.toFixed(1) : ""}</td><td class="num">${e.mtp_acceptance_pct != null ? e.mtp_acceptance_pct.toFixed(1) : ""}</td><td>${esc(e.context || "")}</td></tr>`).join("")}</tbody></table></div>`;
-  root.querySelectorAll("[data-filter]").forEach((b) => b.onclick = () => { renderBenchmarks.filter = b.dataset.filter; renderBenchmarks(); });
-}
-
-/* --------------------------------------------------------------- research */
-function renderResearch() {
-  const root = $("#view-research"); if (!S.catalog) return;
-  const highlights = S.benchmarks?.highlights || [];
-  root.innerHTML = `<h1>Research and provenance</h1>
-    <p class="lead">Where each model comes from and what the experiments found. Hashes identify the exact files in use.</p>
-    ${S.catalog.models.map((m) => { const d = S.catalog.details[m.id]; return `
-      <div class="panel" style="margin-bottom:14px;border-left:3px solid ${TONE[m.id]}"><h3>${esc(m.display_name)}</h3>
-        <dl class="kv"><dt>Source</dt><dd class="mono">${esc(d.source.repository)} @ ${esc(d.source.revision)}</dd>
-          <dt>Derivation</dt><dd>${esc(d.source.derivation || "")}</dd>
-          ${d.source.policy ? `<dt>Policy</dt><dd><b>${esc(d.source.policy)}</b></dd>` : ""}
-          <dt>Runtime</dt><dd>${esc(d.runtime.name)} · build <span class="mono">${esc(d.runtime.id)}</span> · source <span class="mono">${esc(d.runtime.source.commit.slice(0, 12))}</span></dd>
-          <dt>Notes</dt><dd>${esc(d.provenance.notes || "")}</dd></dl></div>`; }).join("")}
-    <h2>Findings</h2>
-    <div class="grid cols-2">${highlights.map((h) => `<div class="panel"><h3>${esc(h.title)}</h3><p class="muted" style="margin:0">${esc(h.text)}</p></div>`).join("") || `<p class="muted">Open the Benchmarks page once to load the findings.</p>`}</div>`;
-  if (!S.benchmarks) api("/api/benchmarks").then((r) => { S.benchmarks = r; if (S.view === "research") renderResearch(); });
+    .concat(tools.map((t) => `<div class="item"><span class="muted">${new Date(t.t * 1000).toLocaleTimeString()}</span><span class="tag ${esc(t.category)}">${esc(t.category)}</span><span>${esc(t.name)}</span><span class="muted">${t.ms != null ? t.ms + " ms" : ""}</span><span style="color:${t.ok === false ? "var(--bad)" : "var(--faint)"}">${t.ok === false ? "failed" : ""}</span></div>`)).join("") || `<span class="muted">No tool calls yet.</span>`;
 }
 
 /* --------------------------------------------------------------- settings */
-async function renderSettings() {
-  const root = $("#view-settings");
-  root.innerHTML = `<h1>Diagnostics</h1><p class="lead">Loading…</p>`;
-  const d = S.diagnostics = await api("/api/diagnostics");
-  const [sessions] = await Promise.all([api("/api/sessions")]);
-  root.innerHTML = `<h1>Diagnostics</h1><p class="lead">Paths, health and consistency checks. Nothing here changes the installation.</p>
-    <div class="grid cols-2">
-      <div class="panel"><h2>Locations</h2><dl class="kv"><dt>Code</dt><dd class="mono">${esc(d.code_root)}</dd><dt>Data</dt><dd class="mono">${esc(d.data_root)}</dd>
-        <dt>Telemetry sessions</dt><dd class="mono">${esc(d.telemetry.sessions_directory)}</dd><dt>Installation seal</dt><dd>${d.seal.present ? "present" : "not written yet"}</dd></dl></div>
-      <div class="panel"><h2>Telemetry</h2><dl class="kv"><dt>Hub uptime</dt><dd>${fmtDuration(d.telemetry.hub.uptime_s)}</dd><dt>Subscribers</dt><dd>${d.telemetry.hub.subscribers}</dd>
-        <dt>Detail level</dt><dd>${d.telemetry.hub.detail_level} <span class="muted small">(0 = runtime produces nothing extra)</span></dd>
-        <dt>Events received</dt><dd class="mono">${esc(JSON.stringify(d.telemetry.hub.events))}</dd></dl></div>
-      <div class="panel"><h2>Models</h2><table><thead><tr><th>Model</th><th>Status</th><th>Generated config</th><th>Runtime build</th></tr></thead><tbody>
-        ${Object.entries(d.models).map(([id, row]) => `<tr><td>${esc(modelOf(id).display_name)}</td><td>${d.state.models[id].running ? (d.state.models[id].healthy ? "running" : "unhealthy") : "offline"}</td>
-          <td>${typeof row.generated_config === "string" ? `<span class="pill pass">${esc(row.generated_config)}</span>` : `<span class="pill fail">${esc(row.generated_config.join("; "))}</span>`}</td><td class="mono">${esc(row.runtime)}</td></tr>`).join("")}</tbody></table></div>
-      <div class="panel"><h2>Editor entries</h2>${d.editor_entries.ok ? `<span class="pill pass">Zed entries match the catalog</span>` : `<span class="pill fail">Zed entries differ</span>
-        <dl class="kv" style="margin-top:8px"><dt>Missing</dt><dd>${esc((d.editor_entries.missing || []).join(", ") || "–")}</dd><dt>Obsolete</dt><dd>${esc((d.editor_entries.obsolete || []).join(", ") || "–")}</dd></dl>
-        <p class="muted small">Run <span class="mono">dwarfstar zed --apply</span> to regenerate them.</p>`}</div>
+function renderSettings() {
+  const root = $("#view-settings"); if (!S.state) return;
+  const permissions = S.state.permissions || {};
+  const roots = S.settingsRoots;
+  root.innerHTML = `
+    <div class="page-head"><h1>Settings</h1></div>
+    <div class="panel"><h2>Tool approval <span class="muted small">for every profile, in Zed and in chats</span></h2>
+      <div class="seg" role="radiogroup" aria-label="Tool approval">${(permissions.modes || []).map((m) => `<button class="chip ${m.id === permissions.approval_mode ? "selected" : ""}"
+        data-approval="${m.id}" role="radio" aria-checked="${m.id === permissions.approval_mode}">${esc(m.label)}</button>`).join("")}</div>
+      <dl class="kv" style="margin-top:var(--sp-4)">${(permissions.modes || []).map((m) => `<dt${m.id === permissions.approval_mode ? ' style="color:var(--text)"' : ""}>${esc(m.label)}</dt><dd class="${m.id === permissions.approval_mode ? "" : "muted"}">${esc(m.description)}</dd>`).join("")}</dl>
+      <p class="faint small" style="margin:var(--sp-3) 0 0">Takes effect for new agent sessions and the next chat turn.</p>
+      ${S.confirmFullAuto ? `<div class="notice" style="margin-top:var(--sp-3)"><b>Turn on Full Auto?</b> The agent will run shell commands, edit files anywhere,
+        use the browser and control the computer without asking, outside the sandbox.
+        <div class="row" style="margin-top:var(--sp-2)"><button class="danger small-button" id="full-auto-yes">Turn on Full Auto</button>
+        <button class="ghost small-button" id="full-auto-no">Cancel</button></div></div>` : ""}
     </div>
-    <div class="panel" style="margin-top:14px"><h2>Recorded sessions</h2>
-      <table><thead><tr><th>Session</th><th class="num">Size</th><th>Last event</th></tr></thead><tbody>${(sessions.sessions || []).map((s) => `<tr><td class="mono">${esc(s.id)}</td><td class="num">${(s.bytes / 1024).toFixed(0)} KiB</td><td>${new Date(s.modified * 1000).toLocaleString()}</td></tr>`).join("") || `<tr><td colspan="3" class="muted">None yet.</td></tr>`}</tbody></table>
-      <p class="muted small" style="margin:10px 0 0">Sessions hold counters and timings only. The newest 30 are kept. Open one in the Visualizer to replay it.</p></div>
-    <div class="panel" style="margin-top:14px"><h2>Server logs</h2><dl class="kv">${Object.entries(d.state.models).map(([id, s]) => `<dt>${esc(modelOf(id).family)}</dt><dd class="mono">${esc(s.log || "–")}</dd>`).join("")}</dl></div>`;
+    <div class="panel section"><h2>Zed</h2>
+      <dl class="kv"><dt>Agent entries</dt><dd>${S.catalog.profiles.length} DwarfStar agents, one per model and reasoning level, launched with <span class="mono">bin/dwarfstar-acp</span></dd>
+        <dt>Install or update</dt><dd class="mono">bin/dwarfstar zed --apply</dd>
+        <dt>Shared conversations</dt><dd>Chats → Zed lists DwarfStar threads from Zed; a chat's menu has Open in Zed. One client writes to a conversation at a time.</dd></dl>
+    </div>
+    <div class="panel section"><h2>Data</h2>
+      ${roots ? `<dl class="kv">${roots.map(([k, v]) => `<dt>${esc(k)}</dt><dd class="mono small">${esc(v)}</dd>`).join("")}</dl>` : `<span class="muted">Loading…</span>`}
+      <p class="faint small" style="margin:var(--sp-3) 0 0">Disk use and safe cleanup: <span class="mono">bin/dwarfstar storage</span> and <span class="mono">bin/dwarfstar cache clean</span> (dry run unless --apply).</p>
+    </div>`;
+  root.querySelectorAll("[data-approval]").forEach((b) => b.onclick = () => {
+    if (b.dataset.approval === permissions.approval_mode) return;
+    if (b.dataset.approval === "full_auto") { S.confirmFullAuto = true; renderSettings(); return; }
+    setApproval(b.dataset.approval);
+  });
+  const yes = $("#full-auto-yes", root), no = $("#full-auto-no", root);
+  if (yes) yes.onclick = () => setApproval("full_auto", "full_auto");
+  if (no) no.onclick = () => { S.confirmFullAuto = false; renderSettings(); };
+  if (!roots) api("/api/diagnostics").then((d) => {
+    const names = { code: "Code", assets: "Models and runtime", data: "Chats and settings", cache: "Cache", logs: "Logs" };
+    S.settingsRoots = Object.entries(d.locations || {}).filter(([k]) => names[k]).map(([k, v]) => [names[k], v.replace(/^\/Users\/[^/]+/, "~")]);
+    if (S.view === "settings") renderSettings();
+  });
 }
 
 /* ------------------------------------------------------------------- boot */
 async function boot() {
-  document.querySelectorAll("#nav button").forEach((b) => b.onclick = () => show(b.dataset.view));
+  document.querySelectorAll("#nav button[data-view]").forEach((b) => b.onclick = () => show(b.dataset.view));
+  $("#palette-open").onclick = () => window.Palette?.open();
+  $("#nav-status").onclick = () => show("run");
   try { [S.catalog, S.state] = await Promise.all([api("/api/catalog"), api("/api/state")]); }
   catch { setTimeout(boot, 1500); return; }
   const selected = S.catalog.profiles.find((p) => p.id === S.state.selected_profile) || S.catalog.profiles.find((p) => p.default);
   S.model = selected.model; S.effort = selected.reasoning_effort;
   connect(1);
   const initial = location.hash.slice(1);
-  show(["run", "chats", "models", "live", "visualizer", "benchmarks", "research", "settings"].includes(initial) ? initial : "run");
+  show(["run", "chats", "models", "live", "visualizer", "diagnostics", "settings"].includes(initial) ? initial : (S.state.running_models || []).length ? "chats" : "run");
   window.addEventListener("hashchange", () => { const v = location.hash.slice(1); if (v && v !== S.view && document.querySelector("#view-" + v)) show(v); });
   setInterval(refreshState, 4000);
-  api("/api/benchmarks").then((r) => { S.benchmarks = r; });
+  firstRun();
 }
-window.DwarfStar = { S, api, esc, modelOf, runningModel, TONE, show, toast, gib };
+/* First run (or a broken installation): if any setup check blocks a start, say so once on every page. */
+async function firstRun() {
+  const setup = await api("/api/setup").catch(() => null);
+  if (!setup?.ok || !setup.summary.error) return;
+  const blocking = setup.checks.filter((c) => c.level === "error");
+  const banner = el(`<div class="notice setup-banner" role="alert"><b>Setup needs attention:</b> ${blocking.length} check${blocking.length === 1 ? "" : "s"} would block a model start
+    (${esc(blocking.slice(0, 3).map((c) => c.name).join(", "))}${blocking.length > 3 ? ", …" : ""}). <button class="ghost small-button">Open Diagnostics</button></div>`);
+  banner.querySelector("button").onclick = () => show("diagnostics");
+  $("#main").prepend(banner);
+}
+window.DwarfStar = { S, api, esc, modelOf, runningModel, TONE, show, toast, gib, runningLine, liveModeSwitch, bindLiveModes, profileLabel };
 boot();

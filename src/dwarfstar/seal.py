@@ -20,10 +20,10 @@ import time
 from pathlib import Path
 
 from dwarfstar import __version__, catalog, instance, telemetry, zed
-from dwarfstar.paths import CODE, DATA, workstation_binary
+from dwarfstar.paths import CODE, SEAL_DIRECTORY, workstation_binary
 
-SEAL = DATA / "DWARFSTAR-PRODUCTION-SEAL.json"
-BASELINE = DATA / "baseline" / "DWARFSTAR-PRODUCTION-BASELINE.json"
+SEAL = SEAL_DIRECTORY / "DWARFSTAR-PRODUCTION-SEAL.json"
+BASELINE = SEAL_DIRECTORY / "DWARFSTAR-PRODUCTION-BASELINE.json"
 LIMITATIONS = CODE / "docs" / "known-limitations.json"
 
 
@@ -71,8 +71,8 @@ def build() -> tuple[dict, dict]:
             "reasoning_efforts": model["reasoning_efforts"],
             "cache": {k: model["cache"][k] for k in ("k_cache_dtype", "v_cache_dtype", "kv_bytes_per_token")},
             "runtime_build": model["runtime"], "runtime_binary_sha256": manifest["binary_sha256"],
-            "prefill_chunk": model["prefill_chunk"], "overrides": model["overrides"], "memory_plan": catalog.memory_plan(model_id),
-            "shader_set_sha256": text_sha(manifest["shader_sha256"]),
+            "overrides": model["overrides"], "memory_plan": catalog.memory_plan(model_id),
+            "shader_set_sha256": text_sha(manifest["shader_sha256"]), "adapter_sha256": manifest["adapter_sha256"],
             "assets": {role: {"bytes": asset["bytes"], "sha256": asset["sha256"]} for role, asset in model["assets"].items()},
             "generated_config_sha256": {name: hashlib.sha256(text.encode()).hexdigest() for name, text in generated.items()},
             "generated_config_drift": instance.check(model_id),
@@ -96,7 +96,7 @@ def build() -> tuple[dict, dict]:
         "editor": {"entries_sha256": text_sha(zed.entries()), "installed_matches": _zed_ok()},
         "memory_policy": catalog.policy()["memory"],
         "telemetry": {"schema_version": telemetry.SCHEMA_VERSION, "event_port": telemetry.DEFAULT_EVENT_PORT,
-                      "http_port": telemetry.DEFAULT_HTTP_PORT, "control_port": telemetry.DEFAULT_CONTROL_PORT},
+                      "http_port": telemetry.DEFAULT_HTTP_PORT},
         "benchmark_index_sha256": sha(CODE / "research/benchmark-index.json") if (CODE / "research/benchmark-index.json").is_file() else None,
         "documentation": {name: sha(CODE / name) for name in ("README.md", "LICENSE", "docs/ARCHITECTURE.md", "docs/MODELS.md", "docs/RESEARCH-HISTORY.md") if (CODE / name).is_file()},
         "known_limitations": limitations,
@@ -127,7 +127,7 @@ def verify(hash_models: bool = False) -> dict:
         if now is None:
             problems.append(f"{model_id}: missing from the catalog")
             continue
-        for key in ("assets", "runtime_binary_sha256", "shader_set_sha256", "context", "cache", "generated_config_sha256", "source", "prefill_chunk", "overrides"):
+        for key in ("assets", "runtime_binary_sha256", "shader_set_sha256", "adapter_sha256", "context", "cache", "generated_config_sha256", "source", "overrides"):
             if row[key] != now[key]:
                 problems.append(f"{model_id}: {key} differs from the seal")
         if now["generated_config_drift"]:
@@ -149,7 +149,7 @@ def main(argv: list[str]) -> int:
     seal, baseline = build()
     BASELINE.parent.mkdir(parents=True, exist_ok=True)
     BASELINE.write_text(json.dumps(baseline, indent=1) + "\n")
-    seal["baseline_file"] = {"path": str(BASELINE.relative_to(DATA)), "sha256": sha(BASELINE)}
+    seal["baseline_file"] = {"path": BASELINE.name, "sha256": sha(BASELINE)}
     SEAL.write_text(json.dumps(seal, indent=2) + "\n")
     print(json.dumps({"ok": True, "seal": str(SEAL), "baseline": str(BASELINE), "tracked_files": seal["repository"]["tracked_files"],
                       "revision": seal["repository"]["revision"], "dirty": seal["repository"]["dirty"]}, indent=2))

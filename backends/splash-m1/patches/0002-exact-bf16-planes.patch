@@ -1,0 +1,391 @@
+diff --git a/dev/tests/engine/GgufFormatReference.hpp b/dev/tests/engine/GgufFormatReference.hpp
+index e580baf..cc1520c 100644
+--- a/dev/tests/engine/GgufFormatReference.hpp
++++ b/dev/tests/engine/GgufFormatReference.hpp
+@@ -32,7 +32,8 @@ enum Fmt { Q4K = GGUF_FMT_Q4K, IQ4XS = GGUF_FMT_IQ4XS, IQ4NL = GGUF_FMT_IQ4NL, Q
+            IQ2XXS = GGUF_FMT_IQ2XXS, IQ2XS = GGUF_FMT_IQ2XS, IQ2S = GGUF_FMT_IQ2S, IQ1S = GGUF_FMT_IQ1S,
+            IQ1M = GGUF_FMT_IQ1M, Q40 = GGUF_FMT_Q40, Q41 = GGUF_FMT_Q41, MXFP4 = GGUF_FMT_MXFP4,
+            PQ20 = GGUF_FMT_PQ20, NVFP4 = GGUF_FMT_NVFP4, FP8 = GGUF_FMT_FP8, Q50 = GGUF_FMT_Q50, Q51 = GGUF_FMT_Q51,
+-           BF16 = GGUF_FMT_BF16, F16 = GGUF_FMT_F16, Q20 = GGUF_FMT_Q20, FMT_COUNT = GGUF_FMT_COUNT };
++           BF16 = GGUF_FMT_BF16, F16 = GGUF_FMT_F16, Q20 = GGUF_FMT_Q20, BF16S = GGUF_FMT_BF16S,
++           FMT_COUNT = GGUF_FMT_COUNT };
+ inline const char *fmtName(uint32_t f) { return kQuantFormats[f].name; }
+ // The format of kQuantFormats name `name`, FMT_COUNT for none.
+ inline Fmt fmtNamed(const std::string &name) {
+@@ -45,7 +46,7 @@ inline float h2f(uint16_t u) { __fp16 h; memcpy(&h, &u, 2); return (float)h; }
+ // A row of K values as a GGUF stores it: BF16's and F16's two bytes a value,
+ // at any K; any other format's native blocks.
+ inline uint32_t rowBytes(Fmt f, uint32_t K) {
+-  if (f == BF16 || f == F16) return K * 2;
++  if (f == BF16 || f == BF16S || f == F16) return K * 2;
+   const QuantFormat &i = kQuantFormats[f];
+   return K / i.block_elements * i.block_bytes;
+ }
+@@ -170,7 +171,7 @@ inline std::vector<uint8_t> quantizeQ8_0(const std::vector<float> &x) {
+ }
+ 
+ // Whether a format holds 16-bit float values, BF16 or F16.
+-inline bool float16(Fmt f) { return f == BF16 || f == F16; }
++inline bool float16(Fmt f) { return f == BF16 || f == BF16S || f == F16; }
+ // N native rows of BF16 or F16 values: per 256 a normal draw of deviation 8 h2f(scale()), the magnitudes of a
+ // quantized format of that scale, every 61st value of BF16 a ten-thousandth of that, below half's normal range,
+ // so the staged tile's half rounds it.
+@@ -182,8 +183,8 @@ std::vector<uint8_t> makeFloat16Native(Fmt f, uint32_t N, uint32_t K, std::mt199
+   for (size_t i = 0; i < v.size() / 2; ++i) {
+     if (i % 256 == 0) deviation = 8 * h2f(scale());
+     float x = unit(rng) * deviation;
+-    if (f == BF16 && i % 61 == 0) x *= 1e-4f;
+-    const uint16_t bits = f == BF16 ? splash::test::floatToBf16(x) : f2h(x);
++    if (f != F16 && i % 61 == 0) x *= 1e-4f;
++    const uint16_t bits = f != F16 ? splash::test::floatToBf16(x) : f2h(x);
+     memcpy(v.data() + 2 * i, &bits, 2);
+   }
+   return v;
+@@ -310,7 +311,7 @@ inline std::uniform_real_distribution<float> scaleRange(Fmt f) {
+     case NVFP4: return std::uniform_real_distribution<float>(0.000008f, 0.00006f);
+     case FP8: return std::uniform_real_distribution<float>(0.00002f, 0.00012f);
+     // The scale whose quantized values a 16-bit tensor's take (makeFloat16Native).
+-    case BF16: case F16: return std::uniform_real_distribution<float>(0.001f, 0.004f);
++    case BF16: case BF16S: case F16: return std::uniform_real_distribution<float>(0.001f, 0.004f);
+     case FMT_COUNT: break;
+   }
+   unknownFormat(f);
+@@ -518,10 +519,10 @@ inline void groupPack(Fmt f, const uint8_t *row, uint32_t g, float vals[32], uin
+       }
+       packBits(lo, 8, p0); return;
+     }
+-    case BF16: case F16: {   // value 32 j + k of the block, times g = 1
++    case BF16: case BF16S: case F16: {   // value 32 j + k of the block, times g = 1
+       for (int k = 0; k < 32; ++k) {
+         uint16_t x; memcpy(&x, blk + 2 * (32 * j + k), 2);
+-        vals[k] = f == BF16 ? splash::test::bf16ToFloat(x) : h2f(x);
++        vals[k] = f != F16 ? splash::test::bf16ToFloat(x) : h2f(x);
+         memcpy(p0 + 2 * quant_slot(k), &x, 2);
+       }
+       return;
+@@ -634,7 +635,7 @@ inline void metaPack(Fmt f, const uint8_t *row, uint32_t unit, uint8_t *dst) {
+     case Q3K: memcpy(dst, blk + kQ3KD, 2); dst[2] = dst[3] = 0; memcpy(dst + 4, blk + kQ3KScales, 12); return;
+     case Q2K: memcpy(dst, blk + kQ2KD, 4); memcpy(dst + 4, blk, 16); return;
+     case IQ1M: memcpy(dst, blk + kIQ1MScales, 8); return;
+-    case BF16: case F16: { const float g = 1.0f; memcpy(dst, &g, 4); return; }   // the repack's g
++    case BF16: case BF16S: case F16: { const float g = 1.0f; memcpy(dst, &g, 4); return; }   // the repack's g
+     case FMT_COUNT: break;
+   }
+   unknownFormat(f);
+@@ -693,7 +694,8 @@ constexpr std::pair<Fmt, const char *> kGgmlSymbols[] = {
+     {IQ2S, "dequantize_row_iq2_s"},   {IQ1S, "dequantize_row_iq1_s"},     {IQ1M, "dequantize_row_iq1_m"},
+     {Q40, "dequantize_row_q4_0"},     {Q41, "dequantize_row_q4_1"},       {MXFP4, "dequantize_row_mxfp4"},
+     {PQ20, "dequantize_row_pq2_0"},   {Q50, "dequantize_row_q5_0"},       {Q51, "dequantize_row_q5_1"},
+-    {BF16, "ggml_bf16_to_fp32_row"},  {F16, "ggml_fp16_to_fp32_row"},     {Q20, "dequantize_row_q2_0"}};
++    {BF16, "ggml_bf16_to_fp32_row"},  {F16, "ggml_fp16_to_fp32_row"},     {Q20, "dequantize_row_q2_0"},
++    {BF16S, "ggml_bf16_to_fp32_row"}};
+ static_assert([] {
+   uint32_t formats = 0;
+   for (uint32_t f = 0; f < GGUF_FMT_COUNT; ++f) formats += !quant_loader_format(f);
+diff --git a/dev/tests/engine/gguf_planner_test.mm b/dev/tests/engine/gguf_planner_test.mm
+index 560f9b4..8a3f291 100644
+--- a/dev/tests/engine/gguf_planner_test.mm
++++ b/dev/tests/engine/gguf_planner_test.mm
+@@ -194,7 +194,7 @@ void checkQuantizedAlphaBeta(const std::filesystem::path &directory) {
+     };
+     for (uint32_t format = 0; format < GGUF_FMT_COUNT; ++format) {
+       const std::optional<uint32_t> stored = ggufType(format);
+-      if (!stored || format == GGUF_FMT_BF16 || format == GGUF_FMT_F16) continue;
++      if (!stored || format == GGUF_FMT_BF16 || format == GGUF_FMT_BF16S || format == GGUF_FMT_F16) continue;
+       const uint32_t type = *stored;
+       writeGguf(path, tensorsWith(type, type), g);
+       const Plan result = plan(path, g);
+@@ -600,11 +600,12 @@ void checkPleTableRows(const std::filesystem::path &directory) {
+ }
+ 
+ // Qwen3.8-Flash-Next's hyper-connection projections (GgufImage.cpp
+-// hyperImage) on the small qwen4exp target (qwen4ExpGeometry): of BF16 or
+-// F16, Q8_0 planes whose rows the reader builds as the reference GGUF
+-// quantization of Q8_0 does from the values (gguf_reference::quantizeQ8_0,
+-// which gguf-reference pins to it); of Q8_0, the rows as stored; of F32,
+-// refused.
++// hyperImage) on the small qwen4exp target (qwen4ExpGeometry): of F16, Q8_0
++// planes whose rows the reader builds as the reference GGUF quantization of
++// Q8_0 does from the values (gguf_reference::quantizeQ8_0, which
++// gguf-reference pins to it); of BF16, BF16 planes of the values as stored
++// (BF16S where the width is a whole number of 64 values but not of 256, the
++// 64-wide up projection); of Q8_0, the rows as stored; of F32, refused.
+ void checkHyperConnections(const std::filesystem::path &directory) {
+   const model::QwenTargetDimensions g = qwen4ExpGeometry();
+   const auto path = directory / "hyper.gguf";
+@@ -656,9 +657,20 @@ void checkHyperConnections(const std::filesystem::path &directory) {
+     const Tensor &tensor = tensorNamed(tensors, name);
+     const uint64_t rows = tensor.dims[1], columns = tensor.dims[0];
+     const model::gguf::Repack *repack = repackIn(mixed, name);
+-    const bool stored = tensor.type == kQ8_0;
+-    // The Q8_0 rows of the values the tensor holds, or its rows as stored.
++    const bool stored = tensor.type == kQ8_0 || tensor.type == model::ggml::kBF16;
++    // The Q8_0 rows of the values an F16 tensor holds, or the rows as stored.
+     std::vector<uint8_t> expected = tensor.data;
++    if (tensor.type == model::ggml::kBF16) {
++      const uint32_t format = columns % 256 ? GGUF_FMT_BF16S : GGUF_FMT_BF16;
++      const bool exact = repack && repack->format == format && repack->rows == rows && repack->columns == columns &&
++                         repack->sources.size() == 1 && repack->sources[0].type == model::ggml::kBF16 &&
++                         repack->sources[0].rowBytes == columns * 2 && !repack->sources[0].ggufFloatRowBytes;
++      std::vector<uint8_t> rowsRead(expected.size());
++      if (exact) model::readRepackRows(*repack, 0, rows, rowsRead.data());
++      check(exact && rowsRead == expected, "planner keeps BF16 " + name + " exact, in " +
++                                               kQuantFormats[format].name + " planes of its rows as stored");
++      continue;
++    }
+     if (!stored) {
+       std::vector<float> values(rows * columns);
+       for (size_t i = 0; i < values.size(); ++i) {
+@@ -685,6 +697,64 @@ void checkHyperConnections(const std::filesystem::path &directory) {
+         "planner refuses an F32 hyper-connection projection by name");
+ }
+ 
++// A BF16 shared expert whose width (the routed experts' width) is a whole
++// number of 64 values but not of 256, as Cyber's 640-wide one: BF16, whose
++// native block is 256 values, cannot tile its down projection, so the planner
++// repacks it into BF16S planes (64-value blocks) of the same values; its gate
++// and up projections, as wide as the hidden size, stay BF16. Every repack
++// reads the tensor's rows as stored: the prepared values are the GGUF's.
++// Before BF16S the plan refused it ("tensor is not tile aligned").
++void checkBf16SharedExpertWidth(const std::filesystem::path &directory) {
++  SmallTarget target = smallTarget(true);
++  model::QwenTargetDimensions &g = target.geometry;
++  g.expertIntermediateSize = 320;
++  target.tensors = targetTensors(g, {{"attn_qkv.weight", kQ8_0},
++                                     {"attn_gate.weight", kQ8_0},
++                                     {"ssm_out.weight", kQ8_0},
++                                     {"ffn_gate_exps.weight", kQ8_0},
++                                     {"ffn_up_exps.weight", kQ8_0},
++                                     {"ffn_down_exps.weight", kQ8_0},
++                                     {"ffn_gate_shexp.weight", model::ggml::kBF16},
++                                     {"ffn_up_shexp.weight", model::ggml::kBF16},
++                                     {"ffn_down_shexp.weight", model::ggml::kBF16},
++                                     {"output.weight", kQ8_0},
++                                     {"token_embd.weight", kQ8_0}});
++  randomize(target.tensors, 1500);
++  const auto path = directory / "bf16-shared-320.gguf";
++  writeGguf(path, target.tensors, g);
++  // The plan's rows read `source`, which stays open while they are read.
++  const auto source = std::make_unique<model::WeightSource>(path);
++  Plan result;
++  try {
++    const model::GgufFile gguf(*source);
++    result = {model::gguf::planImages(gguf, architecture(g), g), std::nullopt};
++  } catch (const model::GgufError &error) {
++    result = {{}, error.what()};
++  }
++  check(!result.error, "planner plans a BF16 shared expert 320 values wide" +
++                           (result.error ? ": " + *result.error : ""));
++  if (result.error) return;
++  const struct {
++    const char *name;
++    uint32_t format;
++    uint64_t rows, columns;
++  } cases[] = {{"blk.0.ffn_down_shexp.weight", GGUF_FMT_BF16S, g.hiddenSize, g.expertIntermediateSize},
++               {"blk.0.ffn_gate_shexp.weight", GGUF_FMT_BF16, g.expertIntermediateSize, g.hiddenSize},
++               {"blk.0.ffn_up_shexp.weight", GGUF_FMT_BF16, g.expertIntermediateSize, g.hiddenSize}};
++  for (const auto &expected : cases) {
++    const model::gguf::Repack *repack = repackIn(result, expected.name);
++    const test_gguf::Bytes &data = target.data(expected.name);
++    const bool shaped = repack && repack->format == expected.format && repack->rows == expected.rows &&
++                        repack->columns == expected.columns && !repack->sources.empty() &&
++                        repack->sources[0].type == model::ggml::kBF16 &&
++                        repack->sources[0].rowBytes == expected.columns * 2;
++    std::vector<uint8_t> rowsRead(data.size());
++    if (shaped) model::readRepackRows(*repack, 0, expected.rows, rowsRead.data());
++    check(shaped && rowsRead == data, std::string("planner repacks BF16 ") + expected.name + " into " +
++                                          kQuantFormats[expected.format].name + " planes of its rows as stored");
++  }
++}
++
+ // Qwen3.8-Flash-Next's PLE embedding on the small qwen4exp target
+ // (qwen4ExpGeometry): its projections, norms and convolution in the layer it
+ // feeds, and its table's rows as stored in an image of their own after the
+@@ -1102,6 +1172,7 @@ int main() {
+     guarded("planner on a rotated target", [&] { checkRotation(directory.path()); });
+     guarded("planner on a streamed PLE table", [&] { checkPleTableRows(directory.path()); });
+     guarded("planner on Flash-Next hyper-connections", [&] { checkHyperConnections(directory.path()); });
++    guarded("planner on a BF16 shared expert 320 wide", [&] { checkBf16SharedExpertWidth(directory.path()); });
+     guarded("planner on Flash-Next's PLE table", [&] { checkPleTable(directory.path()); });
+     guarded("planner on a split GGUF", [&] { checkSplit(directory.path()); });
+     guarded("planner on Flint", [&] { checkFlint(directory.path()); });
+diff --git a/runtime/metal/abi/QuantFormat.h b/runtime/metal/abi/QuantFormat.h
+index 15ae23c..0e4278f 100644
+--- a/runtime/metal/abi/QuantFormat.h
++++ b/runtime/metal/abi/QuantFormat.h
+@@ -121,7 +121,14 @@
+ #define GGUF_FMT_BF16 41u
+ #define GGUF_FMT_F16 42u
+ #define GGUF_FMT_Q20 43u
+-#define GGUF_FMT_COUNT 44u
++// BF16 in native blocks of 64 values (two groups per meta unit): the same
++// values and planes as GGUF_FMT_BF16, for a tensor whose width is a whole
++// number of 64 but not of 256 values (Cyber's 640-wide shared-expert down
++// projection, a 320-wide hyper-connection projection). GGUF type 30 stores it
++// too; gguf_format_of(30) stays GGUF_FMT_BF16 and the planner picks this one
++// by width (ggufPlaneFormat).
++#define GGUF_FMT_BF16S 44u
++#define GGUF_FMT_COUNT 45u
+ 
+ // The tensor type an image descriptor names for an MLX affine format: no GGUF
+ // type is of this form.
+@@ -195,6 +202,7 @@ QUANT_CONSTANT QuantFormat kQuantFormats[GGUF_FMT_COUNT] = {
+     {30, 256, 512, 64, 0, 4, 8, "bf16"},
+     {1, 256, 512, 64, 0, 4, 8, "f16"},
+     {42, 64, 18, 8, 0, 2, 2, "q20"},      // GGUF's block_q2_0, one d per 64 elements; meta: d
++    {30, 64, 128, 64, 0, 4, 2, "bf16s"},  // BF16 in native blocks of 64 values; meta: g (1), as BF16's
+ };
+ 
+ // The format that stores a GGUF tensor type (or a loader's);
+@@ -210,7 +218,7 @@ inline constexpr uint32_t gguf_format_of(uint32_t ggml_type) {
+ // own block (GGUF's, of one value), so any width; any other format's whole
+ // native blocks, else 0.
+ inline constexpr uint64_t quant_stored_row_bytes(uint32_t format, uint64_t columns) {
+-  if (format == GGUF_FMT_BF16 || format == GGUF_FMT_F16) return columns * 2;
++  if (format == GGUF_FMT_BF16 || format == GGUF_FMT_BF16S || format == GGUF_FMT_F16) return columns * 2;
+   if (format >= GGUF_FMT_COUNT || columns % kQuantFormats[format].block_elements) return 0;
+   return columns / kQuantFormats[format].block_elements * kQuantFormats[format].block_bytes;
+ }
+diff --git a/runtime/metal/kernels/common/gguf_embedding_formats.h b/runtime/metal/kernels/common/gguf_embedding_formats.h
+index d096570..f7191a4 100644
+--- a/runtime/metal/kernels/common/gguf_embedding_formats.h
++++ b/runtime/metal/kernels/common/gguf_embedding_formats.h
+@@ -381,7 +381,8 @@ GGUF_EMBED_AFFINE(8)
+   X(af5g32, GgufEmbedAF5G32) X(af5g64, GgufEmbedAF5G64) X(af5g128, GgufEmbedAF5G128)                               \
+   X(af6g32, GgufEmbedAF6G32) X(af6g64, GgufEmbedAF6G64) X(af6g128, GgufEmbedAF6G128)                               \
+   X(af8g32, GgufEmbedAF8G32) X(af8g64, GgufEmbedAF8G64) X(af8g128, GgufEmbedAF8G128)
+-#define GGUF_EMBEDDING_FORMATS(X) GGUF_QUANTIZED_EMBEDDING_FORMATS(X) X(bf16, GgufEmbedBF16) X(f16, GgufEmbedF16)
++#define GGUF_EMBEDDING_FORMATS(X)                                                                                  \
++  GGUF_QUANTIZED_EMBEDDING_FORMATS(X) X(bf16, GgufEmbedBF16) X(f16, GgufEmbedF16) X(bf16s, GgufEmbedBF16)
+ #define GGUF_EMBEDDING_ONE(f, F) +1
+ static_assert(0 GGUF_EMBEDDING_FORMATS(GGUF_EMBEDDING_ONE) == GGUF_FMT_COUNT, "GGUF_EMBEDDING_FORMATS lists every format");
+ #undef GGUF_EMBEDDING_ONE
+diff --git a/runtime/metal/kernels/common/quant_formats.h b/runtime/metal/kernels/common/quant_formats.h
+index d7f07d2..afc08c9 100644
+--- a/runtime/metal/kernels/common/quant_formats.h
++++ b/runtime/metal/kernels/common/quant_formats.h
+@@ -515,6 +515,7 @@ template <uint F, class V> struct FmtFloat16 {
+ };
+ typedef FmtFloat16<GGUF_FMT_BF16, bfloat> FmtBF16;
+ typedef FmtFloat16<GGUF_FMT_F16, half> FmtF16;
++typedef FmtFloat16<GGUF_FMT_BF16S, bfloat> FmtBF16S;
+ // PQ2_0 (GGUF tensor type 142) and Q2_0 (type 42): plane0 2-bit codes as Q2_K's; meta the
+ // half d of the native block, four groups (PQ2_0's 128 elements) or two (Q2_0's 64). value = d * (q - 1).
+ template <uint F> struct FmtTwoBit {
+@@ -579,7 +580,7 @@ QUANT_AFFINE_GROUPS(8)
+   X(FmtAF3G128, af3g128) X(FmtAF4G32, af4g32) X(FmtAF4G64, af4g64) X(FmtAF4G128, af4g128) X(FmtAF5G32, af5g32)    \
+   X(FmtAF5G64, af5g64) X(FmtAF5G128, af5g128) X(FmtAF6G32, af6g32) X(FmtAF6G64, af6g64) X(FmtAF6G128, af6g128)    \
+   X(FmtAF8G32, af8g32) X(FmtAF8G64, af8g64) X(FmtAF8G128, af8g128) X(FmtNVFP4, nvfp4) X(FmtFP8, fp8)            \
+-  X(FmtQ50, q50) X(FmtQ51, q51) X(FmtBF16, bf16) X(FmtQ20, q20)
++  X(FmtQ50, q50) X(FmtQ51, q51) X(FmtBF16, bf16) X(FmtQ20, q20) X(FmtBF16S, bf16s)
+ #define QUANT_FORMATS(X) QUANT_REGISTER_FORMATS(X) X(FmtF16, f16)
+ 
+ // Runs body(F()) with the format type of run-time format id `format` (GGUF_FMT_*), for kernels whose tiles pick
+diff --git a/runtime/metal/kernels/shared/gguf_repack.metal b/runtime/metal/kernels/shared/gguf_repack.metal
+index 6f7220f..693c7c7 100644
+--- a/runtime/metal/kernels/shared/gguf_repack.metal
++++ b/runtime/metal/kernels/shared/gguf_repack.metal
+@@ -175,7 +175,7 @@ static inline void gguf_repack_group(device const uchar *row, uint fmt, uint G,
+       if (j == 0) for (uint i = 0; i < QUANT_FP8_VALUES; ++i) meta[i] = blk[i];   // g
+       break;
+     }
+-    case GGUF_FMT_BF16: case GGUF_FMT_F16: {   // 256 values, element e of group j value 32 j + e; no scale: g = 1
++    case GGUF_FMT_BF16: case GGUF_FMT_F16: case GGUF_FMT_BF16S: {   // 256 (BF16S: 64) values, element e of group j value 32 j + e; no scale: g = 1
+       device const ushort *values = (device const ushort *)blk + 32 * j;
+       for (uint e = 0; e < 32; ++e) ((device ushort *)out0)[quant_slot(e)] = values[e];
+       if (j == 0) *((device float *)meta) = 1.0f;
+diff --git a/runtime/model/GgufImage.cpp b/runtime/model/GgufImage.cpp
+index a85eb04..f390676 100644
+--- a/runtime/model/GgufImage.cpp
++++ b/runtime/model/GgufImage.cpp
+@@ -40,6 +40,18 @@ static_assert([] {
+ // NVFP4's native rows from (TensorRows::ggufNvfp4RowBytes).
+ uint32_t imageFormat(uint32_t type) { return type == ggml::kNVFP4 ? GGUF_FMT_NVFP4 : gguf_format_of(type); }
+ 
++// The format of the planes a tensor of `type` and `columns` inputs repacks
++// into: imageFormat's, but BF16S for a BF16 tensor whose width is a whole
++// number of 64 values and not of 256 (BF16's column unit), which holds the
++// same values exactly.
++uint32_t ggufPlaneFormat(uint32_t type, uint64_t columns) {
++  const uint32_t format = imageFormat(type);
++  if (format == GGUF_FMT_BF16 && columns % ggufColumnUnit(kQuantFormats[GGUF_FMT_BF16]) &&
++      columns % ggufColumnUnit(kQuantFormats[GGUF_FMT_BF16S]) == 0)
++    return GGUF_FMT_BF16S;
++  return format;
++}
++
+ // A type of a format, BF16 and F16 among them: repacked into the planes
+ // projections multiply, or rows as stored (storedRowBytes), which the
+ // embedding kernels gather.
+@@ -179,7 +191,7 @@ public:
+     if (!tensor) return;
+     if (tensor->rows() != rows || tensor->columns() != windows * columns)
+       throw GgufError("unexpected shape for " + name);
+-    const uint32_t format = imageFormat(tensor->type);
++    const uint32_t format = ggufPlaneFormat(tensor->type, columns);
+     Repack repack = image_.planes(format, windows * rows, columns, name);
+     for (uint32_t window = 0; window < windows; ++window) {
+       TensorRows source = tensorRows(*tensor, rows, ggufRowBytes(kQuantFormats[format], windows * columns), order);
+@@ -190,12 +202,14 @@ public:
+     image_.repack(std::move(repack));
+   }
+ 
+-  // Rows [N, K] as quantized() repacks them, but of a BF16 or F16 tensor
+-  // as the Q8_0 rows the reference quantize_row_q8_0_ref writes from its
+-  // values, which the writer quantizes (TensorRows::ggufFloatRowBytes).
++  // Rows [N, K] as quantized() repacks them, but of an F16 tensor as the
++  // Q8_0 rows the reference quantize_row_q8_0_ref writes from its values,
++  // which the writer quantizes (TensorRows::ggufFloatRowBytes). A BF16
++  // tensor keeps its exact values in BF16 (or BF16S) planes: a checkpoint
++  // that stores them BF16 (Cyber's, as its source does) runs them as stored.
+   void quantizedOrQ8_0(const std::string &name, uint64_t rows, uint64_t columns) {
+     const GgufTensor *tensor = file_.find(name);
+-    if (!tensor || !float16Type(tensor->type)) return quantized(name, rows, columns);
++    if (!tensor || tensor->type != ggml::kF16) return quantized(name, rows, columns);
+     problems_.read(*tensor);
+     if (tensor->rows() != rows || tensor->columns() != columns) throw GgufError("unexpected shape for " + name);
+     Repack repack = image_.planes(GGUF_FMT_Q80, rows, columns, name);
+@@ -213,7 +227,7 @@ public:
+     const GgufTensor *tensor = find(name, quantizedType);
+     if (!tensor) return;
+     if (tensor->rows() != rows || tensor->columns() != columns) throw GgufError("unexpected shape for " + name);
+-    const uint32_t format = imageFormat(tensor->type);
++    const uint32_t format = ggufPlaneFormat(tensor->type, columns);
+     Repack repack = image_.expertPlanes(format, rows, columns, name);
+     repack.sources.push_back(tensorRows(*tensor, rows, ggufRowBytes(kQuantFormats[format], columns)));
+     image_.expertRepack(std::move(repack));
+@@ -518,12 +532,11 @@ void ffnImage(Builder &b, const QwenTargetDimensions &g, const std::string &p, u
+ }
+ 
+ // One hyper-connection mix (model/Qwen4Exp.hpp Qwen4HyperWeights): its norm,
+-// down and up projections and, when it injects, its injection weights. The
+-// projections of BF16 or F16 (some GGUFs keep them BF16) are prepared as Q8_0,
+-// the type other GGUFs store them in, in the rows the reference GGUF
+-// quantization of Q8_0 makes from their values (Builder::quantizedOrQ8_0):
+-// every decode cycle reads all of them, bandwidth-bound, and Q8_0 holds a value
+-// in little more than half the bytes of a 16-bit float.
++// down and up projections and, when it injects, its injection weights. F16
++// projections are prepared as Q8_0, the type other GGUFs store them in, in the
++// rows the reference GGUF quantization of Q8_0 makes from their values
++// (Builder::quantizedOrQ8_0): every decode cycle reads all of them,
++// bandwidth-bound. BF16 ones keep their exact values (BF16 or BF16S planes).
+ void hyperImage(Builder &b, const QwenTargetDimensions &g, const std::string &stem, bool inject) {
+   const uint64_t streams = g.streamWidth();
+   b.floatNorm(stem + "_norm.weight", streams);
+diff --git a/runtime/model/WeightStore.cpp b/runtime/model/WeightStore.cpp
+index a6ab74d..6698dfc 100644
+--- a/runtime/model/WeightStore.cpp
++++ b/runtime/model/WeightStore.cpp
+@@ -141,7 +141,11 @@ ops::QuantizedSegment readQuantizedSegment(WeightFile &file, std::string_view la
+     // F32 or BF16 values as stored, which no meta unit describes (a GGUF's F32
+     // alpha/beta, its QSA indexer); a repacked BF16 tensor has planes.
+     if (d.type == ggml::kF32 || (d.type == ggml::kBF16 && !d.metaGroups)) return readFloatRows(file, d, label);
+-    const uint32_t format = gguf_format_of(d.type);
++    // GGUF type 30 is BF16's planes or, of two groups per meta unit, BF16S's
++    // (the planner's ggufPlaneFormat).
++    const uint32_t format = d.type == ggml::kBF16 && d.metaGroups == kQuantFormats[GGUF_FMT_BF16S].meta_groups
++                                ? GGUF_FMT_BF16S
++                                : gguf_format_of(d.type);
+     if (format == GGUF_FMT_COUNT)
+         throw WeightStoreError("unsupported GGUF tensor type " + std::to_string(d.type));
+     const QuantFormat &layout = kQuantFormats[format];

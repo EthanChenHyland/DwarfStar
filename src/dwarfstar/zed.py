@@ -18,7 +18,7 @@ import time
 from pathlib import Path
 
 from dwarfstar import catalog
-from dwarfstar.paths import CODE, DATA
+from dwarfstar.paths import BACKUPS, CODE
 
 SETTINGS = Path.home() / ".config/zed/settings.json"
 PREFIX = "DwarfStar "
@@ -59,7 +59,7 @@ def apply(settings: Path = SETTINGS) -> dict:
     before = dict(document.get("agent_servers", {}))
     kept = {name: value for name, value in before.items() if not name.startswith(PREFIX)}
     document["agent_servers"] = {**kept, **entries()}
-    backup_dir = DATA / "migration" / "zed-backups"
+    backup_dir = BACKUPS / "zed"
     backup_dir.mkdir(parents=True, exist_ok=True)
     backup = backup_dir / ("settings-" + time.strftime("%Y%m%dT%H%M%S") + ".json")
     shutil.copy2(settings, backup)

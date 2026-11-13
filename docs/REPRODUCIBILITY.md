@@ -1,42 +1,62 @@
 # Reproducibility
 
-## What is pinned
+DwarfStar is reproducible in four layers: **code → runtime build → model assets → user data**. Each is pinned or regenerable; nothing large lives in Git.
 
-| Item | Pin | Where |
+## 1. Code
+
+The repository (`~/Developer/DwarfStar`) holds the catalog, service, agent, UI, tests, patches and docs. The production baseline hashes every tracked file; `bin/dwarfstar seal --verify` checks the working tree against the sealed baseline.
+
+## 2. Runtime build
+
+One runtime for every model, pinned in `config/runtimes.json`:
+
+| Item | Pin |
+|---|---|
+| Source | [paperniuk/splash](https://github.com/paperniuk/splash) tag `1.6.1-m1`, commit `5312c54` |
+| Patches | `backends/splash-m1/patches/0001-qwen2-tokenizer-profile.patch`, `0002-exact-bf16-planes.patch` |
+| Engine | SHA-256 `75bc297f…` |
+| Shaders | `splash.metallib` `694abdf2…`, `host-step.metallib` `8e177c75…` |
+| Metadata adapter | `install/gguf.py` `9fe87539…` |
+
+Build it with `scripts/backends/build_splash.sh` (Xcode 26.6 + its Metal toolchain, `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`); the result goes to `<assets>/Runtimes/splash-m1-1.6.1-ds1/`. The controller refuses to start a runtime whose engine, shader or adapter hashes do not match the pin. The retired native ds4 runtime is not built or installed; `docs/NATIVE-RETIREMENT.md` says how to reconstruct it from git for comparison.
+
+## 3. Model assets
+
+Weights are not in Git. They live under `<assets>/Models/` and are pinned by source revision and by bytes + SHA-256 per file:
+
+| Model | Source | Revision |
 |---|---|---|
-| Runtime source | Paperniuk ds4 `m1-flash-next` @ `6ea598155f7ac1a27dad3cda5b8fc9123fdef79a` | `config/runtimes.json` |
-| Runtime binaries | SHA-256 per build (`ds4-reference`, `ds4-swift-tokenizer`, `ds4-unified`) | `config/runtimes.json` |
-| Scope weights | `ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF` @ `ed59f92082b1e93c0e96d60a8b11aab089b52f09`, byte for byte | `config/models/scope.json` |
-| Swift weights | `ukisai/Swift1.5-Qwen3.8-Flash-Next` @ `0bd4fe22431372cdad1979267d3ab45aa7e6150a` | `config/models/swift.json` |
-| Cyber source | `dealignai/Qwen3.8-Flash-Next-CYBERSECURITY-NVFP4` @ `15ef113c7090844f97f355f400169791dc76c2e3` | `config/models/cyber.json` |
-| Model files | bytes + SHA-256 for every main, PLE, MTP and vision file | catalog `assets` |
-| Product files | SHA-256 of every tracked file | production baseline (`dwarfstar seal`) |
+| Scope | `ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF` | `ed59f920…` (published GGUF, byte for byte) |
+| Swift | `ukisai/Swift1.5-Qwen3.8-Flash-Next` | `0bd4fe22…` |
+| Cyber | `dealignai/Qwen3.8-Flash-Next-CYBERSECURITY-NVFP4` | `15ef113c…` (converted — see `docs/CYBER-CONVERSION.md`) |
+| Draft (shared) | `incoai/Qwen3.8-Flash-Next-DFlash2` | DFlash2 draft model for the whole family |
 
-## What is not in Git
+`bin/dwarfstar assets --hash` re-hashes every main, PLE, draft and vision file against the catalog. Cyber's conversion toolchain lives with its original installation, not in this repository; the external Swift BF16 rebuild source is an off-SSD backup, intentionally not copied onto the internal disk (`docs/STORAGE.md`).
 
-Model weights, source checkpoints, runtime binaries and build trees, generated instance config, state, logs, telemetry sessions, browser profiles and raw evidence. They live under the data root:
+## 4. User data
 
-```
-<data>/
-  models/{scope,swift,cyber}     model files (symlinks to the original installation directories)
-  sources/cyber                  pinned Cyber source checkpoint (126 GiB)
-  runtime/<build>/               ds4-server + Metal shaders + manifest
-  instances/<model>/             generated config and per-model state
-  evidence/                      runtime parity, opening probe, production validation
-  telemetry/sessions/            recorded telemetry
-  DWARFSTAR-PRODUCTION-SEAL.json
-  baseline/
-```
+Chats, settings, generated instance config, runtime state and telemetry sessions live under `<data>` (`~/Library/Application Support/DwarfStar`); caches under `<cache>`; logs under `<logs>`. All of it is per-machine and either regenerable (`dwarfstar generate` rewrites instance config from the catalog) or recreatable (caches). None is in Git.
+
+## Roots
+
+The five roots default to standard macOS locations and are each overridable in `config/local.json`:
+
+| Root | Env var / `local.json` key | Default |
+|---|---|---|
+| CODE | — | the repository checkout |
+| ASSETS | `DWARFSTAR_ASSETS` / `assets_root` | `~/AI/DwarfStar` |
+| DATA | `DWARFSTAR_DATA` / `data_root` | `~/Library/Application Support/DwarfStar` |
+| CACHE | `DWARFSTAR_CACHE` / `cache_root` | `~/Library/Caches/DwarfStar` |
+| LOGS | `DWARFSTAR_LOGS` / `logs_root` | `~/Library/Logs/DwarfStar` |
 
 ## Rebuilding on another machine
 
-1. Clone the repository and copy `config/local.example.json` to `config/local.json`.
-2. Place the model files under `<data>/models/<model>/` with the names in the catalog; `bin/dwarfstar assets --hash` verifies them.
-3. Build the runtime from the pinned commit with `native/` and place it under `<data>/runtime/ds4-unified/`; the controller checks its hash.
-4. `bin/dwarfstar generate`, `scripts/validate/check.sh`, then build the app (`docs/WORKSTATION.md`).
-
-Cyber's conversion from its source checkpoint is described in `docs/CYBER-CONVERSION.md`; its toolchain lives with the original Cyber installation, not in this repository.
+1. Clone the repository; copy `config/local.example.json` to `config/local.json` (only machine-local tool paths need setting; the roots default).
+2. Place the model files under `<assets>/Models/<Model>/` with the catalog's names; `bin/dwarfstar assets --hash` verifies them.
+3. Build the runtime (step 2 above) into `<assets>/Runtimes/splash-m1-1.6.1-ds1/`; the controller checks its hashes.
+4. `bin/dwarfstar generate`, `scripts/validate/check.sh`, then build the app (`docs/WORKSTATION.md`) and `bin/dwarfstar zed --apply`.
+5. `bin/dwarfstar doctor` should report every check ready; `bin/dwarfstar seal --verify` should pass.
 
 ## Evidence index
 
-`research/benchmark-index.json` is generated by `dwarfstar bench-index` from the canonical reports on the reference machine and the data root's evidence. `--check` verifies it is reproducible from those inputs. Paths in it are relative to the evidence root, so it carries no machine paths.
+`research/benchmark-index.json` is generated by `dwarfstar bench-index` from the canonical reports and the evidence under `<assets>/Manifests/evidence`. `--check` verifies it is reproducible from those inputs; its paths are relative to the evidence root, so it carries no machine paths.

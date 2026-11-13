@@ -38,7 +38,7 @@ class CatalogTests(unittest.TestCase):
 
     def test_same_cache_policy_for_every_model(self):
         policies = {(m["cache"]["k_cache_dtype"], m["cache"]["v_cache_dtype"]) for m in catalog.models().values()}
-        self.assertEqual(policies, {("F16", "F16")})
+        self.assertEqual(policies, {("INT8", "INT8")})  # the default backend's (Splash-m1) cache for every model
 
     def test_cyber_source_is_pinned_and_marked(self):
         source = catalog.model("cyber")["source"]
@@ -102,7 +102,7 @@ class EditorEntriesTests(unittest.TestCase):
             settings = Path(folder) / "settings.json"
             settings.write_text(json.dumps({"theme": "x", "agent_servers": {
                 "Other Agent": {"command": "other"}, "DwarfStar Cyber LOW 64K": {"command": "old"}}}))
-            with mock.patch.object(zed, "DATA", Path(folder)):
+            with mock.patch.object(zed, "BACKUPS", Path(folder)):
                 result = zed.apply(settings)
             document = json.loads(settings.read_text())
             self.assertEqual(document["theme"], "x")
@@ -113,20 +113,18 @@ class EditorEntriesTests(unittest.TestCase):
 
 
 class PolicyTests(unittest.TestCase):
-    def test_only_justified_overrides_remain(self):
-        overrides = {m: sorted(model["overrides"]) for m, model in catalog.models().items()}
-        self.assertEqual(overrides, {"scope": [], "swift": [], "cyber": ["prefill_chunk"]})
-        self.assertIn("Metal", catalog.model("cyber")["overrides"]["prefill_chunk"]["reason"])
+    def test_no_model_overrides_the_shared_policy(self):
+        self.assertEqual({m: sorted(model["overrides"]) for m, model in catalog.models().items()}, {"scope": [], "swift": [], "cyber": []})
 
     def test_every_model_gets_the_shared_policy(self):
         for model in catalog.models().values():
             self.assertEqual((model["context"], model["max_output"]), (131072, 81920))
-            self.assertEqual((model["cache"]["k_cache_dtype"], model["cache"]["v_cache_dtype"]), ("F16", "F16"))
+            self.assertEqual((model["cache"]["k_cache_dtype"], model["cache"]["v_cache_dtype"]), ("INT8", "INT8"))
 
     def test_an_override_without_a_reason_is_rejected(self):
         defaults = catalog.policy()["model_defaults"]
         with self.assertRaises(catalog.CatalogError):
-            catalog._apply_policy({"id": "x", "prefill_chunk": 512}, defaults)
+            catalog._apply_policy({"id": "x", "max_output": 1024}, defaults)
         with self.assertRaises(catalog.CatalogError):
             catalog._apply_policy({"id": "x", "context": defaults["context"]}, defaults)
         with self.assertRaises(catalog.CatalogError):
@@ -141,6 +139,31 @@ class PolicyTests(unittest.TestCase):
             self.assertAlmostEqual(plan["planned_gib"], expected, places=2)
             self.assertAlmostEqual(plan["required_gib"], expected + reserve, places=2)
             self.assertGreater(plan["metal_headroom_gib"], 0, f"{model_id} plan exceeds the Metal working set")
+
+
+class RuntimeTests(unittest.TestCase):
+    def test_splash_serves_every_model(self):
+        for model in catalog.models().values():
+            self.assertEqual((model["backend"]["kind"], model["backend"]["id"]), ("splash", "splash-m1-1.6.1-ds1"))
+        self.assertEqual(list(catalog.load()["runtimes"]["runtimes"]), ["splash-m1-1.6.1-ds1"])
+
+    def test_assets_are_the_split_parts_draft_and_projector_under_the_assets_root(self):
+        from dwarfstar import instance
+        from dwarfstar.paths import ASSETS
+
+        for model_id, folder in (("scope", "Scope"), ("swift", "Swift"), ("cyber", "Cyber")):
+            assets = catalog.model(model_id)["assets"]
+            self.assertEqual(sorted(assets), ["draft", "main", "ple", "vision"])
+            self.assertTrue(assets["main"]["path"].startswith(f"Models/{folder}/") and assets["main"]["path"].endswith("-00001-of-00002.gguf"))
+            self.assertEqual(assets["ple"]["path"], assets["main"]["path"].replace("-00001-of-00002", "-00002-of-00002"))
+            argv, env = instance.server_command(model_id)
+            self.assertEqual(argv[argv.index("--model-dir") + 1], str(ASSETS / assets["main"]["path"]))
+            joined = " ".join(argv)
+            for flag in ("--offline", "--mmproj", "--draft-model", "--max-context 131072"):
+                self.assertIn(flag, joined)
+            self.assertTrue(env["HOME"].endswith("runtime/splash-home"))
+            self.assertLess(catalog.memory_plan(model_id)["planned_gib"], catalog.memory_plan(model_id)["metal_working_set_gib"])
+        self.assertEqual(len(catalog.profiles("cyber")), 4)
 
 
 if __name__ == "__main__":

@@ -1,12 +1,20 @@
 [
  {
-  "id": "kv-q8-unsupported",
+  "id": "splash-telemetry",
   "models": [
    "scope",
    "swift",
    "cyber"
   ],
-  "text": "Q8 KV cache was requested but the pinned runtime's Qwen4Exp graph has no quantized KV path (K/V allocated and read as F16). K and V stay F16 for every model; adding Q8 KV would be a new cache backend."
+  "text": "Splash-m1 reports requests, time to first token, inter-token latency, prefill/decode rates, draft acceptance (as a running total), prefix-cache hits, context, memory and thermal state, but not per-token router selections, expert activity or PLE reads; the Live and Visualizer views label those regions 'not reported' instead of estimating them. Sessions recorded earlier on the retired native runtime replay their router and PLE detail."
+ },
+ {
+  "id": "splash-dflash-draft",
+  "models": [
+   "swift",
+   "cyber"
+  ],
+  "text": "Speculative decoding uses the shared DFlash2 draft trained for the base Qwen3.8-Flash-Next; it is verified by each model, so outputs are unaffected. Because DFlash2 is feature-conditioned on the target's hidden states at a fixed set of layers, it tracks Swift and Cyber (same architecture and tokenizer) well: measured acceptance on one coding prompt was Scope 73%, Cyber 70%, Swift MEDIUM 61%. A per-model draft could lift this but is not worth building at current acceptance; see docs/DRAFT-MODELS.md."
  },
  {
   "id": "cyber-opening-robustness",

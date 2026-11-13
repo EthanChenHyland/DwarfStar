@@ -1,36 +1,32 @@
 {
   "schema": 1,
+  "name": "DwarfStar runtime",
   "source": {
-    "url": "https://github.com/paperniuk/ds4",
-    "branch": "m1-flash-next",
-    "commit": "6ea598155f7ac1a27dad3cda5b8fc9123fdef79a"
+    "url": "https://github.com/paperniuk/splash",
+    "tag": "1.6.1-m1",
+    "commit": "5312c54",
+    "patches": "backends/splash-m1/patches"
   },
-  "name": "Paperniuk DwarfStar",
+  "retired": {
+    "native ds4": "The Paperniuk ds4 runtime (ds4-unified, ds4-reference, ds4-swift-tokenizer) served all three models until 2026-11-13 and was retired after Splash-m1 passed every validation; see docs/NATIVE-RETIREMENT.md and the tag rollback/native-default-20261113."
+  },
   "runtimes": {
-    "ds4-reference": {
-      "description": "Pinned upstream build, unmodified",
-      "patches": [],
-      "binary_sha256": "76a0aa5dc8eff126d67d4bbefe6ff9407be3937fd06416e483aeeea609742d44",
-      "directory": "runtime/ds4-reference"
-    },
-    "ds4-swift-tokenizer": {
-      "description": "Pinned upstream plus the Swift tokenizer adapter (active only for tokenizer.ggml.pre=qwen2)",
-      "patches": [
-        "native/patches/swift-tokenizer.patch"
-      ],
-      "binary_sha256": "0ce36bbd18c772d0a4e48a88d7ee51c445e35017d5fc05c321084576eb922114",
-      "directory": "runtime/ds4-swift-tokenizer"
-    },
-    "ds4-unified": {
-      "description": "Pinned upstream plus the Swift tokenizer adapter (active only for tokenizer.ggml.pre=qwen2) and the optional telemetry/calibration hooks (inactive unless enabled by environment)",
-      "patches": [
-        "native/patches/swift-tokenizer.patch",
-        "native/apply_hooks.py",
-        "native/telemetry/ds4_telemetry.c",
-        "native/telemetry/ds4_telemetry.h"
-      ],
-      "binary_sha256": "f270b43196aeccaefdc740369f3dff08d1c1c21fa8741334025e2d731bac41ca",
-      "directory": "runtime/ds4-unified"
+    "splash-m1-1.6.1-ds1": {
+      "kind": "splash",
+      "description": "Splash-m1 1.6.1-m1 with DwarfStar's patches (backends/splash-m1/patches): the qwen2 tokenizer profile (Swift) and exact BF16 planes (BF16S for widths of 64 but not 256, BF16 hyper-connections kept exact; Cyber). Built by scripts/backends/build_splash.sh from the 1.6.1-m1 source with Xcode 26.6's Metal toolchain; its Python, server and installer are the release's. directory is relative to the assets root, home to the data root.",
+      "release": "1.6.1-m1-ds1",
+      "source": "https://github.com/paperniuk/splash/tree/1.6.1-m1 + backends/splash-m1/patches/0001-qwen2-tokenizer-profile.patch, 0002-exact-bf16-planes.patch",
+      "tarball_sha256": "fde8cc8fff55f7706d38078638e2d518bfa1a229cd8d4b12869ca2de39facbcd",
+      "binary_sha256": "75bc297f1485b3af947521c31f821eac307c6b829b7da1b521582a53ba7f390e",
+      "shader_sha256": {
+        "splash.metallib": "694abdf2802e69f4215211b82da53588b4cdaefee14c059a69a69a13a79991d1",
+        "host-step.metallib": "8e177c753e2051cd8a31c79bf031b3fae8daf04f5564ced9fc37db064bdfe51a"
+      },
+      "adapter_sha256": {
+        "install/gguf.py": "9fe875393cfb3e1b651db8f56dd2bef971f08535fda4fadfae1dd34229b7575e"
+      },
+      "directory": "Runtimes/splash-m1-1.6.1-ds1",
+      "home": "runtime/splash-home"
     }
   }
 }
