@@ -350,6 +350,11 @@ def summarize() -> None:
     rows = []
     for path in sorted(STEPS.glob("*.json")):
         data = json.loads(path.read_text())
+        if data.get("kind") == "lifecycle":
+            rows.append({"model": "all", "profile": None, "task": f"Lifecycle {data['step'].replace('09-lifecycle-', '')} through the Workstation service",
+                         "acceptance": data["passed"] == data["total"], "result": f"{data['passed']} of {data['total']} steps passed",
+                         "step": data["step"]})
+            continue
         if data.get("kind") == "switch":
             for item in data.get("sequence", []):
                 rows.append({"model": item.get("model"), "profile": item.get("profile"), "task": "Workstation switch " + item.get("from", "idle") + " -> " + item["profile"],

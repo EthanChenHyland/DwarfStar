@@ -170,7 +170,9 @@ class Run:
         row.update(check_stopped(running[0] if running else "scope", old_pid))
         row["ok"] = bool(result.get("ok")) and row["ok"]
         self.rows.append(row)
-        print(f"{'stop':<32} {'PASS' if row['ok'] else 'FAIL'} {row.get('wall_s')}s {'' if row['ok'] else json.dumps(row['checks'])}", flush=True)
+        detail = "" if row["ok"] else json.dumps({"job_ok": result.get("ok"), "error": result.get("error"),
+                                                     **{k: v for k, v in row["checks"].items() if not v}})
+        print(f"{'stop':<32} {'PASS' if row['ok'] else 'FAIL'} {row.get('wall_s')}s {detail}", flush=True)
         return row
 
     def save(self) -> None:
