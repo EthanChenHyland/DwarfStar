@@ -229,8 +229,10 @@ def pinned() -> dict:
     if KIND != "native":
         engine = RUNTIME_DIR / "engine"
         if hashlib.sha256((engine / "splash").read_bytes()).hexdigest() != c["server_sha256"] or any(
-                hashlib.sha256((engine / name).read_bytes()).hexdigest() != digest for name, digest in c["shader_sha256"].items()):
-            raise RuntimeError("Splash engine or shaders differ from the pinned release; reinstall it before starting.")
+                hashlib.sha256((engine / name).read_bytes()).hexdigest() != digest for name, digest in c["shader_sha256"].items()) or any(
+                hashlib.sha256((RUNTIME_DIR / name).read_bytes()).hexdigest() != digest for name, digest in c.get("adapter_sha256", {}).items()):
+            raise RuntimeError("Splash engine, shaders or metadata adapter differ from the pinned build; rebuild it "
+                               "(scripts/backends/build_splash.sh) before starting.")
         missing = [f"{role}: {path}" for role, path in c["model_files"].items() if not Path(path).is_file()]
         if missing:
             raise RuntimeError("Model files are missing; nothing was started: " + "; ".join(missing))

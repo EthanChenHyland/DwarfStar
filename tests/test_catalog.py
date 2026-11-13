@@ -155,7 +155,7 @@ class BackendTests(unittest.TestCase):
     def test_selecting_splash_for_scope_switches_only_backend_facts(self):
         from unittest import mock
 
-        with mock.patch.dict("os.environ", {"DWARFSTAR_RUNTIME_OVERRIDE": "scope=splash-m1-1.6.1"}):
+        with mock.patch.dict("os.environ", {"DWARFSTAR_RUNTIME_OVERRIDE": "scope=splash-m1-1.6.1-ds1"}):
             catalog.load.cache_clear()
             try:
                 scope = catalog.model("scope")
@@ -172,6 +172,23 @@ class BackendTests(unittest.TestCase):
                     self.assertIn(flag, joined)
                 self.assertIn("backends/splash-m1/home", env["HOME"])
                 self.assertEqual(catalog.model("swift")["backend"]["kind"], "native")
+            finally:
+                catalog.load.cache_clear()
+
+    def test_swift_and_cyber_use_their_own_split_layout_on_splash(self):
+        from unittest import mock
+
+        from dwarfstar import instance
+
+        with mock.patch.dict("os.environ", {"DWARFSTAR_RUNTIME_OVERRIDE": "swift=splash-m1-1.6.1-ds1,cyber=splash-m1-1.6.1-ds1"}):
+            catalog.load.cache_clear()
+            try:
+                for model_id, stem in (("swift", "Swift1.5-GSQ-RCO-Q2_0-00001-of-00002.gguf"), ("cyber", "DwarfStarCyber-Q2_0-00001-of-00002.gguf")):
+                    argv, _ = instance.server_command(model_id)
+                    self.assertTrue(argv[argv.index("--model-dir") + 1].endswith("backends/splash-m1/artifacts/" + model_id + "/" + stem))
+                    self.assertEqual(catalog.model(model_id)["context"], 131072)
+                    self.assertLess(catalog.memory_plan(model_id)["planned_gib"], catalog.memory_plan(model_id)["metal_working_set_gib"])
+                self.assertEqual(len(catalog.profiles("cyber")), 4)
             finally:
                 catalog.load.cache_clear()
 

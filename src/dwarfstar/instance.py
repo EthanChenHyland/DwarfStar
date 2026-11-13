@@ -54,7 +54,8 @@ def runtime_manifest(model_id: str) -> dict:
     pin = catalog.runtime_pin(model_id)
     if pin.get("kind", "native") != "native":
         # Non-native backends are pinned in config/runtimes.json; the controller re-checks the installed files.
-        return {"schema": 1, "runtime": pin["id"], "binary_sha256": pin["binary_sha256"], "shader_sha256": pin.get("shader_sha256", {})}
+        return {"schema": 1, "runtime": pin["id"], "binary_sha256": pin["binary_sha256"], "shader_sha256": pin.get("shader_sha256", {}),
+                "adapter_sha256": pin.get("adapter_sha256", {})}
     path = runtime_directory(model_id) / "manifest.json"
     try:
         return json.loads(path.read_text())
@@ -101,7 +102,8 @@ def splash_command(model_id: str) -> tuple[list[str], dict[str, str]]:
     argv = [
         str(root / "python/bin/python3"), "-u", str(root / "install/launcher.py"), "serve",
         "--model", model["backend"]["model_name"],
-        "--model-dir", str(catalog.asset_path(model_id, "main")),
+        # A backend block may name its own layout of the main weights (Splash's two-part split of Swift and Cyber)
+        "--model-dir", str(DATA / extra["main"]["path"]) if "main" in extra else str(catalog.asset_path(model_id, "main")),
         "--mmproj", str(DATA / extra["vision"]["path"]),
         "--draft-model", str((DATA / extra["draft"]["path"]).parent),
         "--offline", "--no-webui",
@@ -170,6 +172,7 @@ def runtime_config(model_id: str) -> dict:
         "environment": environment,
         "server_sha256": manifest["binary_sha256"],
         "shader_sha256": manifest["shader_sha256"],
+        **({"adapter_sha256": manifest["adapter_sha256"]} if manifest.get("adapter_sha256") else {}),
         "output_budgeting": "native server_decode_budget uses exact session context room; no client arithmetic patch",
         "model_files": {role: str(path) for role, path in catalog.asset_paths(model_id).items()}
         | {f"backend_{role}": str(DATA / asset["path"]) for role, asset in model["backend"]["extra_assets"].items()},

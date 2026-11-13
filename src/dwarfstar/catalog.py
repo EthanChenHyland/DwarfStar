@@ -42,7 +42,8 @@ def _runtime_overrides() -> dict[str, str]:
 
     from dwarfstar.paths import local_config
 
-    overrides = dict(local_config().get("runtime_overrides", {}))
+    # The unit tests set DWARFSTAR_IGNORE_LOCAL_OVERRIDES so this machine's own choice never changes what they test.
+    overrides = {} if os.environ.get("DWARFSTAR_IGNORE_LOCAL_OVERRIDES") == "1" else dict(local_config().get("runtime_overrides", {}))
     for pair in filter(None, os.environ.get("DWARFSTAR_RUNTIME_OVERRIDE", "").split(",")):
         model_id, _, runtime_id = pair.partition("=")
         overrides[model_id.strip()] = runtime_id.strip()

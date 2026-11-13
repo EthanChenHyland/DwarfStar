@@ -37,7 +37,7 @@
     },
     "splash-m1-1.6.1": {
       "kind": "splash",
-      "description": "Splash-m1 1.6.1-m1 (paperniuk/splash, the M1/M2 port of incoai/splash): Apple7 Metal kernels, DFlash2 speculative decoding, INT8 KV, prefix cache. Installed unmodified from the release tarball; needs macOS 26.4+",
+      "description": "Splash-m1 1.6.1-m1 (paperniuk/splash, the M1/M2 port of incoai/splash): Apple7 Metal kernels, DFlash2 speculative decoding, INT8 KV, prefix cache. Installed unmodified from the release tarball; needs macOS 26.4+. Kept for rollback; DwarfStar's models use splash-m1-1.6.1-ds1",
       "release": "1.6.1-m1",
       "source": "https://github.com/paperniuk/splash/releases/tag/1.6.1-m1",
       "tarball_sha256": "fde8cc8fff55f7706d38078638e2d518bfa1a229cd8d4b12869ca2de39facbcd",
@@ -47,6 +47,23 @@
         "host-step.metallib": "dc7d6916fbae274bdcff3f3dcf16838a777ae6772f2457c926d839f13833967d"
       },
       "directory": "backends/splash-m1/1.6.1-m1/dist/splash-1.6.1-m1-arm64-macos26",
+      "home": "backends/splash-m1/home"
+    },
+    "splash-m1-1.6.1-ds1": {
+      "kind": "splash",
+      "description": "Splash-m1 1.6.1-m1 with DwarfStar's patches (backends/splash-m1/patches): the qwen2 tokenizer profile (Swift) and exact BF16 planes (BF16S for widths of 64 but not 256, BF16 hyper-connections kept exact; Cyber). Built by scripts/backends/build_splash.sh from the 1.6.1-m1 source with Xcode 26.6's Metal toolchain; its Python, server and installer are the release's",
+      "release": "1.6.1-m1-ds1",
+      "source": "https://github.com/paperniuk/splash/tree/1.6.1-m1 + backends/splash-m1/patches/0001-qwen2-tokenizer-profile.patch, 0002-exact-bf16-planes.patch",
+      "tarball_sha256": "fde8cc8fff55f7706d38078638e2d518bfa1a229cd8d4b12869ca2de39facbcd",
+      "binary_sha256": "75bc297f1485b3af947521c31f821eac307c6b829b7da1b521582a53ba7f390e",
+      "shader_sha256": {
+        "splash.metallib": "694abdf2802e69f4215211b82da53588b4cdaefee14c059a69a69a13a79991d1",
+        "host-step.metallib": "8e177c753e2051cd8a31c79bf031b3fae8daf04f5564ced9fc37db064bdfe51a"
+      },
+      "adapter_sha256": {
+        "install/gguf.py": "9fe875393cfb3e1b651db8f56dd2bef971f08535fda4fadfae1dd34229b7575e"
+      },
+      "directory": "backends/splash-m1/1.6.1-m1-ds1",
       "home": "backends/splash-m1/home"
     }
   }

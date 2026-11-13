@@ -111,7 +111,8 @@ def check_running(profile_id: str, expect_pid: int | None = None) -> dict:
         context_ok = f"--ctx {model['context']} " in (procs[0][1] if procs else "")
     else:  # Splash's serve process carries no arguments after its re-exec: ask it what it loaded
         status = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{model['port']}/status", timeout=5).read())
-        identifies_model = model["assets"]["main"]["path"].split("/")[-1] in status["memory_plan"]["model"]["model_name"]
+        main = model["backend"]["extra_assets"].get("main") or model["assets"]["main"]  # the backend's own layout, if any
+        identifies_model = main["path"].split("/")[-1] in status["memory_plan"]["model"]["model_name"]
         context_ok = status["maximum_context_tokens"] == model["context"]
     checks = {
         "one_server": len(procs) == 1,
