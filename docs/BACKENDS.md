@@ -64,3 +64,19 @@ scripts/validate/backend_ab.py splash-scope 8040 qwen3.8-flash-next --out <data>
 ```
 
 `scripts/backends/repack_split_gguf.py` writes the published two-part split layout from a main GGUF and a standalone PLE GGUF, losslessly (tensor payloads and metadata verified identical); it is how the Swift and Cyber compatibility checks were made.
+
+## Prefill chunk and prefix reuse (native)
+
+**Question.** Should DwarfStar pick the prefill chunk per start from the Metal headroom (larger chunks when memory allows) instead of the fixed shared 2048 with Cyber's 1024 override?
+
+**Measurement.** `scripts/validate/prefill_sweep.py` starts Scope's own verified server command on a spare port with only `--prefill-chunk` changed, sends ~8K and ~32K-token prompts with one output token, and records the runtime's memory plan and peak wired memory. Every prompt starts with a unique line: without it the runtime restores the deterministic test document from its disk KV checkpoints and reports meaningless rates (4,700 tok/s at 32K). Evidence: `<data>/evidence/prefill-sweep/prefill-sweep-scope.json`.
+
+| Chunk | Graph buffers | Plan | Peak wired | Prefill 8K | Prefill 32K |
+|---:|---:|---:|---:|---:|---:|
+| 1024 | 1.44 GiB | 42.04 GiB | 44.8 GiB | 284 tok/s | 275 tok/s |
+| **2048** (shared default) | 2.56 GiB | 43.16 GiB | 45.7 GiB | **297 tok/s** | **282 tok/s** |
+| 4096 | 4.79 GiB | 45.39 GiB | 47.3 GiB | 292 tok/s | 277 tok/s |
+
+**Decision: no adaptive selection.** 2048 is the fastest chunk; 4096 is not faster and costs 2.2 GiB more; 1024 costs 3–4 % prefill and saves 1.1 GiB. The whole range is far inside the 15 % bar for a change, so the fixed shared default stays and Cyber keeps 1024 (its plan needs the headroom; the measured cost is about 4 % of prefill).
+
+**Prefix reuse already exists.** The native runtime reuses a repeated prompt prefix in memory (second turn of the A/B test: 8,539 of ~8.6K tokens reused, TTFT 0.35 s) and also restores long prefixes from its disk KV checkpoints across restarts (12 GiB budget, a checkpoint every 10,000 tokens of a continued conversation). Agent turns, which resend the same system prompt and transcript, benefit from both. The Visualizer's Requests table shows the reused share for every request.
