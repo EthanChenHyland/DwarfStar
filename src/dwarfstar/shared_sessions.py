@@ -117,6 +117,18 @@ def visible_transcript(path: Path) -> list[dict]:
     return messages
 
 
+def context_tokens(path: Path) -> int | None:
+    """Tokens in the agent's active context after its latest model request: that request's input (including cached
+    prefix) plus its output. The ACP turn result sums every request of a turn, which overstates the context."""
+    for entry in reversed(active_branch(_records(path))):
+        message = entry.get("message") or {}
+        if entry.get("type") == "message" and message.get("role") == "assistant" and (message.get("usage") or {}).get("totalTokens"):
+            return int(message["usage"]["totalTokens"])
+        if entry.get("type") == "compaction":
+            return None
+    return None
+
+
 def session_header(path: Path) -> dict:
     with path.open(encoding="utf-8", errors="replace") as stream:
         for line in stream:

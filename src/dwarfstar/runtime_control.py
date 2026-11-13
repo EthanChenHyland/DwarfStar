@@ -355,6 +355,27 @@ def requests(row) -> list:
     return values
 
 
+LAST_REQUEST_FIELDS = ("active", "phase", "input_tokens", "reused_tokens", "new_prefill_tokens", "output_tokens", "ttft_s",
+                       "provider_decode_tps", "outcome", "elapsed_s", "started_at")
+
+
+def last_request(row) -> dict:
+    """The newest request any agent recorded against this server process, including agents that have since exited (a
+    Workstation chat turn's agent exits after the turn). For display only: liveness decisions use requests()."""
+    if not row:
+        return {}
+    newest = {}
+    clients = STATE / "clients"
+    for path in clients.glob("request-*.json") if clients.is_dir() else ():
+        if path.is_symlink() or path.stat().st_size > 16384:
+            continue
+        value = read(path, {})
+        if value.get("server_pid") == row["pid"] and value.get("server_birth") == row["birth"] and \
+                value.get("started_at", 0) >= newest.get("started_at", 0):
+            newest = value
+    return {k: newest.get(k) for k in LAST_REQUEST_FIELDS} if newest else {}
+
+
 def status() -> dict:
     from dwarfstar.approval_policy import status as permission_status
     from dwarfstar.server_metrics import assemble, process_resources
@@ -407,6 +428,7 @@ def status() -> dict:
         "endpoint": c["endpoint"],
         "configuration": c,
         "speculative": c["speculative"],
+        "last_request": last_request(row) if row else {},
         "splash": live,
         "request": request,
         "phase": phase,

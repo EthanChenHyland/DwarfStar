@@ -76,7 +76,9 @@ def model_states(detail: bool = False) -> dict[str, dict]:
         row = {"ok": True, "running": status["running"], "healthy": status["healthy"], "pid": status.get("pid"),
                "endpoint": status.get("endpoint"), "uptime_s": status.get("uptime_s"), "phase": status.get("phase"),
                "memory_plan": status.get("memory_plan"), "load_seconds": status.get("load_seconds"),
-               "speculative": status.get("speculative"), "collection_errors": status.get("collection_errors", [])}
+               "speculative": status.get("speculative"), "splash": status.get("splash") or {},
+               "last_request": status.get("last_request") or {},
+               "collection_errors": status.get("collection_errors", [])}
         if detail:
             row["request"] = status.get("request")
             row["resources"] = status.get("resources")

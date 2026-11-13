@@ -128,6 +128,9 @@ def _shared_view(record: dict) -> dict:
     local = [m for m in record["messages"] if m.get("source") != "agent" and
              (m["role"] in ("error", "notice") or (m["role"] == "user" and (m.get("t") or 0) > newest))]
     record["messages"] = sorted(derived + local, key=lambda m: m.get("t") or 0)
+    context = shared_sessions.context_tokens(source)
+    if context:
+        record["context"]["tokens"] = context
     record.pop("transcript_status", None)
     return record
 
@@ -182,7 +185,8 @@ def summary(record: dict) -> dict:
     last = next((m for m in reversed(record["messages"]) if m["role"] in ("user", "assistant")), None)
     return {k: record[k] for k in ("id", "title", "created", "updated", "archived", "profile", "model", "reasoning", "context")} | {
         "messages": len(record["messages"]), "preview": (last or {}).get("text", "")[:140], "pinned": bool(record.get("pinned")),
-        "starred": bool(record.get("starred")), "tags": list(record.get("tags") or []), "forked_from": record.get("forked_from")}
+        "starred": bool(record.get("starred")), "tags": list(record.get("tags") or []), "forked_from": record.get("forked_from"),
+        "shared": bool(record.get("shared"))}
 
 
 def list_chats(query: str | None = None, archived: bool | None = False, tag: str | None = None, starred: bool = False) -> list[dict]:
@@ -711,8 +715,10 @@ class Turns:
                 agent.close()
         live = self.progress(chat_id) or {}
         usage = result.get("usage") or {}
-        if usage.get("totalTokens"):
-            record["context"]["tokens"] = int(usage["totalTokens"])
+        source = shared_sessions.session_file(workspace, record.get("agent_session_id"))
+        context = shared_sessions.context_tokens(source) if source else None
+        if context or usage.get("totalTokens"):
+            record["context"]["tokens"] = context or int(usage["totalTokens"])
         recorded = agent_compactions(workspace, record.get("agent_session_id"))
         record["compactions"] = recorded if recorded is not None else record.get("compactions", 0) + live.get("compacted", 0)
         if error:
