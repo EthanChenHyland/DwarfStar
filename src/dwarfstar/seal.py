@@ -71,6 +71,7 @@ def build() -> tuple[dict, dict]:
             "reasoning_efforts": model["reasoning_efforts"],
             "cache": {k: model["cache"][k] for k in ("k_cache_dtype", "v_cache_dtype", "kv_bytes_per_token")},
             "runtime_build": model["runtime"], "runtime_binary_sha256": manifest["binary_sha256"],
+            "prefill_chunk": model["prefill_chunk"], "overrides": model["overrides"], "memory_plan": catalog.memory_plan(model_id),
             "shader_set_sha256": text_sha(manifest["shader_sha256"]),
             "assets": {role: {"bytes": asset["bytes"], "sha256": asset["sha256"]} for role, asset in model["assets"].items()},
             "generated_config_sha256": {name: hashlib.sha256(text.encode()).hexdigest() for name, text in generated.items()},
@@ -85,6 +86,7 @@ def build() -> tuple[dict, dict]:
                        "tracked_files": len(files), "baseline_sha256": text_sha(files), "dirty": bool(git("status", "--porcelain"))},
         "catalog": {"models_sha256": {p.name: sha(p) for p in sorted((CODE / "config/models").glob("*.json"))},
                     "profiles_sha256": sha(CODE / "config/profiles.json"), "runtimes_sha256": sha(CODE / "config/runtimes.json"),
+                    "runtime_policy_sha256": sha(CODE / "config/runtime-policy.json"), "runtime_policy_version": catalog.policy()["version"],
                     "default_profile": catalog.default_profile()["id"],
                     "profiles": {p["id"]: text_sha({k: p[k] for k in ("id", "model", "reasoning_effort", "label", "context")}) for p in catalog.profiles()}},
         "launchers": {name: sha(CODE / name) for name in ("bin/dwarfstar", "bin/dwarfstar-acp")},
@@ -92,10 +94,11 @@ def build() -> tuple[dict, dict]:
         "workstation": {"executable": str(app), "executable_sha256": sha(app) if app.is_file() else None,
                         "web_ui_sha256": tree_sha(CODE / "app/workstation/web")},
         "editor": {"entries_sha256": text_sha(zed.entries()), "installed_matches": _zed_ok()},
+        "memory_policy": catalog.policy()["memory"],
         "telemetry": {"schema_version": telemetry.SCHEMA_VERSION, "event_port": telemetry.DEFAULT_EVENT_PORT,
                       "http_port": telemetry.DEFAULT_HTTP_PORT, "control_port": telemetry.DEFAULT_CONTROL_PORT},
         "benchmark_index_sha256": sha(CODE / "research/benchmark-index.json") if (CODE / "research/benchmark-index.json").is_file() else None,
-        "documentation": {name: sha(CODE / name) for name in ("README.md", "docs/ARCHITECTURE.md", "docs/MODELS.md") if (CODE / name).is_file()},
+        "documentation": {name: sha(CODE / name) for name in ("README.md", "LICENSE", "docs/ARCHITECTURE.md", "docs/MODELS.md", "docs/RESEARCH-HISTORY.md") if (CODE / name).is_file()},
         "known_limitations": limitations,
     }
     return seal, baseline
@@ -124,7 +127,7 @@ def verify(hash_models: bool = False) -> dict:
         if now is None:
             problems.append(f"{model_id}: missing from the catalog")
             continue
-        for key in ("assets", "runtime_binary_sha256", "shader_set_sha256", "context", "cache", "generated_config_sha256", "source"):
+        for key in ("assets", "runtime_binary_sha256", "shader_set_sha256", "context", "cache", "generated_config_sha256", "source", "prefill_chunk", "overrides"):
             if row[key] != now[key]:
                 problems.append(f"{model_id}: {key} differs from the seal")
         if now["generated_config_drift"]:
