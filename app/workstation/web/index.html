@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DwarfStar Workstation</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <nav id="nav" aria-label="Sections">
+    <div class="brand">
+      <svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true">
+        <circle cx="16" cy="16" r="5.5" fill="var(--accent)"/>
+        <circle cx="16" cy="16" r="11" fill="none" stroke="var(--accent)" stroke-opacity=".35" stroke-width="1.2"/>
+        <circle cx="27" cy="16" r="1.6" fill="var(--accent)"/>
+      </svg>
+      <div><b>DwarfStar</b><span>Workstation</span></div>
+    </div>
+    <button data-view="run" class="active"><i>▶</i>Run</button>
+    <button data-view="models"><i>◈</i>Models</button>
+    <button data-view="live"><i>∿</i>Live</button>
+    <button data-view="visualizer"><i>▦</i>Visualizer</button>
+    <button data-view="benchmarks"><i>≡</i>Benchmarks</button>
+    <button data-view="research"><i>§</i>Research</button>
+    <button data-view="settings"><i>⚙</i>Diagnostics</button>
+    <div class="nav-status" id="nav-status">
+      <span class="dot" id="nav-dot"></span>
+      <div><b id="nav-model">No model running</b><span id="nav-phase">Offline</span></div>
+    </div>
+  </nav>
+  <main id="main" tabindex="-1">
+    <section id="view-run" class="view active"></section>
+    <section id="view-models" class="view"></section>
+    <section id="view-live" class="view"></section>
+    <section id="view-visualizer" class="view"></section>
+    <section id="view-benchmarks" class="view"></section>
+    <section id="view-research" class="view"></section>
+    <section id="view-settings" class="view"></section>
+  </main>
+</div>
+<div id="toast" role="status" aria-live="polite"></div>
+<script src="app.js"></script>
+<script src="visualizer.js"></script>
+</body>
+</html>
