@@ -248,7 +248,7 @@ class Lifecycle:
     def _stop_model(self, model_id: str) -> str | None:
         """Stop one model through its controller and wait until its process and port are gone. Returns an error or None."""
         name = catalog.model(model_id)["display_name"]
-        self._step(f"Stopping {name}")
+        self._step(f"Stopping {name}", stage="stop")
         before = controller(model_id, "status", timeout=30)
         stopped = controller(model_id, "stop")
         if not stopped.get("ok"):
@@ -261,7 +261,7 @@ class Lifecycle:
             time.sleep(0.5)
         else:
             return f"{name} did not exit within {PORT_CLOSE_TIMEOUT_S} s"
-        self._step(f"{name} exited", pid=before.get("pid"), exited_model=model_id)
+        self._step(f"{name} exited", pid=before.get("pid"), exited_model=model_id, stage="stop")
         return None
 
     def _switch(self, profile_id: str) -> dict:
@@ -287,8 +287,8 @@ class Lifecycle:
             requirement = controller(target, "requirement", timeout=30)
             if requirement.get("ok"):
                 self._step(f"Memory check: needs {requirement['required_gib']:.1f} GiB, "
-                           f"{requirement['available_gib']:.1f} GiB available", requirement=requirement)
-            self._step(f"Starting {catalog.model(target)['display_name']}")
+                           f"{requirement['available_gib']:.1f} GiB available", requirement=requirement, stage="memory")
+            self._step(f"Starting {catalog.model(target)['display_name']}", stage="load")
             started = controller(target, "start")
             if not started.get("ok"):
                 # A start can be reported as failed while the server actually came up (for example a controller
@@ -303,7 +303,8 @@ class Lifecycle:
                         controller(target, "stop")
                     return self._fail(started.get("error", "start failed"))
             else:
-                self._step(f"Loaded in {started.get('load_seconds', 0):.1f} s", load_seconds=started.get("load_seconds"))
+                self._step(f"Loaded in {started.get('load_seconds', 0):.1f} s", load_seconds=started.get("load_seconds"), stage="load")
+        self._step("Health check", stage="health")
         health = {}
         for _attempt in range(catalog.policy()["lifecycle"]["health_attempts_after_start"]):
             health = controller(target, "health", timeout=30)
@@ -315,7 +316,7 @@ class Lifecycle:
             store_active(None)
             return self._fail("Health check failed after start; the model was stopped.")
         store_active(profile_id)
-        self._step(f"Ready: {profile['label']}", ready=True)
+        self._step(f"Ready: {profile['label']}", ready=True, stage="ready")
         return {"ok": True, "profile": profile}
 
     def _stop_all(self) -> dict:
@@ -479,7 +480,12 @@ class Service:
                     if path == "/api/catalog":
                         return self._json(service.catalog_document())
                     if path == "/api/state":
-                        return self._json(service.state(detail="detail" in query))
+                        with service.turns.lock:  # chats mid-reply: a switch would interrupt them
+                            answering = sorted(service.turns.active)
+                        from dwarfstar.approval_policy import status as permission_status
+
+                        return self._json({**service.state(detail="detail" in query), "answering_chats": answering,
+                                           "permissions": permission_status()})
                     if path == "/api/live":
                         return self._json({"ok": True, "live": service.hub.snapshot(), "system": service.system_cache})
                     if path == "/api/heat":
@@ -560,6 +566,11 @@ class Service:
                         catalog.profile(str(body.get("profile", "")))
                         store_selection(body["profile"])
                         result = {"ok": True, "selected_profile": body["profile"]}
+                    elif path == "/api/permissions":
+                        from dwarfstar import approval_policy
+
+                        result = {"ok": True, "permissions": approval_policy.set_mode(str(body.get("mode", "")), body.get("confirm"))}
+                        lifecycle_log({"event": "approval_mode", "mode": body.get("mode")})
                     elif path == "/api/diagnostics/reconcile":
                         result = {"ok": True, **service.recover()}
                     elif path == "/api/chats":
@@ -585,6 +596,8 @@ class Service:
                             result = {"ok": True, "chat": chats.summary(chats.set_archived(chat_id, bool(body.get("archived", True))))}
                         elif action == "delete":
                             result = chats.delete(chat_id, str(body.get("confirm", "")))
+                        elif action == "permission":
+                            result = service.turns.answer_permission(chat_id, body.get("option"))
                         elif action == "organize":
                             result = {"ok": True, "chat": chats.summary(chats.organize(chat_id, body.get("pinned"), body.get("starred"), body.get("tags")))}
                         elif action == "fork":

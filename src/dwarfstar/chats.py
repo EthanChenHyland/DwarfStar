@@ -37,6 +37,7 @@ SCHEMA = 1
 ROOT = DATA / "chats"
 ID_PATTERN = re.compile(r"^c\d{14}-[0-9a-f]{6}$")
 TURN_TIMEOUT_S = 3600
+PERMISSION_TIMEOUT_S = 600  # an unanswered tool approval is declined after this
 TITLE_WORDS = 7
 TAG_PATTERN = re.compile(r"^[\w][\w .+-]{0,31}$")
 FORK_PREFACE_CHARS = 24000  # transcript carried into a fork's first turn (the agent session itself cannot be copied)
@@ -304,6 +305,8 @@ def recover_interrupted() -> list[str]:
 class AgentSession:
     """One short-lived ACP agent process for one turn of one chat."""
 
+    on_permission = None  # set by Turns: asks the user and returns the chosen optionId (or None to decline)
+
     def __init__(self, profile_id: str, workspace: Path):
         workspace.mkdir(parents=True, exist_ok=True)
         self.process = subprocess.Popen(
@@ -348,9 +351,13 @@ class AgentSession:
                 continue
             if "method" in message and "id" in message:
                 if message["method"] == "session/request_permission":
-                    # The installation's approval mode decides (Full Auto by default). Without an automatic
-                    # approval the Workstation chat declines: it has no interactive approval prompt.
+                    # The installation's approval mode decides. Full Auto approves at once; otherwise the chat shows the
+                    # request with the agent's own options and waits for the user (declined after PERMISSION_TIMEOUT_S).
                     answer = resolve_request(message)
+                    if answer is None and self.on_permission:
+                        choice = self.on_permission(message["params"])
+                        if choice:
+                            answer = {"jsonrpc": "2.0", "id": message["id"], "result": {"outcome": {"outcome": "selected", "optionId": choice}}}
                     self.send(answer or {"jsonrpc": "2.0", "id": message["id"], "result": {"outcome": {"outcome": "cancelled"}}})
                 else:
                     self.send({"jsonrpc": "2.0", "id": message["id"], "error": {"code": -32601, "message": "not supported"}})
@@ -416,6 +423,7 @@ class Turns:
     def __init__(self, notify=None):
         self.lock = threading.Lock()
         self.active: dict[str, dict] = {}
+        self.answers: dict[str, tuple] = {}  # chat id -> (threading.Event, [choice])
         self.notify = notify or (lambda *a, **k: None)
 
     def progress(self, chat_id: str) -> dict | None:
@@ -439,6 +447,36 @@ class Turns:
         prompt = fork_preface(record) + text
         threading.Thread(target=self._run, args=(chat_id, prompt, agent_factory), name=f"chat-{chat_id}", daemon=True).start()
         return {"ok": True, "accepted": True}
+
+    def ask_permission(self, chat_id: str, params: dict) -> str | None:
+        """Show a tool approval in the chat and wait for the user's choice. Only the tool title and kind are shown."""
+        call = params.get("toolCall") or {}
+        options = [{"id": o["optionId"], "name": o["name"], "kind": o["kind"]} for o in params.get("options") or []]
+        event, choice = threading.Event(), [None]
+        with self.lock:
+            if chat_id not in self.active:
+                return None
+            self.answers[chat_id] = (event, choice)
+            self.active[chat_id]["permission"] = {"title": call.get("title") or call.get("kind") or "tool call", "kind": call.get("kind"),
+                                                  "options": options, "asked": time.time()}
+            self.active[chat_id]["phase"] = "waiting for your approval"
+        self.notify("chat", chat=chat_id, phase="permission")
+        event.wait(PERMISSION_TIMEOUT_S)
+        with self.lock:
+            self.answers.pop(chat_id, None)
+            if chat_id in self.active:
+                self.active[chat_id].pop("permission", None)
+                self.active[chat_id]["phase"] = "using tools"
+        return choice[0] if choice[0] in {o["id"] for o in options} else None
+
+    def answer_permission(self, chat_id: str, option_id: str | None) -> dict:
+        with self.lock:
+            pending = self.answers.get(chat_id)
+            if not pending:
+                raise ChatError("No approval is waiting in this chat")
+            pending[1][0] = option_id
+            pending[0].set()
+        return {"ok": True}
 
     def _update(self, chat_id: str, update: dict) -> None:
         kind = update.get("sessionUpdate")
@@ -470,6 +508,7 @@ class Turns:
         result: dict = {}
         try:
             agent = agent_factory(record["profile"], workspace)
+            agent.on_permission = lambda params: self.ask_permission(chat_id, params)
             agent.request("initialize", {"protocolVersion": 1, "clientCapabilities": {"fs": {"readTextFile": False, "writeTextFile": False},
                                          "terminal": False}, "clientInfo": {"name": "DwarfStar Workstation", "version": "1"}}, 180)
             session_id = open_session(agent, record, workspace)

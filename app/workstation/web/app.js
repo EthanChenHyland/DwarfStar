@@ -154,6 +154,7 @@ function renderRun() {
   const chips = model.reasoning_efforts.map((e) => `<button class="chip ${e === S.effort ? "selected" : ""}" data-effort="${e}" aria-pressed="${e === S.effort}">${e.toUpperCase()}</button>`).join("");
   const overrideNote = Object.entries(model.overrides || {}).map(([k, o]) => `${k === "prefill_chunk" ? "Prefill chunk" : k} ${o.value} instead of the shared ${o.default}: ${o.reason}`).join(" ");
   const steps = (S.state.lifecycle?.steps || []).map((s) => `<li class="${s.error ? "error" : s.ready ? "ready" : ""}">${new Date(s.t * 1000).toLocaleTimeString()}  ${esc(s.text)}</li>`).join("");
+  const permissions = S.state.permissions || {};
   // Switching stops the running model first, so its planned memory counts as available for the target.
   const freed = running && !isRunning ? (S.state.requirements?.[running]?.planned_gib || 0) : 0;
   const short = available != null && !isRunning && available + freed < requirement.required_gib;
@@ -174,6 +175,8 @@ function renderRun() {
             ? `<button class="primary" id="launch" ${busy ? "disabled" : ""}>${busy ? "Working…" : "Use " + esc(profile.label.replace("DwarfStar ", "")) + " (no restart)"}</button><button class="danger" id="stop" ${busy ? "disabled" : ""}>Stop model</button>`
             : `<button class="primary" id="launch" ${busy ? "disabled" : ""}>${busy ? "Working…" : (running ? "Switch to " : "Launch ") + esc(profile.label.replace("DwarfStar ", ""))}</button>`}
       </div>
+      ${stageBar()}
+      ${S.pendingSwitch ? switchSummary(profile, running, requirement, available, freed) : ""}
       ${overrideNote ? `<div class="notice info" style="margin-top:14px">${esc(overrideNote)}</div>` : ""}
       ${short ? `<div class="notice" style="margin-top:14px">${esc(model.display_name.replace("DwarfStar ", ""))} requires approximately ${requirement.required_gib.toFixed(1)} GiB available for the configured ${model.context_label} context; ${available.toFixed(1)} GiB is currently available${freed ? ` after stopping the running model (${(available + freed).toFixed(1)} GiB)` : ""}.</div>` : ""}
     </div>
@@ -197,23 +200,81 @@ function renderRun() {
           <dt>In Zed</dt><dd>Agent Panel → <b>+</b> → External Agents → <b>${esc(profile.label)}</b></dd>
           <dt>Launcher</dt><dd class="mono">dwarfstar-acp --profile ${esc(profile.id)}</dd>
           <dt>Tools</dt><dd>Workspace · Shell · Browser · Computer use · Vision</dd>
-          <dt>Approval</dt><dd>${esc(S.state.models[S.model].permissions?.label || "Full Auto")} <span class="muted small">(same for every profile)</span></dd>
         </dl>
+        <h2 style="margin-top:14px">Tool approval</h2>
+        <div class="chips" role="radiogroup" aria-label="Tool approval">${(permissions.modes || []).map((m) => `<button class="chip ${m.id === permissions.approval_mode ? "selected" : ""}"
+          data-approval="${m.id}" role="radio" aria-checked="${m.id === permissions.approval_mode}" title="${esc(m.description)}">${esc(m.label)}</button>`).join("")}</div>
+        <p class="muted small" style="margin:8px 0 0">${esc(permissions.description || "")} Applies to new agent sessions and the next chat turn; same for every profile.</p>
+        ${S.confirmFullAuto ? `<div class="notice" style="margin-top:10px"><b>Turn on Full Auto?</b> The agent will run shell commands, edit files anywhere,
+          use the browser and control the computer without asking, outside the sandbox.
+          <div class="row" style="margin-top:8px"><button class="danger small-button" id="full-auto-yes">Turn on Full Auto</button>
+          <button class="ghost small-button" id="full-auto-no">Cancel</button></div></div>` : ""}
         <p class="muted small" style="margin:12px 0 0">The reasoning level is fixed per agent entry. Choosing another level here changes which entry to open; the running model does not restart.</p>
       </div>
     </div>`;
   root.querySelectorAll("[data-model]").forEach((b) => b.onclick = () => selectModel(b.dataset.model));
-  root.querySelectorAll("[data-effort]").forEach((b) => b.onclick = () => { S.effort = b.dataset.effort; api("/api/select", { profile: profileOf(S.model, S.effort).id }); renderRun(); });
+  root.querySelectorAll("[data-effort]").forEach((b) => b.onclick = () => { S.effort = b.dataset.effort; S.pendingSwitch = null; rememberEffort(); api("/api/select", { profile: profileOf(S.model, S.effort).id }); renderRun(); });
   const launch = $("#launch", root), stop = $("#stop", root), zed = $("#open-zed", root);
-  if (launch) launch.onclick = () => lifecycle("/api/switch", { profile: profile.id });
+  if (launch) launch.onclick = () => {
+    // Pre-switch summary whenever something would be interrupted: another model, or chats still answering.
+    const interrupts = (running && running !== S.model) || (S.state.answering_chats || []).length;
+    if (interrupts && !S.pendingSwitch) { S.pendingSwitch = profile.id; renderRun(); return; }
+    S.pendingSwitch = null; lifecycle("/api/switch", { profile: profile.id });
+  };
+  const confirmSwitch = $("#switch-confirm", root), cancelSwitch = $("#switch-cancel", root);
+  if (confirmSwitch) confirmSwitch.onclick = () => { S.pendingSwitch = null; lifecycle("/api/switch", { profile: profile.id }); };
+  if (cancelSwitch) cancelSwitch.onclick = () => { S.pendingSwitch = null; renderRun(); };
+  root.querySelectorAll("[data-approval]").forEach((b) => b.onclick = () => {
+    if (b.dataset.approval === permissions.approval_mode) return;
+    if (b.dataset.approval === "full_auto") { S.confirmFullAuto = true; renderRun(); return; }
+    setApproval(b.dataset.approval);
+  });
+  const yes = $("#full-auto-yes", root), no = $("#full-auto-no", root);
+  if (yes) yes.onclick = () => setApproval("full_auto", "full_auto");
+  if (no) no.onclick = () => { S.confirmFullAuto = false; renderRun(); };
   if (stop) stop.onclick = () => lifecycle("/api/stop", {});
   if (zed) zed.onclick = async () => { const r = await api("/api/launch", { profile: profile.id }); toast(r.ok ? r.instruction : r.error); };
   renderRunStats();
 }
+async function setApproval(mode, confirm) {
+  const result = await api("/api/permissions", { mode, ...(confirm ? { confirm } : {}) });
+  S.confirmFullAuto = false;
+  toast(result.ok ? `Tool approval: ${result.permissions.label}` : result.error);
+  await refreshState(); S.renderedKey = null; renderRun();
+}
+/* Switch stages, from the service's step records: the current one pulses while a job runs. */
+const STAGES = [["stop", "Stop current"], ["memory", "Memory check"], ["load", "Load weights"], ["health", "Health check"], ["ready", "Ready"]];
+function stageBar() {
+  const job = S.state.lifecycle;
+  if (!job || job.kind !== "switch" || !(job.steps || []).length) return "";
+  const seen = new Set(job.steps.map((s) => s.stage).filter(Boolean)), failed = job.steps.some((s) => s.error);
+  const current = [...job.steps].reverse().find((s) => s.stage)?.stage;
+  const startedStep = job.steps.find((s) => s.stage === "load" && !s.load_seconds);
+  const expected = S.catalog.details[S.model]?.measured?.cold_load_s;
+  const elapsed = job.busy && startedStep ? Date.now() / 1000 - startedStep.t : null;
+  if (!job.busy && !failed && Date.now() / 1000 - (job.finished || 0) > 30) return "";  // the step list below keeps the record
+  return `<ol class="stages ${failed ? "failed" : ""}" aria-label="Switch progress">${STAGES.filter(([id]) => id !== "stop" || seen.has("stop")).map(([id, label]) => {
+    const state = id === current && job.busy ? "active" : seen.has(id) ? (failed && id === current ? "error" : "done") : "";
+    const extra = id === "load" && elapsed != null ? ` · ${Math.round(elapsed)} s${expected ? " of ~" + Math.round(expected) + " s" : ""}` : "";
+    return `<li class="${state}">${label}${extra}</li>`;
+  }).join("")}</ol>`;
+}
+function switchSummary(profile, running, requirement, available, freed) {
+  const answering = (S.state.answering_chats || []).length;
+  const runningLabel = running ? (profileLabel(S.state.active_profile) || modelOf(running).display_name) : null;
+  return `<div class="notice switch-summary" style="margin-top:14px"><b>Before switching to ${esc(profile.label.replace("DwarfStar ", ""))}</b>
+    <ul>${running && running !== S.model ? `<li>${esc(runningLabel.replace("DwarfStar ", ""))} will be stopped (pid ${S.state.models[running].pid}); Zed sessions on it lose their model until you switch back.</li>` : ""}
+      ${answering ? `<li>${answering} chat${answering === 1 ? " is" : "s are"} still answering and will be interrupted.</li>` : ""}
+      <li>Needs ${requirement.required_gib.toFixed(1)} GiB available${available != null ? `; ${(available + freed).toFixed(1)} GiB will be` : ""}.</li></ul>
+    <div class="row"><button class="primary small-button" id="switch-confirm">Switch now</button><button class="ghost small-button" id="switch-cancel">Cancel</button></div></div>`;
+}
+/* The reasoning level last used with each model is remembered on this Mac. */
+function rememberEffort() { try { const all = JSON.parse(localStorage.getItem("dwarfstar.effort") || "{}"); all[S.model] = S.effort; localStorage.setItem("dwarfstar.effort", JSON.stringify(all)); } catch {} }
+function rememberedEffort(id) { try { return JSON.parse(localStorage.getItem("dwarfstar.effort") || "{}")[id]; } catch { return null; } }
 function selectModel(id) {
-  S.model = id;
-  const efforts = modelOf(id).reasoning_efforts;
-  if (!efforts.includes(S.effort)) S.effort = efforts.includes("low") ? "low" : efforts[0];
+  S.model = id; S.pendingSwitch = null;
+  const efforts = modelOf(id).reasoning_efforts, remembered = rememberedEffort(id);
+  S.effort = efforts.includes(remembered) ? remembered : efforts.includes(S.effort) ? S.effort : efforts.includes("low") ? "low" : efforts[0];
   renderRun();
 }
 /* The service owns the lifecycle. The UI submits a job, then follows the service's record of that job,
@@ -226,6 +287,8 @@ async function lifecycle(path, body) {
     for (;;) {
       await new Promise((resolve) => setTimeout(resolve, 700));
       await refreshState();
+      const bar = document.querySelector("#view-run .stages");
+      if (bar) bar.outerHTML = stageBar() || "<span></span>";  // keep the load timer moving between steps
       const job = S.state?.lifecycle;
       if (!job || job.job > accepted.job) break;
       if (job.job === accepted.job && !job.busy) {

@@ -183,8 +183,10 @@
       const result = await D.api("/api/chats/" + encodeURIComponent(id));
       if (!result.ok || id !== C.current) return;
       const finished = C.progress && !result.progress;
-      C.chat = result.chat; C.progress = result.progress;
-      renderMessages();
+      const key = JSON.stringify([result.chat.messages.length, result.progress]);
+      const changed = key !== C.followKey;
+      C.followKey = key; C.chat = result.chat; C.progress = result.progress;
+      if (changed) renderMessages(false);  // rebuilding an unchanged reply would swallow clicks on its buttons
       renderComposerState();
       if (C.progress) follow();
       else if (finished) loadList();
@@ -315,9 +317,19 @@
       messages.push(`<div class="chat-msg assistant live"><div class="chat-msg-head">Answering <span class="muted">· ${esc(C.progress.phase || "starting")}</span></div>
         ${tools ? `<div class="chat-tools">${tools}</div>` : ""}<div class="chat-msg-text">${esc((C.progress.text || "").trimStart())}<span class="chat-cursor"></span></div></div>`);
     }
+    const ask = C.progress?.permission;
+    if (ask) messages.push(`<div class="chat-approval" role="alertdialog" aria-label="Tool approval"><b>Approve this tool call?</b>
+      <div class="mono small" style="margin-top:4px">${esc(ask.title)}</div>
+      <div class="muted small">Tool approval is set to ${esc(S.state?.permissions?.label || "Ask")}. Declined automatically after 10 minutes.</div>
+      <div class="row">${ask.options.map((o) => `<button class="${o.kind.startsWith("allow") ? "primary" : "ghost"} small-button" data-permission="${esc(o.id)}">${esc(o.name)}</button>`).join("")}</div></div>`);
     node.innerHTML = messages.join("") || `<p class="muted chat-first">Say something to start. The first message becomes the title until you rename it.</p>`;
     if (scroll || atBottom) node.scrollTop = node.scrollHeight;
     node.querySelectorAll("[data-fork]").forEach((b) => b.onclick = () => fork(Number(b.dataset.fork)));
+    node.querySelectorAll("[data-permission]").forEach((b) => b.onclick = async () => {
+      node.querySelectorAll("[data-permission]").forEach((x) => (x.disabled = true));
+      const result = await D.api(`/api/chats/${C.chat.id}/permission`, { option: b.dataset.permission });
+      if (!result.ok) D.toast(result.error);
+    });
   }
 
   function toolChip(t) {

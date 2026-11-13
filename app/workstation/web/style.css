@@ -210,3 +210,16 @@ button.small-button { padding: 5px 12px; font-size: 12px; }
   .chat-main { min-height: 520px; }
   .chat-msg { max-width: 100%; }
 }
+
+/* switch stages */
+.stages { list-style: none; display: flex; flex-wrap: wrap; gap: 6px; margin: 14px 0 0; padding: 0; counter-reset: stage; }
+.stages li { counter-increment: stage; padding: 5px 11px 5px 9px; border-radius: 16px; border: 1px solid var(--line); color: var(--faint); font-size: 12px; }
+.stages li::before { content: counter(stage) " "; font-weight: 700; margin-right: 3px; }
+.stages li.done { color: var(--text); border-color: rgba(79,214,149,.45); }
+.stages li.done::before { content: "✓ "; color: var(--good, #4fd695); }
+.stages li.active { color: var(--text); border-color: var(--tone, var(--accent)); animation: pulse 1.4s infinite; }
+.stages li.error { color: var(--bad); border-color: rgba(255,107,107,.5); }
+.switch-summary ul { margin: 6px 0 10px; padding-left: 18px; }
+/* tool approval inside a chat */
+.chat-approval { align-self: stretch; border: 1px solid rgba(255,200,87,.45); background: rgba(255,200,87,.06); border-radius: 10px; padding: 10px 13px; }
+.chat-approval .row { margin-top: 8px; gap: 8px; }

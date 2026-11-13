@@ -194,6 +194,30 @@ class ChatTests(unittest.TestCase):
         chats.bulk(ids, "delete", "delete 3 chats")
         self.assertEqual(chats.list_chats(archived=None), [])
 
+    def test_tool_approvals_wait_for_the_user_in_ask_mode(self):
+        class AskingAgent(FakeAgent):
+            def request(self, method, params, timeout, on_update=None):
+                if method == "session/prompt":
+                    AskingAgent.choice = self.on_permission({"toolCall": {"toolCallId": "t9", "title": "$ rm -rf build", "kind": "execute"},
+                                                             "options": [{"optionId": "yes", "name": "Allow", "kind": "allow_once"},
+                                                                         {"optionId": "no", "name": "Reject", "kind": "reject_once"}]})
+                return super().request(method, params, timeout, on_update)
+
+        turns = chats.Turns()
+        chat = chats.create("cyber-low")
+        turns.start(chat["id"], "clean up", ["cyber"], agent_factory=AskingAgent)
+        deadline = time.time() + 5
+        while not (turns.progress(chat["id"]) or {}).get("permission") and time.time() < deadline:
+            time.sleep(0.01)
+        pending = turns.progress(chat["id"])["permission"]
+        self.assertEqual((pending["title"], [o["id"] for o in pending["options"]]), ("$ rm -rf build", ["yes", "no"]))
+        turns.answer_permission(chat["id"], "no")
+        while turns.progress(chat["id"]) and time.time() < deadline:
+            time.sleep(0.01)
+        self.assertEqual(AskingAgent.choice, "no")
+        with self.assertRaises(chats.ChatError):
+            turns.answer_permission(chat["id"], "yes")  # nothing is waiting any more
+
     def test_ids_cannot_escape_the_chat_directory(self):
         with self.assertRaises(chats.ChatError):
             chats.get("../../etc/passwd")
