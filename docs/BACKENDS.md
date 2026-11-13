@@ -16,7 +16,7 @@ DwarfStar is the product: Workstation, catalog, lifecycle, chats, compaction, AC
 |---|---|---|---|
 | Artifact | published 2-part split GGUF (`qwen4exp`, PLE in part 2) | main + standalone PLE GGUF | main + standalone PLE GGUF, BF16 dense trunk |
 | Tokenizer profile | `gpt2/qwen35` | `gpt2/qwen2` (Swift's own tokenizer) | `gpt2/qwen35` |
-| **Splash-m1** | **Direct**: loads the existing local files | **Works with a one-line adapter fix** (below): Splash lacked Swift's legitimate `qwen2` tokenizer profile | **Not yet**: two BF16 layout gaps in Splash's planner (below); a lossless engine fix is identified |
+| **Splash-m1** | **Direct**: loads the existing local files | **Works** with the `qwen2` tokenizer-profile patch (below) | **Works** with the exact-BF16 planner patch (below); weights unchanged |
 | **Native oMLX / MLX** | Not practical | Not practical | Not practical |
 | Vision on Splash | Yes, with the original BF16 projector from the pinned source repo (`mmproj-Qwen3.8-Flash-Next-BF16.gguf`, 0.91 GB, SHA-256 `b1a82259…`). Splash refuses the Q8_0 projector: it converts vision weights to BF16 and refuses values that are not exactly representable | – | – |
 | Speculative decoding | Splash: DFlash2 draft `incoai/Qwen3.8-Flash-Next-DFlash2` @ `a22a1744` (1.21 GB, 0.49 GiB resident). Native MTP sidecars are not used by Splash | – | – |
@@ -112,4 +112,28 @@ Splash's planner repacks projection weights into "planes" whose width must be a 
 
 Every other Cyber BF16 tensor already fits (widths 2560/6144/10240) or uses an exact as-stored path (router, embeddings, alpha/beta, indexer, PLE conv).
 
-Options, in order: (1) no other Splash type holds BF16 values exactly at a 64 unit (Q8_0/Q4_x/IQ4_NL/MXFP4/Q2_0 are all lossy); (2) no tail kernel exists for a partial 256 block; (3) loader-side zero padding cannot work because the shared expert's width is tied to the routed experts'; (4) **minimal engine change, lossless**: add a BF16 plane format with 64-element blocks (`meta_groups` 2; its scale `g` is always 1). The kernels are generic over the format table (`FmtFloat16<F, V>` reads `kQuantFormats[F].meta_groups`; instantiations come from `QUANT_FORMATS(X)`). The planner would pick it for BF16 tensors whose width is not a multiple of 256, and use BF16 planes instead of the Q8_0 conversion for BF16 hyper-connection projections. This needs the Metal toolchain (not installed: `xcrun -f metal` fails) and an engine and metallib rebuild with new pins. (5) Rebuilding or re-encoding Cyber is **not** needed for the lossless path.
+Options considered, in order: (1) no other Splash type holds BF16 values exactly at a 64 unit (Q8_0/Q4_x/IQ4_NL/MXFP4/Q2_0 are all lossy); (2) no tail kernel exists for a partial 256 block; (3) loader-side zero padding cannot work because the shared expert's width is tied to the routed experts'; (4) **minimal engine change, lossless**: add a BF16 plane format with 64-element blocks (`meta_groups` 2; its scale `g` is always 1). The kernels are generic over the format table (`FmtFloat16<F, V>` reads `kQuantFormats[F].meta_groups`; instantiations come from `QUANT_FORMATS(X)`). The planner would pick it for BF16 tensors whose width is not a multiple of 256, and use BF16 planes instead of the Q8_0 conversion for BF16 hyper-connection projections. (5) Rebuilding or re-encoding Cyber is **not** needed. Option 4 is implemented (next section).
+
+## Cyber on Splash-m1: exact BF16 planes (2026-11-13)
+
+`backends/splash-m1/patches/0002-exact-bf16-planes.patch`, built from the 1.6.1-m1 source with Xcode 26.6's Metal toolchain:
+
+* adds **BF16S**: BF16 in 64-value native blocks, the same values and planes as BF16 (its scale `g` is always 1); the kernels are generic over the format table, so it is one table entry, one kernel-list entry and one repack case;
+* the planner picks BF16S for a BF16 tensor whose width is a multiple of 64 but not of 256 (Cyber's 640-wide shared-expert down projection, the 320-wide hyper-connection up projections);
+* BF16 hyper-connection projections stay exact instead of being re-quantized to Q8_0 at load (F16 keeps upstream's Q8_0 path). This also applies to Scope and Swift: **their** GGUFs store these projections in BF16 too, so upstream Splash had been running them approximated; native runs them exactly. The cost is negligible (Scope wall 32.6 → 32.4 s at 8K, 113.7 → 114.3 s at 32K; decode within noise; up to ~1.5 GiB more peak wired).
+
+Verification: a stock build from source is behaviourally identical to the pinned release (6/6 deterministic replies, including a 16K-token lookup). With the patch, Splash's own suites pass with BF16S in every format loop under Metal shader validation: planner (new 320-wide BF16 shared-expert case; exact BF16/BF16S hyper-connection planes), preparation (repack of every format against the reference), dequant (BF16S: 0 of 262,144 weights differ), projection (45 formats within fp64 bounds) and MoE numerics. Cyber's split part 1 was rewritten with tensor payloads and metadata verified identical; its PLE file is linked unchanged.
+
+| Cyber | Native | Splash-m1 (patched) | Change |
+|---|---:|---:|---:|
+| TTFT, short | 0.85 s | 0.52 s | −39 % |
+| Prefill, 8K / 32K | 297 / 292 tok/s | 327 / 307 tok/s | +10 % / +5 % |
+| Generation while answering | 23–30 tok/s | 33–62 tok/s (DFlash2 draft) | +11–130 % |
+| Wall, 8K needle / 32K needle | 46.0 / 126.9 s | 32.2 / 115.7 s | −30 % / −9 % |
+| Repeated prefix, turn 2 | 8,497 reused, TTFT 0.44 s | 8,224 reused, TTFT 0.59 s | both reuse |
+| Peak wired | 52.91 GiB | 48.37 GiB | −4.5 GiB |
+| Answers | needle correct at 8K and 32K | same | equal |
+
+Deterministic prompt set on Splash (`splash_equivalence.py`): all six correct, including the 16,404-token lookup. Prompt token counts equal native's for all three models. Tokenizer parity against each model's shipped `tokenizer.json`: Swift 62/62 for native and Splash; Cyber 62/62 for Splash, 59/62 for native (native skips NFC for `qwen35` and reads a typed `<|vision_start|>` as text), so Splash is the more faithful tokenizer for Cyber and Scope.
+
+Not yet run on Splash: 128K depth for Swift and Cyber, vision for Swift and Cyber, Cyber OFF/MEDIUM/XHIGH, DwarfStar lifecycle integration.

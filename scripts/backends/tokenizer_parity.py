@@ -9,9 +9,10 @@ as the server does, and prompts are encoded with `tokenizable(text)` and `add_sp
     <splash dist>/python/bin/python3 tokenizer_parity.py --gguf MAIN.gguf --native-cli ds4 --splash-src SRC
         [--reference DIR] [--json OUT]
 
---reference adds a third tokenizer: the model's own shipped tokenizer files (for example Swift 1.5's source
-checkpoint), loaded with AutoTokenizer exactly as Hugging Face loads the model, so both runtimes are also checked
-against what the model was trained with.
+--reference adds a third tokenizer: the model's own shipped tokenizer.json (for example Swift 1.5's source
+checkpoint), loaded with the tokenizers library exactly as the file specifies it, so both runtimes are also checked
+against the model's published tokenizer. (transformers 5's Qwen2Tokenizer class is not used: it replaces the file's
+pre-tokenizer with its own Qwen2 pattern, which differs from Qwen3.5-family files on combining marks.)
 
 Cases cover plain English, code, punctuation, whitespace, Unicode (combining marks, NFC/NFD, CJK, emoji, RTL),
 JSON tool calls, special tokens, and prompts rendered from the GGUF's own chat template (system, multi-turn, tools,
@@ -163,10 +164,10 @@ def main(argv: list[str]) -> int:
             return 1
         reference = None
         if args.reference:
-            from transformers import AutoTokenizer  # noqa: PLC0415
+            from tokenizers import Tokenizer  # noqa: PLC0415
 
-            original = AutoTokenizer.from_pretrained(args.reference, local_files_only=True, trust_remote_code=False)
-            reference = lambda text: original(text, add_special_tokens=False)["input_ids"]  # noqa: E731
+            original = Tokenizer.from_file(str(Path(args.reference) / "tokenizer.json"))
+            reference = lambda text: original.encode(text, add_special_tokens=False).ids  # noqa: E731
         cases = [(category, text) for category, texts in CATEGORIES.items() for text in texts]
         for conversation, messages in CONVERSATIONS.items():
             for mode, kwargs in TEMPLATE_KWARGS.items():
