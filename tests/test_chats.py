@@ -218,6 +218,50 @@ class ChatTests(unittest.TestCase):
         with self.assertRaises(chats.ChatError):
             turns.answer_permission(chat["id"], "yes")  # nothing is waiting any more
 
+    def test_a_moved_chat_keeps_its_agent_session(self):
+        workspace = Path(self.directory.name) / "moved" / "workspace"
+        old = workspace / ".omp-dwarfstar-cyber-low-agent/sessions/-old-place-workspace"
+        old.mkdir(parents=True)
+        (old / "2026-11-13T02-05-59-248Z_sess-1.jsonl").write_text('{"type":"title","v":1}\n{"type":"session","id":"sess-1","cwd":"/old/place/workspace"}\n{"type":"message","x":1}\n')
+        (old / ".2026-11-13T02-05-59-248Z_sess-1.jsonl.lock.os").write_text("")
+        (old / "2026-11-13T00-00-00-000Z_other.jsonl").write_text("{}\n")
+        self.assertEqual(chats.relocate_agent_session(workspace, "sess-1"), ["2026-11-13T02-05-59-248Z_sess-1.jsonl"])
+        target = workspace / ".omp-dwarfstar-cyber-low-agent/sessions" / chats.session_folder_name(workspace)
+        lines = (target / "2026-11-13T02-05-59-248Z_sess-1.jsonl").read_text().splitlines()
+        self.assertEqual(json.loads(lines[1])["cwd"], str(workspace))  # the header names the new place
+        self.assertEqual((lines[0], lines[2]), ('{"type":"title","v":1}', '{"type":"message","x":1}'))  # the rest is untouched
+        self.assertTrue((old / "2026-11-13T00-00-00-000Z_other.jsonl").is_file())  # other sessions untouched
+        self.assertEqual(chats.relocate_agent_session(workspace, "sess-1"), [])  # idempotent
+
+    def test_a_lost_agent_session_is_never_replaced_silently(self):
+        prompts = []
+
+        class LostAgent(FakeAgent):
+            def request(self, method, params, timeout, on_update=None):
+                if method in ("session/resume", "session/load"):
+                    raise chats.ChatError("session not found")
+                if method == "session/prompt":
+                    prompts.append(params["prompt"][0]["text"])
+                return super().request(method, params, timeout, on_update)
+
+        turns = chats.Turns()
+        chat = chats.create("cyber-low")
+        self.turn(turns, chat["id"], "What is in the capture?")
+        record = chats.get(chat["id"])
+        record["agent_session_id"] = "gone-session"
+        chats._write(record)
+        turns.start(chat["id"], "Continue", ["cyber"], agent_factory=LostAgent)
+        deadline = time.time() + 5
+        while turns.progress(chat["id"]) and time.time() < deadline:
+            time.sleep(0.01)
+        record = chats.get(chat["id"])
+        notices = [m for m in record["messages"] if m["role"] == "notice"]
+        self.assertEqual(len(notices), 1)
+        self.assertEqual(notices[0]["previous_session"], "gone-session")
+        self.assertIn("What is in the capture?", prompts[-1])  # the new session gets the transcript
+        self.assertTrue(prompts[-1].endswith("Continue"))
+        self.assertEqual(record["agent_session_id"], "agent-session-1")
+
     def test_ids_cannot_escape_the_chat_directory(self):
         with self.assertRaises(chats.ChatError):
             chats.get("../../etc/passwd")

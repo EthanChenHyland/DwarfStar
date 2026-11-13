@@ -181,12 +181,10 @@ def fork(chat_id: str, upto: int | None = None, keep_messages: bool = True) -> d
     return _write(record)
 
 
-def fork_preface(record: dict) -> str:
-    """For a fork's first turn: the copied transcript, newest kept when it is long, as context for a fresh agent session."""
-    if record.get("agent_session_id") or not record.get("forked_from"):
-        return ""
+def transcript_preface(record: dict) -> str:
+    """The conversation so far (newest kept when long), as context for a fresh agent session."""
     lines, size = [], 0
-    for message in reversed(record["messages"][:-1]):
+    for message in reversed([m for m in record["messages"][:-1] if m["role"] in ("user", "assistant")]):
         line = f"{'User' if message['role'] == 'user' else 'Assistant'}: {message['text']}"
         if size + len(line) > FORK_PREFACE_CHARS:
             lines.append("[earlier messages omitted]")
@@ -197,6 +195,13 @@ def fork_preface(record: dict) -> str:
         return ""
     return ("This conversation continues an earlier one. Its transcript so far, for context:\n\n" + "\n\n".join(reversed(lines))
             + "\n\n---\n\n")
+
+
+def fork_preface(record: dict) -> str:
+    """For a fork's first turn: the copied transcript as context for its fresh agent session."""
+    if record.get("agent_session_id") or not record.get("forked_from"):
+        return ""
+    return transcript_preface(record)
 
 
 def export(chat_id: str, fmt: str) -> tuple[str, str, str]:
@@ -380,17 +385,88 @@ class AgentSession:
                 self.process.kill()
 
 
-def open_session(agent: AgentSession, record: dict, workspace: Path) -> str:
-    """Resume the chat's agent session so the agent's own (compacted) context carries over; create it the first time."""
+def session_folder_name(workspace: Path) -> str:
+    """The agent files a session under its working directory relative to home, '/' written as '-'."""
+    try:
+        relative = workspace.resolve().relative_to(Path.home().resolve())
+    except ValueError:
+        relative = workspace.resolve()
+    return "-" + str(relative).strip("/").replace("/", "-")
+
+
+def relocate_agent_session(workspace: Path, session_id: str | None) -> list[str]:
+    """A chat whose folder moved (a data-root migration) keeps its agent session under the old path's name, where the
+    agent no longer looks. Move that session's files into the folder for the current path; nothing else changes."""
+    if not session_id:
+        return []
+    moved = []
+    for sessions in workspace.glob(".omp-dwarfstar-*-agent/sessions"):
+        target = sessions / session_folder_name(workspace)
+        for path in sessions.glob(f"*/*_{session_id}.jsonl*"):  # the session and its lock file
+            if path.parent != target:
+                target.mkdir(parents=True, exist_ok=True)
+                path.rename(target / path.name)
+                if not path.name.startswith("."):
+                    moved.append(path.name)
+        for path in target.glob(f"*_{session_id}.jsonl"):
+            _set_session_cwd(path, workspace)
+    return moved
+
+
+def _set_session_cwd(path: Path, workspace: Path) -> None:
+    """The session record's header names its working directory; after a move it must name the current one. Only that
+    field of the "session" line changes; every other line is kept byte for byte."""
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    for index, line in enumerate(lines[:5]):
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if entry.get("type") != "session":
+            continue
+        if entry.get("cwd") != str(workspace):
+            entry["cwd"] = str(workspace)
+            lines[index] = json.dumps(entry, separators=(",", ":"), ensure_ascii=False) + "\n"
+            temporary = path.with_name(path.name + ".tmp")
+            temporary.write_text("".join(lines), encoding="utf-8")
+            temporary.replace(path)
+        break
+
+
+def open_session(agent: AgentSession, record: dict, workspace: Path) -> tuple[str, bool]:
+    """Resume the chat's agent session so the agent's own (compacted) context carries over; create it the first time.
+    Returns (session id, resumed). A session that exists but cannot be resumed is never replaced silently: the caller
+    records the change in the chat and hands the new session the transcript."""
     params = {"cwd": str(workspace), "mcpServers": []}
     if record.get("agent_session_id"):
+        relocate_agent_session(workspace, record["agent_session_id"])
         for method in ("session/resume", "session/load"):
             try:
                 agent.request(method, {**params, "sessionId": record["agent_session_id"]}, 180)
-                return record["agent_session_id"]
+                return record["agent_session_id"], True
             except ChatError:
                 continue
-    return agent.request("session/new", params, 180)["sessionId"]
+    return agent.request("session/new", params, 180)["sessionId"], False
+
+
+def probe_resume(chat_id: str, agent_factory=None) -> dict:
+    """Check, without sending anything, that the agent resumes this chat's own session (no fallback to a new one).
+    The chat's model must be running; the chat is not modified."""
+    record = get(chat_id)
+    workspace = _path(chat_id).parent / "workspace"
+    if not record.get("agent_session_id"):
+        return {"ok": False, "chat": chat_id, "error": "no agent session yet"}
+    agent = (agent_factory or AgentSession)(record["profile"], workspace)
+    try:
+        agent.request("initialize", {"protocolVersion": 1, "clientCapabilities": {"fs": {"readTextFile": False, "writeTextFile": False},
+                                     "terminal": False}, "clientInfo": {"name": "DwarfStar Workstation", "version": "1"}}, 180)
+        moved = relocate_agent_session(workspace, record["agent_session_id"])
+        agent.request("session/resume", {"cwd": str(workspace), "mcpServers": [], "sessionId": record["agent_session_id"]}, 180)
+        return {"ok": True, "chat": chat_id, "session": record["agent_session_id"], "relocated": moved}
+    except ChatError as error:
+        return {"ok": False, "chat": chat_id, "session": record["agent_session_id"], "error": str(error)}
+    finally:
+        agent.close()
 
 
 def agent_compactions(workspace: Path, session_id: str | None) -> int | None:
@@ -511,7 +587,17 @@ class Turns:
             agent.on_permission = lambda params: self.ask_permission(chat_id, params)
             agent.request("initialize", {"protocolVersion": 1, "clientCapabilities": {"fs": {"readTextFile": False, "writeTextFile": False},
                                          "terminal": False}, "clientInfo": {"name": "DwarfStar Workstation", "version": "1"}}, 180)
-            session_id = open_session(agent, record, workspace)
+            session_id, resumed = open_session(agent, record, workspace)
+            if record.get("agent_session_id") and not resumed:
+                # The agent lost this chat's session: say so in the chat and give the new session the transcript.
+                previous = record["agent_session_id"]
+                record = get(chat_id)
+                preface = transcript_preface(record)  # before the notice: the last message is this turn's own
+                add_message(record, "notice", "The agent could not resume this chat's earlier session, so this reply "
+                                              "comes from a new agent session that was given the conversation so far.",
+                            previous_session=previous, new_session=session_id)
+                _write(record)
+                text = preface + text
             with self.lock:
                 self.active[chat_id]["phase"] = "thinking"
             result = agent.request("session/prompt", {"sessionId": session_id, "prompt": [{"type": "text", "text": text}]},

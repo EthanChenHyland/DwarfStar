@@ -339,6 +339,7 @@
 
   function message(m, index) {
     const time = new Date(m.t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    if (m.role === "notice") return `<div class="chat-notice-line muted small">${esc(m.text)}</div>`;
     if (m.role === "error") return `<div class="chat-msg error"><div class="chat-msg-head">Not answered <span class="faint">${time}</span></div><div class="chat-msg-text">${esc(m.text)}</div></div>`;
     const who = m.role === "user" ? "You" : profileName(C.chat.profile);
     const tools = (m.tools || []).map(toolChip).join("");
