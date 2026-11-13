@@ -1,0 +1,137 @@
+{
+  "id": "cyber",
+  "order": 3,
+  "family": "Cyber",
+  "display_name": "DwarfStar Cyber",
+  "short_name": "Cyber",
+  "summary": "Format conversion of the pinned Dealign CYBERSECURITY NVFP4 checkpoint. Weight-faithful to that checkpoint; no base-model tensors substituted.",
+  "default": false,
+  "architecture": {
+    "name": "Qwen3.8-Flash-Next (Dealign CYBERSECURITY)",
+    "gguf_architecture": "qwen4exp",
+    "type": "Mixture-of-experts transformer with linear-attention layers, n-gram per-layer embeddings (PLE) and a multi-token-prediction head",
+    "layers": 48,
+    "experts_per_layer": 512,
+    "experts_active": 10
+  },
+  "source": {
+    "repository": "dealignai/Qwen3.8-Flash-Next-CYBERSECURITY-NVFP4",
+    "revision": "15ef113c7090844f97f355f400169791dc76c2e3",
+    "format": "ModelOpt NVFP4 (W4A4 export) safetensors, 206 shards",
+    "derivation": "Experts requantized from NVFP4 to searched Q2_0; n-gram table FP8 x scalar to IQ4_NL; dense trunk, MTP and vision from the checkpoint's own BF16 tensors",
+    "local_checkpoint": "sources/cyber/Qwen3.8-Flash-Next-CYBERSECURITY-NVFP4",
+    "policy": "NO INTENTIONAL DE-ABLITERATION / BASE-WEIGHT RESTORATION"
+  },
+  "quantization": {
+    "label": "Searched Q2_0",
+    "experts": "Q2_0, per-block scale search (2.25 bits per weight)",
+    "dense": "BF16 (exact)",
+    "ple": "IQ4_NL, disk-backed, source scalar applied",
+    "mtp": "Q8_0 experts",
+    "vision": "F32 (bit-exact)"
+  },
+  "assets": {
+    "main": {
+      "path": "models/cyber/DwarfStarCyber-Q2_0-main.gguf",
+      "bytes": 43885397152,
+      "sha256": "5866673cb52af0712cb20b6ecea399555f4b6a9c485f760bbe7b466033ec1f11"
+    },
+    "ple": {
+      "path": "models/cyber/DwarfStarCyber-PLE-IQ4_NL.gguf",
+      "bytes": 28800139680,
+      "sha256": "0737e0e8fcd16583462e36b8ba5dcf1cdf33f101364e1d49a06a7fa1e170198c"
+    },
+    "mtp": {
+      "path": "models/cyber/DwarfStarCyber-MTP-block-Q8_0.gguf",
+      "bytes": 2861650816,
+      "sha256": "415809551336f49c89a2608f71246839c6cdbf27e48ed4a2e9ec2ce2688655dc"
+    },
+    "vision": {
+      "path": "models/cyber/mmproj-DwarfStarCyber-F32.gguf",
+      "bytes": 1795743776,
+      "sha256": "159ec18133749e1cb5a781ae496b8da2a35b7d16d0972c94dd63c6942d141a56"
+    }
+  },
+  "port": 8032,
+  "served_model_id": "qwen3.8-flash-next",
+  "reasoning_efforts": [
+    "off",
+    "low",
+    "medium",
+    "xhigh"
+  ],
+  "memory": {
+    "resident_model_gib": 43.53,
+    "routed_experts_gib": 31.64,
+    "kv_gib": 4.17,
+    "buffers_gib": 1.44,
+    "projector_gib": 1.67,
+    "note": "Inputs to the shared formula in config/runtime-policy.json. Resident model is the main file plus the MTP head; KV and buffers are the runtime's own plan at 131072 tokens and this model's prefill chunk. Routed experts are 48 layers x 512 experts of Q2_0, the same size for every model."
+  },
+  "state_namespaces": {
+    "off": "cyber-off",
+    "low": "cyber-low",
+    "medium": "cyber-medium",
+    "xhigh": "cyber-xhigh"
+  },
+  "provenance": {
+    "build_manifest": "legacy: dwarfstar-cyber/manifests",
+    "notes": "See docs/CYBER-CONVERSION.md."
+  },
+  "measured": {
+    "cold_load_s": 22.0,
+    "warm_load_s": 2.1,
+    "ttft_s": 0.56,
+    "prefill_tok_s": 278,
+    "decode_tok_s": 35.7,
+    "decode_long_tok_s": 20.0,
+    "decode_long_context": "120,399-token prompt (client-measured, includes reasoning; 18.8 tok/s at 59K)",
+    "mtp_acceptance_pct": 78.8,
+    "mtp_benefit": "about 31 tok/s with MTP against 25 without; output token-identical",
+    "tested_context_tokens": 120399,
+    "peak_wired_gib": 52.94,
+    "evidence": {
+      "load, TTFT, prefill": "Cyber runtime bring-up 2026-11-12",
+      "decode": "runtime parity run 2026-11-12 (mean of 5 short prompts); bring-up range 32 to 36",
+      "mtp": "Cyber MTP parity run 2026-11-12",
+      "memory": "production validation 2026-11-12",
+      "context": "production validation 2026-11-12 (59,471 and 120,399-token needle tests at 131072)"
+    },
+    "quality": [
+      {
+        "name": "Coherence, short prompts",
+        "result": "8 of 8 correct",
+        "note": "Temperature 0 and default sampling; answers match Swift's"
+      },
+      {
+        "name": "Coding smoke",
+        "result": "Pass",
+        "note": "Fixed a failing unit test through the agent"
+      },
+      {
+        "name": "Defensive source-review fixture (synthetic)",
+        "result": "3 of 3 defects found, 0 false positives",
+        "note": "Fixes and regression tests correct"
+      },
+      {
+        "name": "First-attempt robustness, agent sessions",
+        "result": "2 of 21 sessions malformed on the first attempt",
+        "note": "Both passed on retry (2026-11-12)"
+      },
+      {
+        "name": "Opening-token probe (2026-11-12)",
+        "result": "4 of 80 stop within a few junk tokens",
+        "note": "Scope and Swift: 0 of 80. The 2-bit expert encoding flattens the opening distribution; a calibrated re-encode is deferred"
+      },
+      {
+        "name": "Context depth",
+        "result": "128K works at 120,399 tokens",
+        "note": "Needle answered at 59K and 120K (2026-11-12); prefill 278 tok/s, peak wired 52.94 GiB, 1024-token prefill chunk"
+      }
+    ]
+  },
+  "prefill_chunk": 1024,
+  "override_reasons": {
+    "prefill_chunk": "Metal working set. Cyber's BF16 trunk and F32 projector make its resident footprint 7 GiB larger than Scope's. With the shared 2048-token chunk its 128K plan is 51.92 GiB against the 51.84 GiB recommendedMaxWorkingSetSize, and prefill failed at depth with a Metal out-of-memory error; 1024-token chunks bring the plan to 50.81 GiB and the 120,399-token test passes."
+  }
+}
