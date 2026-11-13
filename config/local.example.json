@@ -1,0 +1,7 @@
+{
+  "data_root": "/path/to/dwarfstar-data",
+  "extra_tool_paths": [],
+  "extra_read_paths": [],
+  "admission_lock": null,
+  "legacy_root": "/path/to/local/evidence (optional; used only to regenerate the benchmark index)"
+}
