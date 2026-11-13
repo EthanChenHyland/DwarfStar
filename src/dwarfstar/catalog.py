@@ -284,6 +284,7 @@ def summary() -> dict:
             "source": {k: item["source"][k] for k in ("repository", "revision", "derivation") if k in item["source"]},
             "capabilities": item["capabilities"],
             "cache": item["cache"],
+            "backend": {k: item["backend"][k] for k in ("id", "kind", "release", "telemetry", "speculative")},
             "summary": item["summary"],
         })
     shared = policy()
