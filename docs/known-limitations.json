@@ -1,0 +1,98 @@
+[
+ {
+  "id": "kv-q8-unsupported",
+  "models": [
+   "scope",
+   "swift",
+   "cyber"
+  ],
+  "text": "Q8 KV cache was requested but the pinned runtime's Qwen4Exp graph has no quantized KV path (K/V allocated and read as F16). K and V stay F16 for every model; adding Q8 KV would be a new cache backend."
+ },
+ {
+  "id": "cyber-opening-robustness",
+  "models": [
+   "cyber"
+  ],
+  "text": "Data-free 2-bit expert encoding flattens Cyber's opening distribution: 4 of 80 sampled openings of one agent request stopped after a few junk tokens (Scope and Swift 0 of 80); 2 of 21 historical agent sessions needed a retry. A calibrated re-encode is deferred."
+ },
+ {
+  "id": "cyber-w4a4",
+  "models": [
+   "cyber"
+  ],
+  "text": "The source is a W4A4 export; no Apple runtime reproduces its 4-bit activations, so the build is weight-faithful with full-precision activations."
+ },
+ {
+  "id": "cyber-no-refusal",
+  "models": [
+   "cyber"
+  ],
+  "text": "Cyber has no refusal behaviour; in Full Auto, text in a page, file or screenshot can steer its tools without an approval step."
+ },
+ {
+  "id": "cyber-prefill-chunk",
+  "models": [
+   "cyber"
+  ],
+  "text": "Cyber runs closest to the Metal limit: its 128K plan is 50.81 GiB against a 51.84 GiB recommended working set (1.03 GiB headroom), which is why it prefills in 1024-token chunks. A 1536-token chunk (plan 51.37 GiB) was started but not validated at depth and is not used."
+ },
+ {
+  "id": "tokenizer-conformance",
+  "models": [
+   "scope",
+   "cyber"
+  ],
+  "text": "Tokenizer conformance 257 of 339 on the unpatched runtime: no NFC normalization and 24 rarely-typed special tokens tokenized as text."
+ },
+ {
+  "id": "video",
+  "models": [
+   "scope",
+   "swift",
+   "cyber"
+  ],
+  "text": "Video input is not exposed; the agent stack has no video path."
+ },
+ {
+  "id": "zed-effort",
+  "models": [
+   "scope",
+   "swift",
+   "cyber"
+  ],
+  "text": "Zed's ACP thinking option cannot select reasoning effort, so each profile is its own editor entry."
+ },
+ {
+  "id": "acp-needs-running-model",
+  "models": [
+   "scope",
+   "swift",
+   "cyber"
+  ],
+  "text": "dwarfstar-acp and Workstation chats never load a model; start it from the Workstation (or dwarfstar switch) first."
+ },
+ {
+  "id": "kimicu-unverified",
+  "models": [
+   "cyber",
+   "swift"
+  ],
+  "text": "The KimiCU Calculator check was not re-run for Cyber XHIGH and Swift MEDIUM (screen locked at the time); it passed on Cyber LOW."
+ },
+ {
+  "id": "chat-ui",
+  "models": [
+   "scope",
+   "swift",
+   "cyber"
+  ],
+  "text": "Chats are implemented in the service (storage, resume through the agent's own session and compaction, rename, archive, search, confirmed delete; /api/chats) with unit tests; the Workstation chat panel is not built yet and no live chat turn was run."
+ },
+ {
+  "id": "lifecycle-trigger",
+  "models": [
+   "cyber"
+  ],
+  "text": "The reported Cyber MEDIUM -> Stop -> LOW failure was not reproduced in three faithful attempts; the lifecycle defects that can produce it were fixed and the sequence passes through the real runtime."
+ }
+]
