@@ -1,6 +1,6 @@
 # Models
 
-All three are Qwen3.8-Flash-Next-family (`qwen4exp`) models: 48 layers mixing linear-attention and full-attention blocks, 512 routed experts with 10 active per token, a shared expert, an n-gram per-layer embedding table (PLE) read from disk, a one-layer multi-token-prediction (MTP) head and a vision projector. The catalog files in `config/models/` are the source of truth; the Workstation's **Models** view renders them with one schema.
+All three are Qwen3.8-Flash-Next-family (`qwen4exp`) models: 48 layers mixing linear-attention and full-attention blocks, 512 routed experts with 10 active per token, a shared expert, an n-gram per-layer embedding table (PLE) read from disk, a one-layer multi-token-prediction (MTP) head and a vision projector. In production, Splash-m1 drafts with a separate DFlash2 draft model (not the models' own MTP head) and verifies every token against the target. The catalog files in `config/models/` are the source of truth; the Workstation's **Models** view renders them with one schema.
 
 ## Summary
 
@@ -27,24 +27,25 @@ All three are Qwen3.8-Flash-Next-family (`qwen4exp`) models: 48 layers mixing li
 
 ## KV cache
 
-Every model uses the same cache policy, Splash-m1's: symmetric INT8 K and V with per-token-head F32 scales in 32-token pages (13,248 bytes per token, 1.62 GiB at 128K), a prefix cache, and long requests' KV spilled to an SSD cache. This also delivers the 8-bit KV cache requested earlier, which the native runtime could not (its Qwen4Exp graph only has F16 K/V: 34,176 bytes per token, 4.17 GiB at 128K). Backend evaluation and measurements: [BACKENDS.md](BACKENDS.md).
+Every model uses the same cache policy, Splash-m1's: symmetric INT8 K and V with per-token-head F32 scales in 32-token pages (13,248 bytes per token, 1.62 GiB at 128K), a prefix cache in memory, and long requests' KV spilled to the SSD cache (`<cache>/splash-kv`). This is a genuine 8-bit KV cache; the retired native runtime could not do it (its Qwen4Exp graph allocated F16 K/V only: 34,176 bytes per token, 4.17 GiB at 128K). Backend evaluation and measurements: [BACKENDS.md](BACKENDS.md).
 
 ## Measured performance
 
-Short prompts at temperature 0 on the unified runtime unless noted (M1 Max, 64 GiB).
+Measured on Splash-m1 (`splash-m1-1.6.1-ds1`), M1 Max 64 GiB, the backend A/B of 2026-11-13 (short, 8K and 32K prompts, temperature 0). These are the values the catalog carries and the Models view shows.
 
 | | Scope | Swift | Cyber |
 |---|---:|---:|---:|
-| Load, cold / warm | 15.5 s / 1.6 s | 15.6 s / 1.6 s | 22 s / 2.1 s |
-| Time to first token | 0.55 s | 0.54 s | 0.56 s |
-| Prefill | 283 tok/s | 282 tok/s | 278–288 tok/s (59K–120K) |
-| Decode | 40.9 tok/s | 40.8 tok/s | 35.7 tok/s |
-| MTP acceptance | 86.8 % | 88.6 % | 78.8 % |
+| Start, idle to ready | 25.2 s | 24.3 s | 27.0 s |
+| Time to first token | 0.51 s | 0.51 s | 0.52 s |
+| Prefill, 8K / 32K | 331 / 307 tok/s | 333 / 310 tok/s | 327 / 307 tok/s |
+| Decode (draft-accelerated) | 35–67 tok/s | 41–78 tok/s | 33–62 tok/s |
+| Draft acceptance (one coding prompt) | 73 % | 61 % (MEDIUM) | 70 % |
+| Peak wired, whole machine | 43.35 GiB | 43.24 GiB | 48.37 GiB |
 
-The production validation (docs/BENCHMARKS.md) adds the 128K depth results for Cyber.
+Decode depends on how many drafted tokens the target accepts, which varies by task and reasoning level; the range is the measured span. Draft acceptance is the share of DFlash2 draft tokens the target kept, measured live on one coding prompt per model (`dwarfstar runtime … status` → Splash `/status`). The production validation (docs/BENCHMARKS.md) adds the 120K depth results. The shared draft and whether a per-model draft is worth building: [DRAFT-MODELS.md](DRAFT-MODELS.md).
 
 ## Quality highlights
 
-* **Scope**: wins the quality-first matched comparison against Swift LOW; latency is ~95 % model compute; native MTP adds ~5 % decode.
+* **Scope**: wins the quality-first matched comparison against Swift LOW; latency is almost entirely model compute.
 * **Swift MEDIUM**: 8 of 8 frozen low-risk tasks on the first attempt (LOW: 6 of 8) at about the same wall time.
 * **Cyber**: 8/8 coherence prompts, coding fix and a synthetic defensive source review (3/3 defects, 0 false positives); 4 of 80 sampled openings of one agent request fail early (the others: 0 of 80).
