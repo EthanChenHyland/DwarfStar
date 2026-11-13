@@ -144,9 +144,9 @@
     const g = V.g;
     g.fillStyle = COLORS.panel; g.strokeStyle = stroke || COLORS.line; g.lineWidth = 1;
     g.beginPath(); g.roundRect(x, y, w, h, 9); g.fill(); g.stroke();
-    g.fillStyle = COLORS.muted; g.font = "600 10px -apple-system"; g.textBaseline = "top"; g.textAlign = "left";
+    g.fillStyle = COLORS.muted; g.font = "600 10px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif"; g.textBaseline = "top"; g.textAlign = "left";
     g.fillText(title.toUpperCase(), x + 10, y + 8);
-    if (sub) { const sx = x + 10 + g.measureText(title.toUpperCase()).width + 16; g.fillStyle = COLORS.faint; g.font = "10px -apple-system"; g.fillText(fit(sub, x + w - 10 - sx), sx, y + 8); }
+    if (sub) { const sx = x + 10 + g.measureText(title.toUpperCase()).width + 16; g.fillStyle = COLORS.faint; g.font = "10px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif"; g.fillText(fit(sub, x + w - 10 - sx), sx, y + 8); }
   }
   /* Text never leaves its region: anything wider than maxWidth is shortened with an ellipsis, and the full
    * value stays available as the canvas tooltip for that region (see hint()). */
@@ -158,7 +158,7 @@
     return text.slice(0, lo) + "…";
   }
   function label(text, x, y, color, font, align, maxWidth) {
-    const g = V.g; g.fillStyle = color || COLORS.text; g.font = font || "11px -apple-system"; g.textAlign = align || "left"; g.textBaseline = "top";
+    const g = V.g; g.fillStyle = color || COLORS.text; g.font = font || "11px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif"; g.textAlign = align || "left"; g.textBaseline = "top";
     g.fillText(fit(text, maxWidth), x, y);
   }
   function hint(x, y, w, h, text) { V.hits.push({ x, y, w, h, text }); }
@@ -198,25 +198,25 @@
     g.fillStyle = reading ? "rgba(255,180,84,.16)" : "rgba(255,180,84,.07)"; g.strokeStyle = COLORS.ple; g.lineWidth = reading ? 1.6 : 1;
     g.beginPath(); g.roundRect(x + 10, pleY, w - 20, pleH, 7); g.fill(); g.stroke();
     const inner = w - 36;  // text width inside a card: 18 px inset on both sides
-    label("PLE n-gram table", x + 18, pleY + 8, COLORS.ple, "600 11.5px -apple-system", "left", inner);
+    label("PLE n-gram table", x + 18, pleY + 8, COLORS.ple, "600 11.5px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", inner);
     label(m.quantization.ple.split(",")[0] + " · " + (assets.ple.bytes / 2 ** 30).toFixed(1) + " GiB", x + 18, pleY + 25, COLORS.muted, undefined, "left", inner);
-    label("stays on disk · read per token", x + 18, pleY + 41, COLORS.faint, "10.5px -apple-system", "left", inner);
+    label("stays on disk · read per token", x + 18, pleY + 41, COLORS.faint, "10.5px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", inner);
     hint(x + 10, pleY, w - 20, pleH, `PLE n-gram table: ${assets.ple.file} (${(assets.ple.bytes / 2 ** 30).toFixed(2)} GiB, ${m.quantization.ple})`);
     const ple = live.ple || {};
-    label(((ple.bytes_per_s || 0) / 1024).toFixed(0) + " KiB/s", x + 18, pleY + 60, COLORS.text, "600 14px -apple-system", "left", inner);
-    label((ple.reads || 0).toLocaleString() + " row reads · " + ((ple.bytes || 0) / 2 ** 20).toFixed(1) + " MiB", x + 18, pleY + 78, COLORS.faint, "10.5px -apple-system", "left", inner);
+    label(((ple.bytes_per_s || 0) / 1024).toFixed(0) + " KiB/s", x + 18, pleY + 60, COLORS.text, "600 14px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", inner);
+    label((ple.reads || 0).toLocaleString() + " row reads · " + ((ple.bytes || 0) / 2 ** 20).toFixed(1) + " MiB", x + 18, pleY + 78, COLORS.faint, "10.5px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", inner);
     let fy = pleY + pleH + 14;
-    label("MODEL FILES · resident", x + 12, fy, COLORS.faint, "600 9.5px -apple-system", "left", w - 24); fy += 16;
+    label("MODEL FILES · resident", x + 12, fy, COLORS.faint, "600 9.5px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", w - 24); fy += 16;
     [["main", "Main model"], ["mtp", "MTP block"], ["vision", "Vision projector"]].forEach(([k, name]) => {
       if (fy + 44 > y + h - 40) return;  // never draw below the panel
       g.fillStyle = "#0c1017"; g.strokeStyle = COLORS.line; g.lineWidth = 1; g.beginPath(); g.roundRect(x + 10, fy, w - 20, 44, 6); g.fill(); g.stroke();
-      label(name + " · " + (assets[k].bytes / 2 ** 30).toFixed(2) + " GiB", x + 18, fy + 5, COLORS.text, "11px -apple-system", "left", inner);
+      label(name + " · " + (assets[k].bytes / 2 ** 30).toFixed(2) + " GiB", x + 18, fy + 5, COLORS.text, "11px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", inner);
       label(assets[k].file, x + 18, fy + 20, COLORS.faint, "10px ui-monospace, Menlo, monospace", "left", inner);
       hint(x + 10, fy, w - 20, 44, `${name}: ${assets[k].file} · ${(assets[k].bytes / 2 ** 30).toFixed(2)} GiB · SHA-256 ${assets[k].sha256}`);
       fy += 50;
     });
     const kv = live.kv || {};
-    label("KV CHECKPOINTS · disk cache", x + 12, fy + 6, COLORS.faint, "600 9.5px -apple-system", "left", w - 24);
+    label("KV CHECKPOINTS · disk cache", x + 12, fy + 6, COLORS.faint, "600 9.5px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", w - 24);
     label((kv.stores || 0) + " stored · " + (kv.hits || 0) + " restored", x + 12, fy + 22, COLORS.muted, undefined, "left", w - 24);
   }
   function drawMemory(x, y, w, h, m, live) {
@@ -233,8 +233,8 @@
       g.fillStyle = color; g.fillRect(bx + 1, cy, bw - 2, Math.max(0, ph - 1));
       g.fillStyle = color; g.fillRect(bx + bw + 12, ly + 3, 8, 8);
       const legendW = x + w - (bx + bw + 25) - 8;
-      label(name, bx + bw + 25, ly, COLORS.text, "10.5px -apple-system", "left", legendW);
-      label(gibs.toFixed(2) + " GiB", bx + bw + 25, ly + 13, COLORS.faint, "10px -apple-system", "left", legendW);
+      label(name, bx + bw + 25, ly, COLORS.text, "10.5px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", legendW);
+      label(gibs.toFixed(2) + " GiB", bx + bw + 25, ly + 13, COLORS.faint, "10px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", legendW);
       ly += 31;
     });
     // Reference lines are keyed in the legend, never labelled on top of it.
@@ -242,21 +242,22 @@
     g.strokeStyle = "#ff8a8a"; g.lineWidth = 1.5; g.setLineDash([5, 3]); g.beginPath(); g.moveTo(bx - 5, limitY); g.lineTo(bx + bw + 5, limitY); g.stroke(); g.setLineDash([]); g.lineWidth = 1;
     const lx = bx + bw + 12, legendW = x + w - lx - 8;
     ly += 6;
-    g.fillStyle = "rgba(255,107,107,.12)"; g.beginPath(); g.roundRect(lx - 4, ly - 4, legendW + 4, 34, 5); g.fill();
+    g.fillStyle = "rgba(255,107,107,.12)"; g.beginPath(); g.roundRect(lx - 4, ly - 4, legendW + 4, 48, 5); g.fill();
     g.strokeStyle = "#ff8a8a"; g.lineWidth = 1.5; g.setLineDash([5, 3]); g.beginPath(); g.moveTo(lx, ly + 7); g.lineTo(lx + 9, ly + 7); g.stroke(); g.setLineDash([]); g.lineWidth = 1;
-    label("Metal limit", lx + 13, ly, "#ffb0b0", "600 11px -apple-system", "left", legendW - 13);
-    label(limit.toFixed(2) + " GiB · plan " + plan.planned_gib.toFixed(2), lx + 13, ly + 14, "#e7c4c4", "10.5px -apple-system", "left", legendW - 13);
-    hint(lx - 4, ly - 4, legendW + 4, 34, `Metal recommended working set ${limit.toFixed(2)} GiB (${plan.metal_working_set_source}); this model plans ${plan.planned_gib.toFixed(2)} GiB, ${plan.metal_headroom_gib.toFixed(2)} GiB headroom`);
+    label("Metal limit", lx + 13, ly, "#ffb0b0", "600 11px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", legendW - 13);
+    label(limit.toFixed(2) + " GiB", lx + 13, ly + 14, "#ffd6d6", "600 11px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", legendW - 13);
+    label("plan " + plan.planned_gib.toFixed(2) + " GiB", lx + 13, ly + 28, "#d8b3b3", "10px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", legendW - 13);
+    hint(lx - 4, ly - 4, legendW + 4, 48, `Metal recommended working set ${limit.toFixed(2)} GiB (${plan.metal_working_set_source}); this model plans ${plan.planned_gib.toFixed(2)} GiB, ${plan.metal_headroom_gib.toFixed(2)} GiB headroom`);
     const wired = S.system && S.system.memory && S.system.memory.wired_bytes;
     if (wired) {
       const wy = by + bh - wired / 2 ** 30 / total * bh;
       g.strokeStyle = COLORS.text; g.beginPath(); g.moveTo(bx - 5, wy); g.lineTo(bx + bw + 5, wy); g.stroke();
-      ly += 40;
+      ly += 54;
       g.strokeStyle = COLORS.text; g.beginPath(); g.moveTo(lx, ly + 7); g.lineTo(lx + 9, ly + 7); g.stroke();
-      label("Wired now", lx + 13, ly, COLORS.text, "600 11px -apple-system", "left", legendW - 13);
-      label((wired / 2 ** 30).toFixed(1) + " GiB, whole machine", lx + 13, ly + 14, COLORS.muted, "10.5px -apple-system", "left", legendW - 13);
+      label("Wired now", lx + 13, ly, COLORS.text, "600 11px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", legendW - 13);
+      label((wired / 2 ** 30).toFixed(1) + " GiB, whole machine", lx + 13, ly + 14, COLORS.muted, "10.5px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", legendW - 13);
     }
-    label("Context " + used.toLocaleString() + " / " + m.context_label + " · KV " + m.cache.k_cache_dtype + "/" + m.cache.v_cache_dtype, x + 12, y + h - 16, COLORS.muted, "10px -apple-system", "left", w - 24);
+    label("Context " + used.toLocaleString() + " / " + m.context_label + " · KV " + m.cache.k_cache_dtype + "/" + m.cache.v_cache_dtype, x + 12, y + h - 16, COLORS.muted, "10px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", w - 24);
   }
   function drawProcessor(x, y, w, h, m, tick, active, now) {
     const g = V.g, layers = 48;
@@ -270,7 +271,7 @@
     const progress = Math.min(1, (now - V.lastTickAt) / 220);
     for (let l = 0; l < layers; l++) {
       const ry = py + l * rowH;
-      if (l % 6 === 0) label("L" + l, px, ry - 1, COLORS.faint, "9px -apple-system");
+      if (l % 6 === 0) label("L" + l, px, ry - 1, COLORS.faint, "9px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif");
       g.fillStyle = "#0c1017"; g.fillRect(stripX, ry + 1, stripW, Math.max(1.5, rowH - 2));
       const lit = !V.paused ? l / layers <= progress : true;
       g.fillStyle = lit && rows ? tone() : COLORS.faint; g.beginPath(); g.arc(px + 44, ry + rowH / 2, 2.2, 0, 6.3); g.fill();
@@ -284,25 +285,25 @@
         g.globalAlpha = 1;
       }
     }
-    label("router", px + 30, py + ph + 1, COLORS.faint, "9px -apple-system");
-    label("expert 0", stripX, py + ph + 1, COLORS.faint, "9px -apple-system");
-    label("expert 511", stripX + stripW, py + ph + 1, COLORS.faint, "9px -apple-system", "right");
-    if (!rows) label(D.runningModel() ? "Waiting for the next token. Router selections appear while the model generates." : "Start a model to see routing.", stripX + 10, py + ph / 2 - 6, COLORS.muted, "12px -apple-system");
+    label("router", px + 30, py + ph + 1, COLORS.faint, "9px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif");
+    label("expert 0", stripX, py + ph + 1, COLORS.faint, "9px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif");
+    label("expert 511", stripX + stripW, py + ph + 1, COLORS.faint, "9px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "right");
+    if (!rows) label(D.runningModel() ? "Waiting for the next token. Router selections appear while the model generates." : "Start a model to see routing.", stripX + 10, py + ph / 2 - 6, COLORS.muted, "12px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif");
     // token pill travelling down the stack
     V.pills.forEach((p) => { const t = (now - p.t0) / 260; if (t > 1) return; g.fillStyle = COLORS.text; g.beginPath(); g.roundRect(px + 14, py + t * (ph - 10), 20, 8, 4); g.fill(); });
     // MTP lane
     const mx = px + pw - mtpW, mw = mtpW;
     g.strokeStyle = COLORS.mtp; g.fillStyle = "rgba(127,214,163,.06)"; g.lineWidth = 1; g.beginPath(); g.roundRect(mx, py + 4, mw, ph - 8, 7); g.fill(); g.stroke();
-    label("MTP HEAD", mx + 10, py + 12, COLORS.mtp, "600 10px -apple-system", "left", mw - 20);
-    label("drafts next tokens;", mx + 10, py + 28, COLORS.faint, "10px -apple-system", "left", mw - 20);
-    label("trunk verifies them", mx + 10, py + 41, COLORS.faint, "10px -apple-system", "left", mw - 20);
+    label("MTP HEAD", mx + 10, py + 12, COLORS.mtp, "600 10px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", mw - 20);
+    label("drafts next tokens;", mx + 10, py + 28, COLORS.faint, "10px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", mw - 20);
+    label("trunk verifies them", mx + 10, py + 41, COLORS.faint, "10px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", mw - 20);
     const mtp = (S.live && S.live.mtp) || {};
-    label(mtp.acceptance_pct != null ? mtp.acceptance_pct.toFixed(1) + " %" : "–", mx + 10, py + 64, COLORS.text, "600 20px -apple-system");
-    label("accepted", mx + 10, py + 90, COLORS.muted, "10px -apple-system");
-    label((mtp.accepted || 0) + " / " + (mtp.proposed || 0) + " drafts", mx + 10, py + 106, COLORS.faint, "10px -apple-system");
-    label((mtp.rejected || 0) + " rejected", mx + 10, py + 120, COLORS.faint, "10px -apple-system");
+    label(mtp.acceptance_pct != null ? mtp.acceptance_pct.toFixed(1) + " %" : "–", mx + 10, py + 64, COLORS.text, "600 20px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif");
+    label("accepted", mx + 10, py + 90, COLORS.muted, "10px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif");
+    label((mtp.accepted || 0) + " / " + (mtp.proposed || 0) + " drafts", mx + 10, py + 106, COLORS.faint, "10px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif");
+    label((mtp.rejected || 0) + " rejected", mx + 10, py + 120, COLORS.faint, "10px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif");
     const cardBottom = py + ph - 4, inset = 10, mtw = mw - 2 * inset;
-    if (tick && cardBottom - (py + 177) > 24) { label("this cycle", mx + inset, py + 148, COLORS.muted, "10px -apple-system", "left", mtw); label(tick.n + " token" + (tick.n === 1 ? "" : "s") + " · " + tick.da + "/" + tick.dp + " drafts", mx + inset, py + 162, COLORS.text, "11px -apple-system", "left", mtw); label(tick.ms.toFixed(0) + " ms", mx + inset, py + 177, COLORS.faint, "10px -apple-system", "left", mtw); }
+    if (tick && cardBottom - (py + 177) > 24) { label("this cycle", mx + inset, py + 148, COLORS.muted, "10px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", mtw); label(tick.n + " token" + (tick.n === 1 ? "" : "s") + " · " + tick.da + "/" + tick.dp + " drafts", mx + inset, py + 162, COLORS.text, "11px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", mtw); label(tick.ms.toFixed(0) + " ms", mx + inset, py + 177, COLORS.faint, "10px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", mtw); }
     // Draft pills move only inside the card: every pill keeps an inset from all four edges.
     const pillW = 18, pillH = 7, laneTop = py + 200, laneBottom = cardBottom - inset - pillH;
     if (laneBottom > laneTop) {
@@ -319,7 +320,7 @@
   function drawLayer(x, y, w, h, tick) {
     const g = V.g, row = tick && tick.r && tick.r[V.focusLayer];
     const cell = Math.floor(Math.min((w - 250) / GRID_COLS, (h - 30) / GRID_ROWS)), gx = x + 4, gy = y + 22;
-    label("Layer " + V.focusLayer + " · router output for the current token", x + 4, y, COLORS.muted, "11px -apple-system");
+    label("Layer " + V.focusLayer + " · router output for the current token", x + 4, y, COLORS.muted, "11px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif");
     const chosen = new Map(); if (row) for (let i = 0; i < row.length; i += 2) chosen.set(row[i], row[i + 1] / 255);
     for (let e = 0; e < EXPERTS; e++) {
       const cx = gx + (e % GRID_COLS) * cell, cy = gy + Math.floor(e / GRID_COLS) * cell;
@@ -328,14 +329,14 @@
       if (chosen.has(e)) { g.fillStyle = tone(); g.globalAlpha = 0.45 + 0.55 * Math.min(1, chosen.get(e) * 4); g.fillRect(cx - 1, cy - 1, cell, cell); g.globalAlpha = 1; g.strokeStyle = "#fff"; g.lineWidth = 1; g.strokeRect(cx - 0.5, cy - 0.5, cell - 1, cell - 1); }
     }
     const lx = gx + GRID_COLS * cell + 18; let ly = gy;
-    label("SELECTED EXPERTS", lx, ly, COLORS.muted, "600 10px -apple-system"); ly += 18;
-    if (row) for (let i = 0; i < row.length; i += 2) { const weight = row[i + 1] / 255; label("#" + row[i], lx, ly, COLORS.text, "11px ui-monospace, Menlo"); g.fillStyle = tone(); g.fillRect(lx + 44, ly + 3, weight * 150, 7); label((weight * 100).toFixed(0) + " %", lx + 44 + weight * 150 + 6, ly, COLORS.muted, "10px -apple-system"); ly += 17; }
+    label("SELECTED EXPERTS", lx, ly, COLORS.muted, "600 10px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif"); ly += 18;
+    if (row) for (let i = 0; i < row.length; i += 2) { const weight = row[i + 1] / 255; label("#" + row[i], lx, ly, COLORS.text, "11px ui-monospace, Menlo"); g.fillStyle = tone(); g.fillRect(lx + 44, ly + 3, weight * 150, 7); label((weight * 100).toFixed(0) + " %", lx + 44 + weight * 150 + 6, ly, COLORS.muted, "10px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif"); ly += 17; }
     else label("No routing data yet.", lx, ly, COLORS.faint);
-    label("Background shade: how often each expert was chosen this session.", gx, gy + GRID_ROWS * cell + 8, COLORS.faint, "10px -apple-system");
+    label("Background shade: how often each expert was chosen this session.", gx, gy + GRID_ROWS * cell + 8, COLORS.faint, "10px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif");
   }
   function drawHeat(x, y, w, h) {
     const g = V.g, layers = 48;
-    label("How often each expert was selected this session (rows: layers 0 to 47, columns: experts 0 to 511). Click a row to focus that layer.", x + 4, y, COLORS.muted, "11px -apple-system");
+    label("How often each expert was selected this session (rows: layers 0 to 47, columns: experts 0 to 511). Click a row to focus that layer.", x + 4, y, COLORS.muted, "11px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif");
     const hy = y + 22, hh = h - 40, rowH = hh / layers, colW = w / EXPERTS;
     g.fillStyle = "#0c1017"; g.fillRect(x, hy, w, hh);
     if (!V.heat) { label("No routing data yet.", x + 10, hy + 10, COLORS.faint); return; }
@@ -358,14 +359,14 @@
   function drawBottom(x, y, w, h, m, live, tick, now) {
     const g = V.g, outW = w * 0.42;
     box(x, y, outW, h, "Output stream", "committed tokens (counts only)");
-    const end = V.paused && V.playhead >= 0 ? V.playhead + 1 : V.ticks.length, recent = V.ticks.slice(Math.max(0, end - 46), end);
+    const end = V.paused && V.playhead >= 0 ? V.playhead + 1 : V.ticks.length, fits = Math.max(1, Math.floor((outW - 24) / 8)), recent = V.ticks.slice(Math.max(0, end - fits), end);
     let px = x + 12; const py = y + 34;
     recent.forEach((t) => { for (let i = 0; i < t.n; i++) { g.fillStyle = i === 0 ? COLORS.text : COLORS.mtp; g.globalAlpha = 0.9; g.beginPath(); g.roundRect(px, py + (i ? 12 : 0), 6, 9, 2); g.fill(); } px += 8; if (t.dp > t.da) { g.fillStyle = COLORS.bad; g.fillRect(px - 8, py + 26, 6, 2); } });
     g.globalAlpha = 1;
-    label("white: verified by the trunk · green: accepted MTP draft · red mark: rejected draft", x + 12, y + 70, COLORS.faint, "10px -apple-system");
+    label("white: verified by the trunk · green: accepted MTP draft · red mark: rejected draft", x + 12, y + 70, COLORS.faint, "10px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", outW - 24);
     const rates = live.rates || {}, request = live.request || {};
-    label((rates.live_tps != null ? rates.live_tps.toFixed(1) : rates.decode_tps != null ? rates.decode_tps.toFixed(1) : "–") + " tok/s", x + 12, y + 88, COLORS.text, "600 15px -apple-system");
-    label((request.phase || "IDLE").replace("_", " ") + " · " + (request.generated || 0) + " generated · prompt " + (request.prompt_tokens || 0).toLocaleString(), x + 110, y + 92, COLORS.muted, "10.5px -apple-system");
+    label((rates.live_tps != null ? rates.live_tps.toFixed(1) : rates.decode_tps != null ? rates.decode_tps.toFixed(1) : "–") + " tok/s", x + 12, y + 88, COLORS.text, "600 15px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif");
+    label((request.phase || "IDLE").replace("_", " ") + " · " + (request.generated || 0) + " generated · prompt " + (request.prompt_tokens || 0).toLocaleString(), x + 110, y + 92, COLORS.muted, "10.5px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", outW - 122);
     const tx = x + outW + 12, tw = w - outW - 12;
     box(tx, y, tw, h, "Agent actions", "tool calls leave the model and return a result");
     const nodeW = (tw - 24) / TOOL_NODES.length;
@@ -375,12 +376,12 @@
       const color = { workspace: "#5cc8ff", shell: "#4fd695", browser: "#ffb454", gui: "#b98cff", vision: "#ff6b6b" }[key];
       g.fillStyle = "rgba(255,255,255," + (0.02 + 0.1 * pulse) + ")"; g.strokeStyle = running || pulse > 0 ? color : COLORS.line; g.lineWidth = running ? 2 : 1;
       g.beginPath(); g.roundRect(nx, y + 30, nodeW - 10, h - 42, 7); g.fill(); g.stroke();
-      label(name, nx + 9, y + 38, running || pulse > 0 ? color : COLORS.text, "600 11px -apple-system");
-      label(sub, nx + 9, y + 53, COLORS.faint, "10px -apple-system");
+      label(name, nx + 9, y + 38, running || pulse > 0 ? color : COLORS.text, "600 11px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif");
+      label(sub, nx + 9, y + 53, COLORS.faint, "10px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif");
       const done = V.tools.filter((t) => t.category === key), last = done[done.length - 1];
-      label(done.length + " call" + (done.length === 1 ? "" : "s"), nx + 9, y + 72, COLORS.muted, "10.5px -apple-system");
-      if (running) label("running…", nx + 9, y + 88, color, "10.5px -apple-system");
-      else if (last) label((last.ok === false ? "✗ " : "✓ ") + (last.ms != null ? last.ms + " ms" : ""), nx + 9, y + 88, last.ok === false ? COLORS.bad : COLORS.good, "10.5px -apple-system");
+      label(done.length + " call" + (done.length === 1 ? "" : "s"), nx + 9, y + 72, COLORS.muted, "10.5px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif");
+      if (running) label("running…", nx + 9, y + 88, color, "10.5px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif");
+      else if (last) label((last.ok === false ? "✗ " : "✓ ") + (last.ms != null ? last.ms + " ms" : ""), nx + 9, y + 88, last.ok === false ? COLORS.bad : COLORS.good, "10.5px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif");
     });
   }
   function renderActions() {
