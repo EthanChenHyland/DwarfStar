@@ -1,0 +1,51 @@
+# Machine-local configuration (copy config/local.example.json)
+config/local.json
+
+# Model and source artifacts never belong in Git; they live under the data root
+*.gguf
+*.safetensors
+*.bin
+*.pt
+*.npy
+*.npz
+/models/
+/sources/
+
+# Runtime state, caches, logs and agent scratch
+__pycache__/
+*.py[cod]
+.ruff_cache/
+.pytest_cache/
+.venv/
+node_modules/
+*.log
+*.jsonl
+.omp-dwarfstar-*/
+.dwarfstar-*/
+local-data/
+/state/
+/cache/
+
+# Native build products
+*.o
+native/build/
+
+# Editor and OS noise
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Agent tool runtime state
+agent-tools/state
+agent-tools/cache
+agent-tools/utilities/
+acp/vendor/
+
+# Workstation chats and local data roots
+chats/
+dwarfstar-data/
+*.sqlite
+.env
+*.pem
+*.key
