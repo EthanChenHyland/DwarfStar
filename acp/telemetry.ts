@@ -4,8 +4,10 @@ import {infrastructureSettings,activeProfile} from './lifecycle.ts';
 import {installEfficiency} from './efficiency.ts';
 import {readFileSync,writeFileSync,renameSync} from 'node:fs';
 import {join} from 'node:path';
-const ROOT='$LOCAL_AI_SETUP/challengers/dwarfstar-cyber';
+import {ROOT} from './paths.ts';
+import {installEvents} from './events.ts';
 export default function installTelemetry(pi:any,options:any={}){
+ if(!options.noEvents)installEvents(pi);
  const timing=installInfrastructure(pi,options.infrastructure??{});
  installEfficiency(pi,timing,{settings:options.infrastructure?.settings,...options.efficiency});
  const settings=infrastructureSettings(options.infrastructure?.settings);
