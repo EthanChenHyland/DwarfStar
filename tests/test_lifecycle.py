@@ -1,4 +1,6 @@
 """The switching state machine, with the per-model controller replaced by a fake."""
+import json
+import os
 import unittest
 from unittest import mock
 
@@ -185,6 +187,57 @@ class LifecycleTests(unittest.TestCase):
         with mock.patch.object(service, "active_profile", return_value="swift-medium"):
             self.assertIsNone(service.consistent_active(["cyber"]))
             self.assertEqual(service.consistent_active(["swift"]), "swift-medium")
+
+    def test_state_computed_across_a_lifecycle_step_is_not_cached(self):
+        """A status poll that started before a stop must not be served after the stop as current state."""
+        svc = service.Service.__new__(service.Service)
+        svc.state_cache, svc.state_generation, svc.lifecycle = None, 0, service.Lifecycle()
+        calls = []
+
+        def stale_then_fresh(lifecycle, detail=False):
+            calls.append(1)
+            if len(calls) == 1:
+                svc.invalidate()  # the stop finishes while this poll is still collecting status
+                return {"running_models": ["scope"], "lifecycle": {"busy": False}}
+            return {"running_models": [], "lifecycle": {"busy": False}}
+
+        with mock.patch.object(service, "state_document", stale_then_fresh):
+            self.assertEqual(svc.state()["running_models"], ["scope"])  # that poll's own answer
+            self.assertEqual(svc.state()["running_models"], [])         # but it was not cached
+        self.assertEqual(len(calls), 2)
+
+    def test_stop_succeeds_when_a_status_poll_already_retired_the_ledger(self):
+        """The real race: the window's status poll retires the ledger of the exited server while stop() is finishing."""
+        import tempfile
+        from pathlib import Path
+
+        os.environ.setdefault("DWARFSTAR_MODEL", "scope")
+        from dwarfstar import runtime_control
+
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            row = {"pid": 4242, "birth": "b", "argv_sha256": "a", "command": str(runtime_control.SERVER) + " -m x"}
+            (state / "server.json").write_text(json.dumps(row))
+            alive = {"n": 2}
+
+            def identity(pid):
+                alive["n"] -= 1
+                if alive["n"] <= 0:
+                    (state / "server.json").unlink(missing_ok=True)  # the concurrent poll got there first
+                    return None
+                return dict(row)
+
+            with mock.patch.object(runtime_control, "STATE", state), \
+                 mock.patch.object(runtime_control, "identity", identity), \
+                 mock.patch.object(runtime_control, "requests", return_value=[]), \
+                 mock.patch.object(runtime_control, "run", return_value=mock.Mock(returncode=1, stdout="")), \
+                 mock.patch.object(runtime_control, "occupied", return_value=False), \
+                 mock.patch.object(runtime_control, "config", return_value={"port": 1}), \
+                 mock.patch.object(runtime_control.os, "kill"), mock.patch.object(runtime_control, "emit"):
+                result = runtime_control.stop()
+            self.assertTrue(result["ok"])
+            self.assertFalse((state / "server.json").exists())
+            self.assertTrue((state / "last-stopped.json").exists())
 
     def test_fresh_state_selects_the_default(self):
         with mock.patch.object(service, "STATE_FILE", service.STATE_FILE.with_name("does-not-exist.json")):

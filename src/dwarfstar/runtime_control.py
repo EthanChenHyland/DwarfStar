@@ -458,8 +458,10 @@ def stop() -> dict:
         time.sleep(0.2)
     if identity(row["pid"]) or occupied(port):
         raise RuntimeError("Shutdown pending; no forced kill attempted.")
+    # A concurrent status call may already have retired the ledger once the process was gone; that is the same
+    # outcome, not a failed stop.
     save(STATE / "last-stopped.json", {**row, "stopped_at": time.time()})
-    (STATE / "server.json").unlink()
+    (STATE / "server.json").unlink(missing_ok=True)
     emit("runtime", phase="stopped")
     return {"ok": True, "stopped": row["pid"]}
 

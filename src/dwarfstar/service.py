@@ -203,6 +203,7 @@ class Lifecycle:
             lifecycle_log({"job": self.current["job"], "result": summary})
             self.lock.release()
             self.done.notify_all()
+        self.notify("lifecycle", step="Job finished", job=self.current["job"], finished=True, ok=bool(result.get("ok")))
         return {**result, "job": self.current["job"], "steps": self.current["steps"]}
 
     def wait(self, job: int, timeout: float = CONTROLLER_TIMEOUT_S * 2) -> dict:
@@ -260,7 +261,7 @@ class Lifecycle:
             time.sleep(0.5)
         else:
             return f"{name} did not exit within {PORT_CLOSE_TIMEOUT_S} s"
-        self._step(f"{name} exited", pid=before.get("pid"))
+        self._step(f"{name} exited", pid=before.get("pid"), exited_model=model_id)
         return None
 
     def _switch(self, profile_id: str) -> dict:
@@ -367,21 +368,35 @@ class Service:
         from dwarfstar.chats import Turns
 
         self.turns = Turns(notify=self._notify)
-        self.state_cache: tuple[float, dict] | None = None
+        self.state_cache: tuple[float, dict, int] | None = None
+        self.state_generation = 0
         self.system_cache: dict = {}
         self.stop_flag = threading.Event()
 
-    def _notify(self, kind: str, **fields) -> None:
+    def invalidate(self) -> None:
+        self.state_generation += 1
         self.state_cache = None
+
+    def _notify(self, kind: str, **fields) -> None:
+        self.invalidate()
+        if fields.get("exited_model"):
+            # The service has confirmed the process is gone: finalize its telemetry session now rather than
+            # depending on the controller's single datagram arriving before anything else.
+            self.hub.ingest({"kind": "runtime", "src": "service", "model": fields["exited_model"], "t": time.time(), "phase": "stopped"})
         self.hub.publish({"t": time.time(), "src": "service", "kind": kind, **fields})
 
     def state(self, detail: bool = False) -> dict:
+        """Per-model status, briefly cached. A result whose computation overlapped a lifecycle step, or that was taken
+        while a job was running, is never cached: otherwise a poll that began before a stop could keep reporting the
+        stopped model as running after the stop completed."""
         now = time.time()
-        if not detail and self.state_cache and now - self.state_cache[0] < 1.5:
-            return self.state_cache[1]
+        cached = self.state_cache
+        if not detail and cached and now - cached[0] < 1.5 and cached[2] == self.state_generation:
+            return cached[1]
+        generation = self.state_generation
         document = state_document(self.lifecycle, detail=detail)
-        if not detail:
-            self.state_cache = (now, document)
+        if not detail and generation == self.state_generation and not (document.get("lifecycle") or {}).get("busy"):
+            self.state_cache = (now, document, generation)
         return document
 
     def _system_loop(self) -> None:
@@ -530,7 +545,7 @@ class Service:
                         result = controller(profile["model"], *arguments)
                     else:
                         return self._json({"ok": False, "error": "Unknown endpoint"}, 404)
-                    service.state_cache = None
+                    service.invalidate()
                     return self._json(result, 200 if result.get("ok") else 409)
                 except catalog.CatalogError as error:
                     return self._json({"ok": False, "error": str(error)}, 400)
