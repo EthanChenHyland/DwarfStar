@@ -84,6 +84,6 @@
   "models": [
    "cyber"
   ],
-  "text": "The reported Cyber MEDIUM -> Stop -> LOW failure was not reproduced in three faithful attempts; the lifecycle defects that can produce it were fixed and the sequence passes through the real runtime."
+  "text": "The reported Cyber MEDIUM -> Stop -> LOW failure was not reproduced exactly from the user's run (the service log of that run was not kept). The real-runtime gate found and fixed three lifecycle races that produce that class of failure while the window is open (ledger removal racing a status poll, stale cached state after a stop, telemetry session not finalized); the reported sequence and the full matrix now pass through the installed app's service and through the UI."
  }
 ]

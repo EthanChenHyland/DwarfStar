@@ -40,6 +40,19 @@ Switching through the Workstation lifecycle:
 
 Every agent session produced real router, MTP, PLE and tool telemetry on the event stream.
 
+### Lifecycle (release gate)
+
+`scripts/validate/lifecycle_matrix.py` drives the installed Workstation service the way the window does (asynchronous jobs, followed through `/api/state`) with the app open. After every start it checks the one server process, PID, ownership ledger, health, active and selected profile, context flag and a one-token request carrying the profile's own reasoning parameters; after every stop it checks the old PID, port, ledger, health, active profile, idle lifecycle and the closed telemetry session.
+
+| Suite | Steps | Result |
+|---|---|---|
+| Cyber MEDIUM → Stop → Cyber LOW → Start (the reported failure) | 4 | 4/4 |
+| All seven profiles: start from idle, verify, stop, verify | 14 | 14/14 |
+| Swift LOW → MEDIUM → LOW hot, then MEDIUM after Stop; Cyber OFF → LOW → MEDIUM → XHIGH → LOW hot, then XHIGH after Stop | 14 | 14/14 |
+| Scope LOW → Swift LOW → Swift MEDIUM → Cyber OFF → LOW → MEDIUM → XHIGH → Scope LOW | 9 | 9/9 |
+
+`scripts/validate/ui/run.sh ui_regression` clicks the reported sequence through the real UI in headless Chromium and compares the window (model, status, Launch/Stop) with the controller after every click: they agree at every step. `scripts/validate/ui/run.sh viz_bounds` draws the Visualizer at 1440×900, 1600×1000 and 1100×700 and confirms that every label, MTP draft and output token stays inside its panel.
+
 **Cyber 128K.** The earlier 128K attempt failed at the second prefill chunk with a Metal out-of-memory error because the plan (51.92 GiB with the vision projector) exceeded the 51.84 GiB working-set limit. Prefilling in 1024-token chunks lowers the plan to 50.81 GiB; both depth tests then passed. No model weights changed.
 
 **Q8 KV.** Requested for this release and not available: the runtime's Qwen4Exp graph allocates and reads K/V only as F16. All three models run F16 K/V.
