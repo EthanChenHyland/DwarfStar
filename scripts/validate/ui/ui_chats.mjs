@@ -13,8 +13,8 @@ if (!original) { console.log("no chat to organize"); process.exit(1); }
 const out = {};
 await page.click(`.chat-item[data-id="${original.id}"]`); await page.waitForTimeout(500);
 await page.click("#chat-star"); await page.waitForTimeout(400);
-await page.click("#chat-pin"); await page.waitForTimeout(400);
-await page.click("#chat-tag"); await page.fill("#chat-tag-input", "demo, review"); await page.press("#chat-tag-input", "Enter"); await page.waitForTimeout(500);
+await page.click(".chat-menu > summary"); await page.click("#chat-pin"); await page.waitForTimeout(400);
+await page.click(".chat-menu > summary"); await page.click("#chat-tag"); await page.fill("#chat-tag-input", "demo, review"); await page.press("#chat-tag-input", "Enter"); await page.waitForTimeout(500);
 out.organized = (await api("/api/chats/" + original.id)).chat;
 out.organized = { pinned: out.organized.pinned, starred: out.organized.starred, tags: out.organized.tags };
 out.listMarks = await page.locator(`.chat-item[data-id="${original.id}"] .chat-mark`).count();

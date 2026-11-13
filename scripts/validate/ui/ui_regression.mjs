@@ -5,7 +5,7 @@ const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
 await page.goto("http://127.0.0.1:8038/#run"); await page.waitForTimeout(1500);
 const snap = async (label) => page.evaluate(async (label) => {
   const st = await fetch("/api/state").then(r => r.json());
-  const pill = [...document.querySelectorAll(".kv dd .pill")][0];
+  const pill = [...document.querySelectorAll(".kv dd .status")][0];
   return { label, ui: { nav: document.querySelector("#nav-model").innerText + " / " + document.querySelector("#nav-phase").innerText,
            launch: document.querySelector("#launch")?.innerText || null, stop: !!document.querySelector("#stop"), status: pill && pill.innerText },
            controller: { running: st.running_models, active: st.active_profile, selected: st.selected_profile, busy: st.lifecycle.busy,
