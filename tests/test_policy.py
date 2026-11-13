@@ -31,6 +31,23 @@ class RedactionTests(unittest.TestCase):
         self.assertEqual(clean["note"], "[REDACTED PRIVATE KEY]")
 
 
+class ApprovalModeTests(unittest.TestCase):
+    def test_full_auto_is_never_set_without_explicit_confirmation(self):
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(approval_policy, "CONFIG", Path(folder) / "approval.json"), \
+             mock.patch.dict("os.environ", {}, clear=False) as env:
+            env.pop("DWARFSTAR_APPROVAL_MODE", None)
+            self.assertEqual(approval_policy.set_mode("ask")["approval_mode"], "ask")
+            with self.assertRaises(ValueError):
+                approval_policy.set_mode("full_auto")
+            self.assertEqual(approval_policy.mode(), "ask")
+            self.assertEqual(approval_policy.set_mode("safe_auto")["label"], "Workspace Auto")
+            self.assertEqual(approval_policy.set_mode("full_auto", confirm="full_auto")["approval_mode"], "full_auto")
+            with self.assertRaises(ValueError):
+                approval_policy.set_mode("everything")
+
+
 class ApprovalTests(unittest.TestCase):
     MESSAGE = {"jsonrpc": "2.0", "id": 7, "method": "session/request_permission",
                "params": {"sessionId": "s", "toolCall": {"toolCallId": "t"},
