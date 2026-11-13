@@ -60,7 +60,9 @@ def job(path: str, body: dict) -> dict:
 
 def servers() -> list[tuple[int, str]]:
     rows = subprocess.run(["/bin/ps", "-axo", "pid=,command="], capture_output=True, text=True).stdout.splitlines()
-    return [(int(r.split(None, 1)[0]), r.split(None, 1)[1]) for r in rows if "/ds4-server " in r]
+    # model server processes of either backend: ds4-server, or Splash's long-lived `python3 -u -P -m server.server`
+    return [(int(r.split(None, 1)[0]), r.split(None, 1)[1]) for r in rows
+            if "/ds4-server " in r or ("/backends/splash-m1/" in r and " -m server.server" in r)]
 
 
 def port_open(port: int) -> bool:
@@ -104,16 +106,23 @@ def check_running(profile_id: str, expect_pid: int | None = None) -> dict:
     row = state["models"][model_id]
     procs = servers()
     ledger = json.loads((instance(model_id) / "state/server.json").read_text()) if (instance(model_id) / "state/server.json").is_file() else {}
+    if model["backend"]["kind"] == "native":
+        identifies_model = bool(procs) and model["assets"]["main"]["path"].split("/")[-1] in procs[0][1]
+        context_ok = f"--ctx {model['context']} " in (procs[0][1] if procs else "")
+    else:  # Splash's serve process carries no arguments after its re-exec: ask it what it loaded
+        status = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{model['port']}/status", timeout=5).read())
+        identifies_model = model["assets"]["main"]["path"].split("/")[-1] in status["memory_plan"]["model"]["model_name"]
+        context_ok = status["maximum_context_tokens"] == model["context"]
     checks = {
         "one_server": len(procs) == 1,
-        "server_is_model": bool(procs) and model["assets"]["main"]["path"].split("/")[-1] in procs[0][1],
+        "server_is_model": identifies_model,
         "pid_matches": bool(procs) and row.get("pid") == procs[0][0] == ledger.get("pid"),
         "healthy": row.get("healthy") is True,
         "running_models": state["running_models"] == [model_id],
         "active_profile": state.get("active_profile") == profile_id,
         "selected_profile": state.get("selected_profile") == profile_id,
         "lifecycle_idle": state["lifecycle"]["busy"] is False,
-        "context": f"--ctx {model['context']} " in (procs[0][1] if procs else ""),
+        "context": context_ok,
     }
     if expect_pid is not None:
         checks["no_restart"] = row.get("pid") == expect_pid

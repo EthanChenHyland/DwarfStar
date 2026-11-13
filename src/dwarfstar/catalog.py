@@ -76,6 +76,25 @@ def _apply_policy(raw: dict, defaults: dict) -> dict:
     return {**copy.deepcopy(defaults), **raw, "overrides": overrides}
 
 
+def _apply_backend(model: dict, runtimes: dict) -> None:
+    """Facts that depend on the inference backend (memory, cache, extra assets, telemetry) come from the model's
+    backend block when a non-native backend is selected. The product layer above never changes."""
+    runtime = runtimes["runtimes"].get(model["runtime"], {})
+    kind = runtime.get("kind", "native")
+    model["backend"] = {"id": model["runtime"], "kind": kind, "release": runtime.get("release"),
+                        "telemetry": {"router": True, "ple": True, "mtp": True, "requests": True, "memory_plan": True},
+                        "speculative": "native MTP head", "extra_assets": {}}
+    if kind == "native":
+        return
+    block = model.get("backends", {}).get(model["runtime"])
+    if block is None:
+        raise CatalogError(f"{model['id']}: no backend block for {model['runtime']}")
+    model["memory"] = {**model["memory"], **block["memory"]}
+    model["cache"] = {**model["cache"], **block["cache"]}
+    model["backend"].update(telemetry=block["telemetry"], speculative=block["speculative"], extra_assets=block["assets"],
+                            model_name=block["model_name"], status=block.get("status"))
+
+
 @lru_cache(maxsize=1)
 def load() -> dict:
     policy_file = _read(CONFIG / "runtime-policy.json")
@@ -85,11 +104,13 @@ def load() -> dict:
         if model.get("id") != path.stem:
             raise CatalogError(f"{path.name}: id must equal the file name")
         models[model["id"]] = _apply_policy(model, policy_file["model_defaults"])
+    runtimes = _read(CONFIG / "runtimes.json")
     for model_id, runtime_id in _runtime_overrides().items():
         if model_id in models:
             models[model_id]["runtime"] = runtime_id
+    for model in models.values():
+        _apply_backend(model, runtimes)
     profile_file = _read(CONFIG / "profiles.json")
-    runtimes = _read(CONFIG / "runtimes.json")
     models = dict(sorted(models.items(), key=lambda item: item[1].get("order", 99)))
     catalog = {"models": models, "profile_file": profile_file, "runtimes": runtimes, "policy": policy_file}
     _validate(catalog)

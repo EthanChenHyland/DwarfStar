@@ -145,3 +145,43 @@ class PolicyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BackendTests(unittest.TestCase):
+    def test_native_is_the_default_backend_for_every_model(self):
+        for model in catalog.models().values():
+            self.assertEqual(model["backend"]["kind"], "native")
+
+    def test_selecting_splash_for_scope_switches_only_backend_facts(self):
+        from unittest import mock
+
+        with mock.patch.dict("os.environ", {"DWARFSTAR_RUNTIME_OVERRIDE": "scope=splash-m1-1.6.1"}):
+            catalog.load.cache_clear()
+            try:
+                scope = catalog.model("scope")
+                self.assertEqual(scope["backend"]["kind"], "splash")
+                self.assertEqual((scope["cache"]["k_cache_dtype"], scope["cache"]["v_cache_dtype"]), ("INT8", "INT8"))
+                self.assertEqual(scope["context"], 131072)
+                self.assertEqual([p["id"] for p in catalog.profiles("scope")], ["scope-low"])
+                self.assertLess(catalog.memory_plan("scope")["planned_gib"], 43.73)
+                from dwarfstar import instance
+
+                argv, env = instance.server_command("scope")
+                joined = " ".join(argv)
+                for flag in ("--served-model-name qwen3.8-flash-next", "--port 8030", "--max-context 131072", "--offline", "--mmproj", "--draft-model"):
+                    self.assertIn(flag, joined)
+                self.assertIn("backends/splash-m1/home", env["HOME"])
+                self.assertEqual(catalog.model("swift")["backend"]["kind"], "native")
+            finally:
+                catalog.load.cache_clear()
+
+    def test_a_backend_without_a_block_is_refused(self):
+        from unittest import mock
+
+        with mock.patch.dict("os.environ", {"DWARFSTAR_RUNTIME_OVERRIDE": "cyber=splash-m1-1.6.1"}):
+            catalog.load.cache_clear()
+            try:
+                with self.assertRaises(catalog.CatalogError):
+                    catalog.load()
+            finally:
+                catalog.load.cache_clear()

@@ -51,6 +51,10 @@ def runtime_directory(model_id: str) -> Path:
 
 
 def runtime_manifest(model_id: str) -> dict:
+    pin = catalog.runtime_pin(model_id)
+    if pin.get("kind", "native") != "native":
+        # Non-native backends are pinned in config/runtimes.json; the controller re-checks the installed files.
+        return {"schema": 1, "runtime": pin["id"], "binary_sha256": pin["binary_sha256"], "shader_sha256": pin.get("shader_sha256", {})}
     path = runtime_directory(model_id) / "manifest.json"
     try:
         return json.loads(path.read_text())
@@ -88,7 +92,29 @@ def install_runtime(runtime_id: str, binary: Path, shaders: Path, provenance: st
 # ------------------------------------------------------------- generated files
 
 
+def splash_command(model_id: str) -> tuple[list[str], dict[str, str]]:
+    """Splash-m1 serving one DwarfStar model: the same files, port, served id and context as the native runtime."""
+    model = catalog.model(model_id)
+    pin = catalog.runtime_pin(model_id)
+    root = DATA / pin["directory"]
+    extra = model["backend"]["extra_assets"]
+    argv = [
+        str(root / "python/bin/python3"), "-u", str(root / "install/launcher.py"), "serve",
+        "--model", model["backend"]["model_name"],
+        "--model-dir", str(catalog.asset_path(model_id, "main")),
+        "--mmproj", str(DATA / extra["vision"]["path"]),
+        "--draft-model", str((DATA / extra["draft"]["path"]).parent),
+        "--offline", "--no-webui",
+        "--host", "127.0.0.1", "--port", str(model["port"]),
+        "--max-context", str(model["context"]),
+        "--served-model-name", model["served_model_id"],
+    ]
+    return argv, {"HOME": str(DATA / pin["home"])}
+
+
 def server_command(model_id: str) -> tuple[list[str], dict[str, str]]:
+    if catalog.runtime_pin(model_id).get("kind", "native") == "splash":
+        return splash_command(model_id)
     model = catalog.model(model_id)
     root = instance(model_id)
     assets = catalog.asset_paths(model_id)
@@ -138,14 +164,16 @@ def runtime_config(model_id: str) -> dict:
         "thinking": True,
         "reasoning_effort": "per profile",
         "reasoning_efforts": model["reasoning_efforts"],
-        "mtp": "native enabled; default adaptive depth; no depth/acceptance tuning",
+        "mtp": "native enabled; default adaptive depth; no depth/acceptance tuning" if model["backend"]["kind"] == "native" else model["backend"]["speculative"],
         "sampling": model["sampling"],
         "argv": argv,
         "environment": environment,
         "server_sha256": manifest["binary_sha256"],
         "shader_sha256": manifest["shader_sha256"],
         "output_budgeting": "native server_decode_budget uses exact session context room; no client arithmetic patch",
-        "model_files": {role: str(path) for role, path in catalog.asset_paths(model_id).items()},
+        "model_files": {role: str(path) for role, path in catalog.asset_paths(model_id).items()}
+        | {f"backend_{role}": str(DATA / asset["path"]) for role, asset in model["backend"]["extra_assets"].items()},
+        "backend": {k: model["backend"][k] for k in ("id", "kind", "release")},
         "scratch_directory": str(scratch_root()),
         "memory": model["memory"],
     }

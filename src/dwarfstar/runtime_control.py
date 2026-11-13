@@ -38,7 +38,16 @@ ROOT = paths.instance(MODEL)
 STATE = ROOT / "state"
 STATE.mkdir(mode=0o700, parents=True, exist_ok=True)
 CONFIG = ROOT / "runtime.json"
-SERVER = instance.runtime_directory(MODEL) / "ds4-server"
+KIND = catalog.runtime_pin(MODEL).get("kind", "native")
+RUNTIME_DIR = instance.runtime_directory(MODEL)
+# The long-lived server process: ds4-server for the native runtime. Splash's launcher prepares the model, then hands
+# off to `python3 -u -P -m server.server` (re-parented to launchd), which supervises the engine and is the only
+# Splash process that lives as long as the model; the controller owns that one.
+SERVER = RUNTIME_DIR / ("ds4-server" if KIND == "native" else "python/bin/python3")
+
+
+def is_server_command(command: str) -> bool:
+    return command.startswith(str(SERVER) + " ") and (KIND == "native" or " -m server.server" in command)
 
 # Ports of other local runtimes that may exist on the same machine. A listener
 # on any of them, or on any catalog port, blocks a start.
@@ -106,7 +115,7 @@ def owned():
         return None
     if any(row.get(key) != current[key] for key in ("pid", "birth", "argv_sha256")):
         raise RuntimeError("DwarfStar PID identity changed; no process will be signalled.")
-    if not current["command"].startswith(str(SERVER) + " "):
+    if not is_server_command(current["command"]):
         raise RuntimeError("Ledger is not the DwarfStar server.")
     return {**row, **current}
 
@@ -117,7 +126,8 @@ def health() -> dict:
         with urllib.request.urlopen(c["endpoint"] + "/models", timeout=1) as stream:
             value = json.load(stream)
         item = next(v for v in value["data"] if v["id"] == c["model_id"])
-        ok = item["context_length"] == c["context"] and item["top_provider"]["max_completion_tokens"] == c["max_output"]
+        ok = item["context_length"] == c["context"] and (
+            KIND != "native" or item["top_provider"]["max_completion_tokens"] == c["max_output"])
         return {"ok": ok, "model": item}
     except Exception:
         return {"ok": False}
@@ -141,6 +151,7 @@ def heavyweight_processes() -> list[tuple[int, str]]:
         name = Path(command.split(None, 1)[0]).name
         if (
             name in ("ds4-server", "llama-server")
+            or (name == "splash" and "/engine/splash" in command)
             or (name == "moespresso" and " serve " in command)
             or (name.startswith("python") and " -m mtplx.server.openai " in command)
         ):
@@ -215,6 +226,16 @@ def pinned() -> dict:
             f"Run `dwarfstar generate --model {MODEL}`. Nothing was started."
         )
     c = config()
+    if KIND != "native":
+        engine = RUNTIME_DIR / "engine"
+        if hashlib.sha256((engine / "splash").read_bytes()).hexdigest() != c["server_sha256"] or any(
+                hashlib.sha256((engine / name).read_bytes()).hexdigest() != digest for name, digest in c["shader_sha256"].items()):
+            raise RuntimeError("Splash engine or shaders differ from the pinned release; reinstall it before starting.")
+        missing = [f"{role}: {path}" for role, path in c["model_files"].items() if not Path(path).is_file()]
+        if missing:
+            raise RuntimeError("Model files are missing; nothing was started: " + "; ".join(missing))
+        instance.assets_current(MODEL)
+        return c
     if hashlib.sha256(SERVER.read_bytes()).hexdigest() != c["server_sha256"]:
         raise RuntimeError("DwarfStar binary changed; rebuild/review before starting.")
     metal = SERVER.parent / "metal"
@@ -246,7 +267,7 @@ def serve_owned() -> None:
             del env[key]
     env.update(c["environment"])
     env.update(native_telemetry_environment())
-    os.chdir(SERVER.parent)
+    os.chdir(RUNTIME_DIR)
     os.execve(str(SERVER), c["argv"], env)
 
 
@@ -289,7 +310,7 @@ def start() -> dict:
             emit("runtime", phase="start_failed")
             raise RuntimeError(f"DwarfStar startup exited {child.returncode}. Endpoint {c['endpoint']}.\n{tail}\nLog: {log}")
         current = identity(child.pid)
-        if current and current["command"].startswith(str(SERVER) + " "):
+        if current and is_server_command(current["command"]):
             ledger = {**current, "log": str(log), "started_at": started_at, "model": MODEL}
             save(STATE / "server.json", ledger)
             if health()["ok"]:
@@ -325,6 +346,8 @@ def memory_plan(row) -> dict:
 
     if not row:
         return {}
+    if KIND != "native":
+        return splash_memory_plan()
     try:
         with Path(row["log"]).open("rb") as stream:
             head = stream.read(16384).decode(errors="replace")
@@ -348,6 +371,24 @@ def memory_plan(row) -> dict:
     if match:
         plan["mtp_gib"] = float(match[2])
     return plan
+
+
+def splash_memory_plan() -> dict:
+    """Splash reports its own plan on /status; mapped to the same fields as the native log line."""
+    try:
+        with urllib.request.urlopen(config()["endpoint"].removesuffix("/v1") + "/status", timeout=2) as stream:
+            plan = json.load(stream)["memory_plan"]
+    except Exception:
+        return {}
+    memory, budget = plan["model"]["memory"], plan["budget"]
+    buffers = sum(memory.get(k, 0) for k in ("lane_state_bytes", "shared_prefill_bytes", "shared_decode_bytes", "pipeline_reserve_bytes",
+                                            "runtime_overhead_reserve_bytes", "streamed_table_bytes", "state_staging_bytes"))
+    kv = plan["model"]["kv_page_bytes"] / plan["model"]["kv_page_tokens"] * config()["context"]
+    resident = memory["target_weights_bytes"] + memory["draft_weights_bytes"]
+    return {"kv_gib": round(kv / GIB, 2), "buffers_gib": round(buffers / GIB, 2), "resident_model_gib": round(resident / GIB, 2),
+            "projector_gib": round(memory["vision_weights_bytes"] / GIB, 2),
+            "planned_gib": round((kv + buffers + resident + memory["vision_weights_bytes"]) / GIB, 2),
+            "kv_cache_dtype": plan["model"]["kv_format"].upper(), "backend_budget_gib": round(budget["hard_budget_bytes"] / GIB, 2)}
 
 
 def requests(row) -> list:

@@ -114,5 +114,47 @@
         "note": "Same 8.3K-token agent request, production sampling, 24 tokens each"
       }
     ]
+  },
+  "backends": {
+    "splash-m1-1.6.1": {
+      "status": "evaluated, opt-in (docs/BACKENDS.md); native remains the production default",
+      "model_name": "ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF:Q2_0",
+      "assets": {
+        "draft": {
+          "path": "backends/splash-m1/drafts/Qwen3.8-Flash-Next-DFlash2/model.safetensors",
+          "bytes": 1206140008,
+          "sha256": "d6723f2a359eaf33ec0c95f22ae8edda896774020c552296a85e1913b4d3186f",
+          "source": "incoai/Qwen3.8-Flash-Next-DFlash2@a22a1744e85c17364dcc54a6a420af7135d4c7f6"
+        },
+        "vision": {
+          "path": "backends/splash-m1/artifacts/mmproj-Qwen3.8-Flash-Next-BF16.gguf",
+          "bytes": 907543008,
+          "sha256": "b1a82259702816a5330d7bd7607cd9676b11780e79ff7348c21103ff3ce49bd0",
+          "source": "ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF@ed59f92082b1e93c0e96d60a8b11aab089b52f09 (the BF16 projector the production Q8_0 copy was made from)"
+        }
+      },
+      "cache": {
+        "k_cache_dtype": "INT8",
+        "v_cache_dtype": "INT8",
+        "kv_bytes_per_token": 13248,
+        "policy": "Splash's symmetric INT8 KV (per-token-head F32 scales), 32-token pages, prefix cache"
+      },
+      "memory": {
+        "resident_model_gib": 35.0,
+        "routed_experts_gib": 31.64,
+        "kv_gib": 1.62,
+        "buffers_gib": 3.53,
+        "projector_gib": 0.84,
+        "note": "Splash's own plan for this model: target weights 34.51 GiB + DFlash2 draft 0.49 GiB, INT8 KV at 131072 tokens, prefill/decode/state/pipeline/runtime reserves, BF16 vision. Measured peak wired 41.8 GiB (whole machine)."
+      },
+      "telemetry": {
+        "router": false,
+        "ple": false,
+        "mtp": false,
+        "requests": true,
+        "memory_plan": true
+      },
+      "speculative": "DFlash2 draft (native MTP sidecar not used)"
+    }
   }
 }

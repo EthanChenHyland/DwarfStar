@@ -159,11 +159,7 @@ def check(workspace, profile="scope", require_model=True, browser_required=False
     )
     add(
         "Model path",
-        lambda: all(
-            Path(p).is_file()
-            for p in [c["argv"][c["argv"].index("-m") + 1], *c["environment"].values()]
-            if "/" in str(p) and str(p).endswith(".gguf")
-        ),
+        lambda: all(Path(p).is_file() for p in c["model_files"].values()),  # every backend lists its files here
     )
     add("Runtime", lambda: Path(c["argv"][0]).is_file() and c["runtime"] == "Paperniuk DwarfStar")
     add("Context/output", lambda: 4096 <= c["context"] <= 262144 and 0 < c["max_output"] < c["context"])
@@ -314,7 +310,7 @@ def integrity():
         from dwarfstar import runtime_control as runtime
 
         c = runtime.config()
-        for p in [c["argv"][0], c["argv"][c["argv"].index("-m") + 1], str(paths.zed_cli())]:
+        for p in [c["argv"][0], *c["model_files"].values(), str(paths.zed_cli())]:
             if not Path(p).exists():
                 raise ValueError("Missing " + p)
         writable(ROOT / "state/latency")
