@@ -253,6 +253,30 @@ def open_session(agent: AgentSession, record: dict, workspace: Path) -> str:
     return agent.request("session/new", params, 180)["sessionId"]
 
 
+def agent_compactions(workspace: Path, session_id: str | None) -> int | None:
+    """How many times the agent has compacted this chat's active context, from the agent's own session record.
+
+    The agent keeps one append-only JSONL file per session under its workspace
+    (`.omp-dwarfstar-<profile>-agent/sessions/<cwd>/<time>_<session id>.jsonl`); each automatic
+    compaction is an entry of type "compaction". ACP does not report compactions as updates, so this
+    file is the authoritative source. None when no record exists yet.
+    """
+    if not session_id:
+        return None
+    count, found = 0, False
+    for path in workspace.glob(f".omp-dwarfstar-*-agent/sessions/*/*_{session_id}.jsonl"):
+        found = True
+        with path.open(encoding="utf-8", errors="replace") as stream:
+            for line in stream:
+                if '"compaction"' not in line:
+                    continue
+                try:
+                    count += json.loads(line).get("type") == "compaction"
+                except ValueError:
+                    continue
+    return count if found else None
+
+
 class Turns:
     """Runs chat turns in the background; one turn per chat at a time. Live progress is kept in memory."""
 
@@ -331,7 +355,8 @@ class Turns:
         usage = result.get("usage") or {}
         if usage.get("totalTokens"):
             record["context"]["tokens"] = int(usage["totalTokens"])
-        record["compactions"] = record.get("compactions", 0) + live.get("compacted", 0)
+        recorded = agent_compactions(workspace, record.get("agent_session_id"))
+        record["compactions"] = recorded if recorded is not None else record.get("compactions", 0) + live.get("compacted", 0)
         if error:
             add_message(record, "error", error)
         else:

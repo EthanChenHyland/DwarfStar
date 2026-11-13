@@ -1,4 +1,5 @@
 """Workstation chats: storage, titles, archive/delete, and turns through a simulated ACP agent."""
+import json
 import tempfile
 import time
 import unittest
@@ -12,6 +13,7 @@ class FakeAgent:
     """Speaks just enough ACP: records the methods called and streams a scripted turn."""
 
     calls: list = []
+    total_tokens = 91000
 
     def __init__(self, profile_id, workspace):
         self.profile_id = profile_id
@@ -29,7 +31,7 @@ class FakeAgent:
                            {"sessionUpdate": "agent_message_chunk", "content": {"text": "Hello "}},
                            {"sessionUpdate": "agent_message_chunk", "content": {"text": "there."}}):
                 on_update(update)
-            return {"stopReason": "end_turn", "usage": {"inputTokens": 10, "outputTokens": 3, "totalTokens": 91000}}
+            return {"stopReason": "end_turn", "usage": {"inputTokens": 10, "outputTokens": 3, "totalTokens": FakeAgent.total_tokens}}
         return {}
 
     def close(self):
@@ -44,6 +46,7 @@ class ChatTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
         self.addCleanup(self.directory.cleanup)
         FakeAgent.calls = []
+        FakeAgent.total_tokens = 91000
 
     def turn(self, turns, chat_id, text):
         turns.start(chat_id, text, ["cyber"], agent_factory=FakeAgent)
@@ -73,6 +76,34 @@ class ChatTests(unittest.TestCase):
         second = self.turn(turns, chat["id"], "And now?")
         self.assertIn(("session/resume", "agent-session-1"), FakeAgent.calls)
         self.assertEqual(len(second["messages"]), 4)  # the full transcript stays, whatever the agent compacted
+
+    def test_compaction_is_read_from_the_agents_own_session_record(self):
+        """The agent compacts inside its session; the chat keeps its id, the session and the full transcript."""
+        turns = chats.Turns()
+        chat = chats.create("cyber-low")
+        first = self.turn(turns, chat["id"], "Inspect the logs and remember the error count")
+        workspace = Path(self.directory.name) / chat["id"] / "workspace"
+        bank = workspace / ".omp-dwarfstar-cyber-low-agent" / "sessions" / "-chat"
+        bank.mkdir(parents=True)
+        record = bank / "2026-11-12T00-00-00-000Z_agent-session-1.jsonl"
+        record.write_text("\n".join(json.dumps(e) for e in (
+            {"type": "session", "id": "agent-session-1"}, {"type": "message", "role": "user"},
+            {"type": "compaction", "summary": "older turns condensed; error count 3 kept"}, {"type": "message", "role": "assistant"})) + "\n")
+        FakeAgent.total_tokens = 12000  # the agent's active context after compaction is smaller
+        second = self.turn(turns, chat["id"], "What was the error count?")
+        self.assertEqual(second["id"], first["id"])
+        self.assertEqual(second["agent_session_id"], first["agent_session_id"])
+        self.assertIn(("session/resume", "agent-session-1"), FakeAgent.calls)
+        self.assertEqual(second["compactions"], 1)
+        self.assertLess(second["context"]["tokens"], first["context"]["tokens"])
+        self.assertEqual([m["role"] for m in second["messages"]], ["user", "assistant", "user", "assistant"])
+        self.assertEqual(second["messages"][1]["tools"][0]["title"], "$ ls")  # tool history survives in the transcript
+        self.assertNotIn("secret reasoning", json.dumps(second))
+
+    def test_the_agent_keeps_automatic_compaction_enabled(self):
+        from dwarfstar.profiles import BASE_AGENT_CONFIG
+
+        self.assertNotIn("compaction", BASE_AGENT_CONFIG)  # the agent's default (compaction.enabled: true) applies
 
     def test_manual_titles_are_never_overwritten(self):
         turns = chats.Turns()
