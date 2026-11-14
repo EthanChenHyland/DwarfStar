@@ -1,0 +1,124 @@
+diff --git a/runtime/engine/Telemetry.hpp b/runtime/engine/Telemetry.hpp
+new file mode 100644
+index 0000000..3bd2d87
+--- /dev/null
++++ b/runtime/engine/Telemetry.hpp
+@@ -0,0 +1,118 @@
++#pragma once
++
++// DwarfStar advanced telemetry: a bounded, lock-light ring of runtime events for a visualizer.
++//
++// It never changes inference. Records are written on the engine thread after a command has
++// retired, from values the engine already computed, and read by the status-response thread. A
++// write is gated by a capture level that a /telemetry poll refreshes and that decays when nobody
++// polls, so an engine nobody watches does one relaxed atomic load per decode batch and no more.
++// The ring overwrites its oldest records when full and never blocks the engine or touches disk.
++
++#include <atomic>
++#include <cstdint>
++#include <mutex>
++#include <vector>
++
++namespace splash::engine {
++
++// What a record describes. One kind today (speculative decode cycles); the format is an enum so
++// a consumer can skip kinds it does not know and more can be added without a protocol change.
++enum class TelemetryKind : uint8_t {
++  DecodeCycle = 1, // a target verify step: drafted/accepted tokens and the step's timing
++};
++
++// A fixed-width record. Fields are generic so one struct serves every kind; the writer and the
++// reader agree per kind what each means (see telemetryKindFields in Bootstrap).
++struct TelemetryRecord final {
++  uint64_t sequence = 0;
++  double monotonicMs = 0.0;
++  TelemetryKind kind = TelemetryKind::DecodeCycle;
++  uint32_t a = 0, b = 0, c = 0, d = 0;
++  double e = 0.0, f = 0.0;
++};
++
++// Three capture levels; a poll names the level it wants, and the ring records at the highest any
++// recent poll asked for until the deadline passes.
++enum class TelemetryLevel : int { Off = 0, Standard = 1, Advanced = 2 };
++
++class TelemetryRing final {
++public:
++  // capacity records are kept; ttlMs is how long a poll keeps capture alive with no further poll.
++  explicit TelemetryRing(size_t capacity, double ttlMs = 3000.0)
++      : records_(capacity ? capacity : 1), ttlMs_(ttlMs) {}
++
++  // The engine thread's hot-path gate: one relaxed load. Zero when nobody is watching.
++  [[nodiscard]] int captureLevel() const noexcept {
++    return level_.load(std::memory_order_relaxed);
++  }
++
++  // Capture has lapsed when its deadline has passed; the engine stops recording until the next
++  // poll. Checked only when captureLevel() is already non-zero, so an idle engine never reads it.
++  [[nodiscard]] bool expired(double nowMs) const noexcept {
++    return nowMs >= deadlineMs_.load(std::memory_order_relaxed);
++  }
++
++  void stopCapture() noexcept { level_.store(0, std::memory_order_relaxed); }
++
++  // A poll at `level` refreshes the capture level and its deadline. Advanced outranks Standard for
++  // the window: the ring records at the highest level any live poll asked for.
++  void refresh(TelemetryLevel level, double nowMs) noexcept {
++    if (level == TelemetryLevel::Off)
++      return;
++    deadlineMs_.store(nowMs + ttlMs_, std::memory_order_relaxed);
++    int wanted = static_cast<int>(level);
++    int current = level_.load(std::memory_order_relaxed);
++    // Keep the higher of the levels asked for within the window; a lone Standard poll after an
++    // Advanced one does not downgrade until the window lapses and recording stops.
++    while (wanted > current &&
++           !level_.compare_exchange_weak(current, wanted, std::memory_order_relaxed))
++      ;
++    if (current == 0)
++      level_.store(wanted, std::memory_order_relaxed);
++  }
++
++  // Append one record. The caller has already checked captureLevel() and expiry, so this only
++  // takes a brief lock to copy a handful of integers into the ring; it allocates nothing.
++  void record(TelemetryKind kind, double nowMs, uint32_t a, uint32_t b, uint32_t c, uint32_t d,
++              double e, double f) {
++    const std::lock_guard<std::mutex> lock(mutex_);
++    const uint64_t sequence = ++written_;
++    records_[(sequence - 1) % records_.size()] =
++        TelemetryRecord{sequence, nowMs, kind, a, b, c, d, e, f};
++  }
++
++  // Everything with a sequence greater than `since`, oldest first, into `out`. `dropped` counts
++  // records that were overwritten before this reader saw them (since fell behind the ring), and
++  // `next` is the sequence a later poll should pass as `since` to continue without a gap.
++  struct Drain final {
++    uint64_t next = 0;
++    uint64_t dropped = 0;
++  };
++  Drain drain(uint64_t since, std::vector<TelemetryRecord> &out) const {
++    const std::lock_guard<std::mutex> lock(mutex_);
++    const uint64_t written = written_;
++    const uint64_t capacity = records_.size();
++    const uint64_t oldest = written > capacity ? written - capacity + 1 : 1;
++    uint64_t dropped = 0;
++    uint64_t from = since + 1;
++    if (from < oldest) {
++      dropped = oldest - from;
++      from = oldest;
++    }
++    for (uint64_t sequence = from; sequence <= written; ++sequence)
++      out.push_back(records_[(sequence - 1) % records_.size()]);
++    return {written, dropped};
++  }
++
++  [[nodiscard]] uint64_t capacity() const noexcept { return records_.size(); }
++
++private:
++  mutable std::mutex mutex_;
++  std::vector<TelemetryRecord> records_;
++  uint64_t written_ = 0;
++  std::atomic<int> level_{0};
++  std::atomic<double> deadlineMs_{0.0};
++  const double ttlMs_;
++};
++
++} // namespace splash::engine
