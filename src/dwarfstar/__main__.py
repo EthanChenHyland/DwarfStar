@@ -9,6 +9,8 @@
     dwarfstar serve                        Workstation service: API, telemetry hub and user interface
     dwarfstar switch PROFILE               stop any other model, start the profile's model
     dwarfstar seal [--verify]              write or check the installation seal
+    dwarfstar backup [--out DIR]           chats, settings and provenance to DwarfStar-Backup-<UTC>.zip
+    dwarfstar restore BACKUP [--apply]     validate and restore a backup (dry run without --apply)
     dwarfstar migrate [--apply]            bring persistent data to the current schema (dry run without --apply)
     dwarfstar agent-patch [--apply|--revert]  scoped approval edits to the Oh My Pi agent (from acp/omp-patch.json)
     dwarfstar doctor                       installation and health checks with remedies
@@ -125,6 +127,10 @@ def main(argv: list[str] | None = None) -> int:
 
         return diagnostics.main(rest)
 
+    if command in ("backup", "restore"):
+        from dwarfstar import backup
+
+        return backup.main([command, *rest] if command == "restore" else rest)
     if command == "migrate":
         from dwarfstar import migrations
 

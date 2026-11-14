@@ -61,10 +61,11 @@ def report() -> dict:
         "sources": tree_bytes(paths.SOURCES),
         "manifests and evidence": tree_bytes(paths.MANIFESTS),
         "tools": tree_bytes(paths.ASSETS / "Tools"),
+        "backups": tree_bytes(paths.ASSETS / "Backups"),
         "archive": tree_bytes(paths.ARCHIVE),
     }
     orphans, largest = [], []
-    known = {paths.MODELS, paths.RUNTIMES, paths.SOURCES, paths.MANIFESTS, paths.ARCHIVE, paths.ASSETS / "Tools"}
+    known = {paths.MODELS, paths.RUNTIMES, paths.SOURCES, paths.MANIFESTS, paths.ARCHIVE, paths.ASSETS / "Tools", paths.ASSETS / "Backups"}
     for child in sorted(paths.ASSETS.iterdir()) if paths.ASSETS.is_dir() else ():
         if child not in known and not child.name.startswith("."):
             orphans.append({"path": str(child), "bytes": tree_bytes(child), "why": "unknown folder in the assets root"})

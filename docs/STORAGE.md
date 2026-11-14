@@ -51,6 +51,20 @@ bin/dwarfstar cache clean --browsers --apply         # also the agent's browser 
 
 Nothing in these touches production models, the runtime, chats (except an explicit `--empty-chat-trash`), settings, manifests, sources, the archive or logs.
 
+## Backup and restore
+
+Chats, settings and provenance are small and irreplaceable; everything else can be rebuilt or downloaded again.
+
+```bash
+bin/dwarfstar backup                        # ~/AI/DwarfStar/Backups/DwarfStar-Backup-<UTC>.zip (readable by you only)
+bin/dwarfstar restore <backup.zip>          # validate it and show what would change; nothing is written
+bin/dwarfstar restore <backup.zip> --apply  # restore: the current state is backed up first, then merged, migrated and checked
+```
+
+A backup holds every chat record, the agent session files that are the canonical transcript of shared chats, files the agent wrote in a chat's workspace, the approval mode, the Workstation selection, the optional `config/local.json`, and the catalog's runtime and model hashes as provenance. It leaves out model weights, runtimes, caches, logs, telemetry, deleted chats (unless `--include-trash`), the agent's scratch and databases, and `permission-runtime.json`, which describes this machine's agent bundle (run `bin/dwarfstar agent-patch --apply` after restoring elsewhere). Restore checks the format, every path and every checksum, refuses a backup from a newer DwarfStar, never deletes anything the backup does not contain, never overwrites an existing `config/local.json`, and refuses while the Workstation is answering a chat. The pre-restore state goes to `<data>/backups/pre-restore/`.
+
+Persistent records carry a schema version; `bin/dwarfstar migrate` (dry run) and `--apply` bring them current, backing up each original to `<data>/backups/migrations/` first. The service migrates at start.
+
 ## External Swift BF16 backup
 
 Swift's BF16 rebuild source is an **external, off-SSD backup**. It is **not mounted** and is intentionally **not copied onto the internal disk** — production does not need it (Swift runs from its GSQ-RCO Q2_0 files like the others). It exists only to reconstruct Swift's weights from scratch if ever required. Do not mount, copy or delete it as part of routine work.
