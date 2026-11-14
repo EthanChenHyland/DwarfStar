@@ -1,0 +1,34 @@
+{
+ "id": "c20261101100000-aaaaaa",
+ "title": "Earliest chat",
+ "profile": "scope-low",
+ "model": "scope",
+ "reasoning": "low",
+ "created": 1794000000.0,
+ "messages": [
+  {
+   "role": "user",
+   "text": "List the files here.",
+   "t": 1794000000.0
+  },
+  {
+   "role": "assistant",
+   "text": "There are two files: a.txt and b.txt.",
+   "t": 1794000005.0,
+   "tools": [
+    {
+     "id": "t1",
+     "title": "$ ls",
+     "kind": "execute",
+     "status": "completed"
+    }
+   ],
+   "stop": "end_turn",
+   "usage": {
+    "inputTokens": 900,
+    "outputTokens": 20,
+    "totalTokens": 920
+   }
+  }
+ ]
+}

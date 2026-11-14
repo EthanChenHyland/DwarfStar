@@ -99,15 +99,17 @@ def model_states(detail: bool = False) -> dict[str, dict]:
 
 
 def _read_state() -> dict:
+    from dwarfstar import migrations
+
     try:
-        value = json.loads(STATE_FILE.read_text())
-        return value if isinstance(value, dict) else {}
+        value, _ = migrations.migrate_record("workstation_state", json.loads(STATE_FILE.read_text()))
+        return value
     except (OSError, ValueError):
         return {}
 
 
 def _write_state(**fields) -> None:
-    value = {**_read_state(), **fields, "updated": time.time()}
+    value = {**_read_state(), **fields, "updated": time.time(), "schema": 1}
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     temporary = STATE_FILE.with_suffix(".tmp")
     temporary.write_text(json.dumps(value) + "\n")
@@ -446,7 +448,13 @@ class Service:
         Never stops or signals a process; a valid running model is kept and reconnected."""
         from dwarfstar import chats
 
+        from dwarfstar import migrations
+
         report = {"t": time.time(), "models": {}, "interrupted_chats": [], "telemetry_sessions_finalized": getattr(self.hub, "finalized", [])}
+        try:  # persistent data in the current shape before anything reads it; originals are backed up first
+            report["migrations"] = migrations.migrate_all(apply=True)
+        except Exception as error:  # a failed migration leaves the data as it was and is reported, never fatal
+            report["migrations"] = {"ok": False, "error": str(error)}
         for model_id in catalog.models():
             report["models"][model_id] = controller(model_id, "reconcile", timeout=60)
         if not self.turns.active:

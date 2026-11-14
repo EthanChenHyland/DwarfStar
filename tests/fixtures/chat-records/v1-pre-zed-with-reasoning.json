@@ -1,0 +1,52 @@
+{
+ "schema": 1,
+ "id": "c20261110100000-cccccc",
+ "title": "Organized, pre-Zed",
+ "title_manual": true,
+ "created": 1794000000.0,
+ "updated": 1794000005.0,
+ "archived": true,
+ "profile": "cyber-low",
+ "model": "cyber",
+ "reasoning": "low",
+ "context": {
+  "tokens": 920,
+  "window": 131072
+ },
+ "agent_session_id": "01a1aaaa-0000-7000-8000-000000000002",
+ "compactions": 1,
+ "pinned": true,
+ "starred": true,
+ "tags": [
+  "pcap",
+  "review"
+ ],
+ "messages": [
+  {
+   "role": "user",
+   "text": "List the files here.",
+   "t": 1794000000.0
+  },
+  {
+   "role": "assistant",
+   "text": "There are two files: a.txt and b.txt.",
+   "t": 1794000005.0,
+   "tools": [
+    {
+     "id": "t1",
+     "title": "$ ls",
+     "kind": "execute",
+     "status": "completed"
+    }
+   ],
+   "stop": "end_turn",
+   "usage": {
+    "inputTokens": 900,
+    "outputTokens": 20,
+    "totalTokens": 920
+   },
+   "reasoning": "SECRET CHAIN OF THOUGHT",
+   "thinking": "MORE SECRET"
+  }
+ ]
+}

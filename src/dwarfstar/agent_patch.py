@@ -119,7 +119,7 @@ def _write_atomic(path: Path, text: str) -> None:
 
 def write_runtime_record(cli: Path, data: dict) -> dict:
     record = {
-        "schema_version": 1,
+        "schema": 1,
         "policy": POLICY,
         "patch": data["name"],
         "omp_version": data["version"],
