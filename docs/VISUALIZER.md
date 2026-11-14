@@ -20,6 +20,15 @@ The Advanced view of **Live** (`app/workstation/web/visualizer.js`) draws a data
 
 Never shown: prompt text, reasoning, tool arguments, file contents or credentials. This is a compute and action view, not a transcript.
 
+## Request history and replay
+
+On the advanced-telemetry runtime the view keeps the **last 20 requests** in the page's memory, under **Recent requests**, named by profile and time (for example "Swift 1.5 MEDIUM · 14:32"; never by content). Each row shows tokens generated, verify cycles, drafts accepted, decode time and rate.
+
+* **View** draws that request on the canvas: the scrubber walks its cycles, the draft panel shows acceptance up to the cycle under the playhead and the output stream the tokens committed so far. Live recording continues meanwhile; **Back to live** returns. **Pause** and the scrubber work on the live stream as before.
+* **Export JSON** saves one request's cycles to a file chosen in a Save panel (a format-1 document: totals, capabilities, and per cycle `t_ms, output, drafted, accepted, cycle_ms, width`). Nothing is exported otherwise.
+* **What a request is.** The runtime reports decode cycles, not request ids, so an entry is one uninterrupted decode run: a new entry starts after 400 ms with no cycle. Between agent turns there is always tool time and a prefill, which produce no cycles, so turns separate; two clients decoding at once would share one entry (the `width` field shows batching).
+* **Bounds.** Each request keeps its first 4,096 cycles in one fixed 96 KiB buffer (under 2 MiB for all 20); totals keep counting past the cap and the row says how many were kept. Cycles the engine ring overwrote before they were read are counted as missed. History holds numbers only, lives in the window, and is gone on reload; nothing is written to disk. Measured with 30 synthetic requests including one of 10,000 cycles: 20 rows kept, the long one capped at 4,096 with exact totals, page heap 4.6 MiB.
+
 ## Detail levels
 
 The hub records at two levels, chosen by whether the Advanced view is open:

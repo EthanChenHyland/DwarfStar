@@ -309,3 +309,5 @@ td.bad { color: var(--bad); }
 .palette li.disabled { opacity: .45; cursor: default; }
 .palette-foot { padding: 6px 12px 2px; }
 .setup-banner { margin: 0 0 14px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+#viz-history tr.selected td { background: rgba(92,200,255,.07); }
+#viz-history .warn { color: var(--warn); }

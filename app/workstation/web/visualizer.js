@@ -16,7 +16,15 @@
     hits: [], ticks: [], tools: [], requests: [], heat: null, heatLayers: 48, heatMax: 1,
     pills: [], drafts: [], reads: [], lastTickAt: 0, replay: null, toolPulse: {}, activeTool: null,
     dflash: null, dflashSince: 0, dflashPoll: 0,
+    history: [], open: null, viewing: null, historyDrawn: 0, requestSeq: 0,
   };
+  /* Request history (ds2). The runtime reports decode cycles, not request ids, so a request here is one uninterrupted
+   * decode run: a new entry starts after GAP_MS with no cycle (between agent turns there is always tool time and a
+   * prefill, which produce none). Bounded: the newest HISTORY_MAX entries, each keeping its first CYCLES_MAX cycles
+   * as six float32 numbers in one fixed buffer (96 KiB per request, under 2 MiB in all); totals keep counting past the
+   * cap. In memory only, never written, and never any text. */
+  const HISTORY_MAX = 20, CYCLES_MAX = 4096, GAP_MS = 400;
+  const CYCLE_FIELDS = ["t_ms", "output", "drafted", "accepted", "cycle_ms", "width"];
   const COLORS = { text: "#dbe3ee", muted: "#8593a6", faint: "#42505f", line: "#232c3a", panel: "#10151d", accent: "#5cc8ff", good: "#4fd695", warn: "#ffc857", bad: "#ff6b6b", ple: "#ffb454", mtp: "#7fd6a3", cyber: "#b98cff" };
   const TOOL_NODES = [["workspace", "Workspace", "files"], ["shell", "Shell", "commands"], ["browser", "Browser", "pages"], ["gui", "Computer use", "KimiCU"], ["vision", "Vision", "images"]];
 
@@ -55,6 +63,7 @@
         <div class="panel"><h2>Action timeline</h2><div class="timeline" id="viz-actions"></div></div>
         <div class="panel"><h2>What this shows</h2><div class="small muted" id="viz-facts"></div></div>
       </div>
+      <div class="panel" style="margin-top:12px"><h2>Recent requests</h2><div id="viz-history" class="small"></div></div>
       <div class="panel" style="margin-top:12px"><h2>Requests</h2><div id="viz-requests" class="small"></div></div>`;
     D.bindLiveModes(V.root);
     V.canvas = V.root.querySelector("#viz-canvas");
@@ -70,6 +79,11 @@
     const scrub = V.root.querySelector("#viz-scrub");
     scrub.oninput = () => { setPaused(true); V.playhead = +scrub.value; };
     V.root.querySelector("#viz-session").onchange = (e) => loadSession(e.target.value);
+    V.root.querySelector("#viz-history").onclick = (event) => {
+      const button = event.target.closest("[data-request]"); if (!button) return;
+      const entry = V.history.find((h) => h.id === +button.dataset.request); if (!entry) return;
+      if (button.dataset.action === "export") exportRequest(entry); else viewRequest(entry);
+    };
     V.canvas.onclick = (event) => pickLayer(event);
     V.canvas.onmousemove = (event) => {
       const rect = V.canvas.getBoundingClientRect(), px = event.clientX - rect.left, py = event.clientY - rect.top;
@@ -99,9 +113,11 @@
       const batch = r && r.ok && r.telemetry;
       if (!batch || !batch.events) return;
       if (batch.dropped && V.dflash) V.dflash.dropped = (V.dflash.dropped || 0) + batch.dropped;
+      if (batch.dropped && V.open) V.open.dropped += batch.dropped;
       V.dflashSince = batch.next || V.dflashSince;
       for (const e of batch.events) {
         if (e.kind !== "decode_cycle") continue;
+        recordCycle(e);
         const d = V.dflash || (V.dflash = { proposed: 0, accepted: 0, rejected: 0, cycles: 0, tokens: 0, acceptance_pct: null, dropped: 0 });
         d.cycles += 1; d.proposed += e.drafted; d.accepted += e.accepted;
         d.rejected += Math.max(0, e.drafted - e.accepted); d.tokens += e.output;
@@ -113,13 +129,90 @@
         for (let i = 0; i < e.drafted; i++) V.drafts.push({ t0: performance.now() + i * 20, ok: i < e.accepted });
         if (V.drafts.length > 240) V.drafts.splice(0, V.drafts.length - 240);
       }
+      if (V.open && performance.now() - V.historyDrawn > 1000) renderHistory();
     }, 250);
   }
+  function recordCycle(e) {
+    const running = D.runningModel(), open = V.open;
+    if (!open || open.model !== running || e.t - open.lastT > Math.max(GAP_MS, 4 * (e.cycle_ms || 0))) {
+      const profile = D.S.state && D.S.state.active_profile;
+      const name = D.profileLabel(profile) || D.modelOf(running).display_name.replace("DwarfStar ", "");
+      const wall = Date.now();
+      V.open = { id: ++V.requestSeq, model: running, profile, wall, label: name + " · " + new Date(wall).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+        t0: e.t, lastT: e.t, buf: new Float32Array(CYCLES_MAX * CYCLE_FIELDS.length), n: 0, output: 0, drafted: 0, accepted: 0, cycleMs: 0, width: 0, truncated: 0, dropped: 0 };
+      V.history.push(V.open);
+      if (V.history.length > HISTORY_MAX) V.history.shift();
+      renderHistory();
+    }
+    const r = V.open;
+    r.lastT = e.t; r.arrived = performance.now();
+    r.output += e.output; r.drafted += e.drafted; r.accepted += e.accepted; r.cycleMs += e.cycle_ms || 0; r.width = Math.max(r.width, e.width || 0);
+    if (r.n < CYCLES_MAX) r.buf.set([e.t - r.t0, e.output, e.drafted, e.accepted, e.cycle_ms || 0, e.width || 0], r.n++ * CYCLE_FIELDS.length);
+    else r.truncated += 1;
+  }
+  function cycleRows(r) {
+    const rows = [], k = CYCLE_FIELDS.length;
+    for (let i = 0; i < r.n; i++) rows.push([Math.round(r.buf[i * k]), r.buf[i * k + 1], r.buf[i * k + 2], r.buf[i * k + 3], +r.buf[i * k + 4].toFixed(3), r.buf[i * k + 5]]);
+    return rows;
+  }
+  function decodeSeconds(r) { return (r.lastT - r.t0 + (r.n ? r.buf[4] : 0)) / 1000; }
+  function isOpen(r) { return r === V.open && performance.now() - (r.arrived || 0) < 1000; }
+  function renderHistory() {
+    const node = V.root && V.root.querySelector("#viz-history"); if (!node) return;
+    V.historyDrawn = performance.now();
+    if (!V.history.length) {
+      node.innerHTML = `<span class="muted">${caps().dflash === "cycle" ? "Requests appear here as the model generates: the last " + HISTORY_MAX + " are kept in this window to view and scrub cycle by cycle." : "Request history needs the advanced-telemetry runtime, which reports each decode cycle."}</span>`;
+      return;
+    }
+    const n = (v, d = 0) => Number(v).toLocaleString(undefined, { maximumFractionDigits: d });
+    node.innerHTML = `<table><thead><tr><th>Request</th><th>Generated</th><th>Cycles</th><th>Drafts accepted</th><th>Decode</th><th>tok/s</th><th></th></tr></thead><tbody>${V.history.slice().reverse().map((r) => {
+      const seconds = decodeSeconds(r), cycles = r.n + r.truncated;
+      return `<tr${r === V.viewing ? ' class="selected"' : ""}><td><b>${D.esc(r.label)}</b>${isOpen(r) ? ' <span class="badge live">generating</span>' : ""}${r === V.viewing ? ' <span class="badge">viewing</span>' : ""}</td>
+        <td>${n(r.output)}</td><td>${n(cycles)}${r.truncated ? ` <span class="faint" title="Only the first ${CYCLES_MAX} cycles are kept for replay; totals count all">(${n(CYCLES_MAX)} kept)</span>` : ""}</td>
+        <td>${r.drafted ? Math.round(100 * r.accepted / r.drafted) + " %" : "–"} <span class="faint">${n(r.accepted)}/${n(r.drafted)}</span>${r.dropped ? ` <span class="warn" title="The engine ring overwrote ${r.dropped} cycles before they were read">· ${n(r.dropped)} missed</span>` : ""}</td>
+        <td>${seconds.toFixed(1)} s</td><td>${seconds > 0 ? n(r.output / seconds, 1) : "–"}</td>
+        <td style="white-space:nowrap"><button class="ghost small-button" data-request="${r.id}" data-action="view">View</button> <button class="ghost small-button" data-request="${r.id}" data-action="export">Export JSON</button></td></tr>`;
+    }).join("")}</tbody></table>
+      <p class="faint" style="margin:8px 0 0">The runtime reports decode cycles, not requests: an entry is one uninterrupted decode run, split after ${GAP_MS} ms without a cycle. Numbers only, kept in this window (the last ${HISTORY_MAX}), never saved; Export writes one request's cycles to a file you choose.</p>`;
+  }
+  /* Show one recorded request: the canvas, output stream and draft panel draw its cycles; the scrubber walks them. */
+  function viewRequest(entry) {
+    if (V.replay) { V.replay = null; V.root.querySelector("#viz-session").value = ""; resetBuffers(); }
+    let proposed = 0, accepted = 0;
+    const rows = cycleRows(entry);
+    entry.ticks = rows.map((c, i) => ({ dflash: true, n: c[1], dp: c[2], da: c[3], ms: c[4], seq: i + 1, t: (entry.wall + c[0]) / 1000, pos: i + 1 }));
+    entry.cum = rows.map((c) => [proposed += c[2], accepted += c[3]]);
+    V.viewing = entry;
+    setPaused(true); V.playhead = 0;
+    renderHistory();
+  }
+  function viewedDraft() {
+    const r = V.viewing, i = Math.max(0, Math.min(V.playhead, r.cum.length - 1)), [proposed, accepted] = r.cum[i] || [0, 0];
+    return { proposed, accepted, rejected: proposed - accepted, cycles: i + 1, acceptance_pct: proposed ? 100 * accepted / proposed : null };
+  }
+  function exportRequest(r) {
+    const document_ = {
+      kind: "DwarfStar request telemetry", format: 1, name: r.label, model: r.model, profile: r.profile || null,
+      started: new Date(r.wall).toISOString(), capabilities: caps(),
+      segmentation: `one uninterrupted decode run; a new request starts after ${GAP_MS} ms without a decode cycle (the runtime reports cycles, not request ids)`,
+      totals: { cycles: r.n + r.truncated, output_tokens: r.output, drafted: r.drafted, accepted: r.accepted, decode_s: +decodeSeconds(r).toFixed(3),
+        max_batch_width: r.width, cycles_missed_by_reader: r.dropped },
+      cycles_kept: r.n, cycles_not_kept: r.truncated, fields: CYCLE_FIELDS, cycles: cycleRows(r),
+    };
+    const blob = new Blob([JSON.stringify(document_, null, 1)], { type: "application/json" });
+    const link = document.createElement("a"), at = new Date(r.wall), two = (v) => String(v).padStart(2, "0");
+    const stamp = `${at.getFullYear()}${two(at.getMonth() + 1)}${two(at.getDate())}-${two(at.getHours())}${two(at.getMinutes())}`;  // local, like the name
+    link.href = URL.createObjectURL(blob); link.download = `dwarfstar-request-${r.model}-${stamp}.json`;
+    document.body.appendChild(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(link.href), 60000);
+  }
+  function ticks() { return V.viewing ? V.viewing.ticks : V.ticks; }
   function unmount() { clearInterval(V.dflashPoll); V.dflashPoll = 0; /* keep state; the loop idles when hidden */ }
   function setPaused(paused) {
     V.paused = paused;
+    if (!paused && V.viewing) { V.viewing.ticks = V.viewing.cum = null; V.viewing = null; renderHistory(); }
     if (!paused) { V.playhead = -1; if (V.replay) { V.replay = null; V.root.querySelector("#viz-session").value = ""; resetBuffers(); } }
-    V.root.querySelector("#viz-pause").textContent = paused ? "Resume live" : "Pause";
+    V.root.querySelector("#viz-pause").textContent = paused ? (V.viewing ? "Back to live" : "Resume live") : "Pause";
   }
   function resetBuffers() { V.ticks = []; V.tools = []; V.requests = []; V.heat = null; V.heatMax = 1; V.pills = []; V.drafts = []; V.dflash = null; V.dflashSince = 0; }
   async function refreshSessions() {
@@ -204,9 +297,10 @@
   }
   function hint(x, y, w, h, text) { V.hits.push({ x, y, w, h, text }); }
   function currentTick() {
-    if (!V.ticks.length) return null;
-    if (V.paused && V.playhead >= 0) return V.ticks[Math.min(V.playhead, V.ticks.length - 1)];
-    return V.ticks[V.ticks.length - 1];
+    const all = ticks();
+    if (!all.length) return null;
+    if (V.paused && V.playhead >= 0) return all[Math.min(V.playhead, all.length - 1)];
+    return all[all.length - 1];
   }
   function draw() {
     const g = V.g, W = V.width, H = V.height, m = model(), now = performance.now();
@@ -215,9 +309,9 @@
     if (!m) return;
     const tick = currentTick();
     const scrub = V.root.querySelector("#viz-scrub");
-    scrub.max = Math.max(0, V.ticks.length - 1);
+    scrub.max = Math.max(0, ticks().length - 1);
     if (!V.paused) scrub.value = scrub.max;
-    V.root.querySelector("#viz-clock").textContent = tick ? (V.paused ? (V.replay ? "replay · " : "paused · ") : "live · ") + (tick.t ? new Date(tick.t * 1000).toLocaleTimeString() : "") + (tick.dflash ? " · cycle " + tick.seq : tick.pos != null ? " · token " + tick.pos : "") : (D.runningModel() ? "waiting for tokens" : "no model running");
+    V.root.querySelector("#viz-clock").textContent = tick ? (V.paused ? (V.viewing ? "request · " : V.replay ? "replay · " : "paused · ") : "live · ") + (tick.t ? new Date(tick.t * 1000).toLocaleTimeString() : "") + (tick.dflash ? " · cycle " + tick.seq : tick.pos != null ? " · token " + tick.pos : "") : (D.runningModel() ? "waiting for tokens" : "no model running");
     const live = S.live || {}, active = !V.paused && now - V.lastTickAt < 600;
     const colL = 14, wL = Math.max(190, W * 0.17), colM = colL + wL + 14, wM = Math.max(170, W * 0.15), colR = colM + wM + 14, wR = W - colR - 14;
     const top = 12, bottomH = 118, mainH = H - top - bottomH - 22;
@@ -351,7 +445,7 @@
       return;
     }
     // Native: cumulative MTP from the live hub. ds2 Splash: the per-verify-cycle DFlash2 ring (V.dflash).
-    const mtp = caps().mtp ? ((S.live && S.live.mtp) || {}) : (V.dflash || {});
+    const mtp = caps().mtp ? ((S.live && S.live.mtp) || {}) : V.viewing ? viewedDraft() : (V.dflash || {});
     label(mtp.acceptance_pct != null ? mtp.acceptance_pct.toFixed(1) + " %" : "–", mx + 10, py + 64, COLORS.text, "600 20px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif");
     label("accepted", mx + 10, py + 90, COLORS.muted, "10px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif");
     label((mtp.accepted || 0) + " / " + (mtp.proposed || 0) + " drafts", mx + 10, py + 106, COLORS.faint, "10px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif");
@@ -413,7 +507,7 @@
   function drawBottom(x, y, w, h, m, live, tick, now) {
     const g = V.g, outW = w * 0.42;
     box(x, y, outW, h, "Output stream", "committed tokens (counts only)");
-    const end = V.paused && V.playhead >= 0 ? V.playhead + 1 : V.ticks.length, fits = Math.max(1, Math.floor((outW - 24) / 8)), recent = V.ticks.slice(Math.max(0, end - fits), end);
+    const all = ticks(), end = V.paused && V.playhead >= 0 ? V.playhead + 1 : all.length, fits = Math.max(1, Math.floor((outW - 24) / 8)), recent = all.slice(Math.max(0, end - fits), end);
     let px = x + 12; const py = y + 34;
     recent.forEach((t) => { for (let i = 0; i < t.n; i++) { g.fillStyle = i === 0 ? COLORS.text : COLORS.mtp; g.globalAlpha = 0.9; g.beginPath(); g.roundRect(px, py + (i ? 12 : 0), 6, 9, 2); g.fill(); } px += 8; if (t.dp > t.da) { g.fillStyle = COLORS.bad; g.fillRect(px - 8, py + 26, 6, 2); } });
     g.globalAlpha = 1;
@@ -470,7 +564,7 @@
       <p><b>Context.</b> The KV cache (K ${D.esc(m.cache.k_cache_dtype)}, V ${D.esc(m.cache.v_cache_dtype)}) is reserved for the full ${m.context_label} context at load and fills as the conversation grows.</p>
       <p><b>Runtime.</b> Splash-m1 reports requests, rates, latency, draft acceptance, prefix-cache use and its memory plan; the advanced-telemetry build adds per-verify-cycle speculative-decode detail. Router selections and PLE reads are not reported; those regions say so instead of drawing estimates.</p>
       <p><b>Privacy.</b> The view shows counts, ids and timings. It never shows token text, reasoning or tool arguments.</p>`;
-    renderActions(); renderRequests();
+    renderActions(); renderRequests(); renderHistory();
   }
   window.Visualizer = { mount, unmount };
 })();
