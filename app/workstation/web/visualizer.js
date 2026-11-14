@@ -15,6 +15,7 @@
     mode: "overview", focusLayer: 24, paused: false, playhead: -1,
     hits: [], ticks: [], tools: [], requests: [], heat: null, heatLayers: 48, heatMax: 1,
     pills: [], drafts: [], reads: [], lastTickAt: 0, replay: null, toolPulse: {}, activeTool: null,
+    dflash: null, dflashSince: 0, dflashPoll: 0,
   };
   const COLORS = { text: "#dbe3ee", muted: "#8593a6", faint: "#42505f", line: "#232c3a", panel: "#10151d", accent: "#5cc8ff", good: "#4fd695", warn: "#ffc857", bad: "#ff6b6b", ple: "#ffb454", mtp: "#7fd6a3", cyber: "#b98cff" };
   const TOOL_NODES = [["workspace", "Workspace", "files"], ["shell", "Shell", "commands"], ["browser", "Browser", "pages"], ["gui", "Computer use", "KimiCU"], ["vision", "Vision", "images"]];
@@ -22,7 +23,7 @@
   function tone() { const m = D.runningModel() || S.model; return { scope: "#5cc8ff", swift: "#ffb454", cyber: "#b98cff" }[m] || COLORS.accent; }
   function model() { const id = (V.replay && V.replay.model) || D.runningModel() || S.model; return D.modelOf(id); }
   /* What the model's backend reports. Activity a backend does not report is labelled as such, never drawn from guesses. */
-  function caps() { return (model().backend || {}).telemetry || { router: true, ple: true, mtp: true, requests: true }; }
+  function caps() { return (model().backend || {}).telemetry || { router: true, ple: true, mtp: true, requests: true, dflash: "none" }; }
   function backendName() { return "Splash-m1"; }
   function notReported(x, y, w, h, what) {
     const g = V.g; g.fillStyle = "rgba(16,21,29,.86)"; g.fillRect(x, y, w, h);
@@ -83,15 +84,44 @@
     refreshSessions();
     D.api("/api/heat").then((r) => { if (r.ok && r.layers.length) seedHeat(r.layers); });
     D.api("/api/recent").then((r) => { if (r.ok) r.events.forEach((e) => onEvent(e, true)); });
+    startDflashPoll();
     loop();
   }
-  function unmount() { /* keep state; the loop idles when the view is hidden */ }
+
+  /* DwarfStar advanced telemetry (ds2): poll /api/telemetry for per-verify-cycle speculative-decode events and feed
+   * the draft panel. Bounded: only the rolling accumulator and the synthetic ticks the pill animation already caps are
+   * kept. Runs only live (not a replay), only while a model with the dflash capability is running. */
+  function startDflashPoll() {
+    clearInterval(V.dflashPoll);
+    V.dflashPoll = setInterval(async () => {
+      if (V.replay || caps().dflash !== "cycle" || !D.runningModel()) return;
+      const r = await D.api("/api/telemetry?since=" + V.dflashSince).catch(() => null);
+      const batch = r && r.ok && r.telemetry;
+      if (!batch || !batch.events) return;
+      if (batch.dropped && V.dflash) V.dflash.dropped = (V.dflash.dropped || 0) + batch.dropped;
+      V.dflashSince = batch.next || V.dflashSince;
+      for (const e of batch.events) {
+        if (e.kind !== "decode_cycle") continue;
+        const d = V.dflash || (V.dflash = { proposed: 0, accepted: 0, rejected: 0, cycles: 0, tokens: 0, acceptance_pct: null, dropped: 0 });
+        d.cycles += 1; d.proposed += e.drafted; d.accepted += e.accepted;
+        d.rejected += Math.max(0, e.drafted - e.accepted); d.tokens += e.output;
+        d.acceptance_pct = d.proposed ? 100 * d.accepted / d.proposed : null;
+        d.lastCycle = { n: e.output, dp: e.drafted, da: e.accepted, ms: e.cycle_ms };
+        // Synthetic tick for the pill/"this cycle" animation the native path already draws.
+        V.ticks.push({ dflash: true, n: e.output, dp: e.drafted, da: e.accepted, ms: e.cycle_ms, seq: e.seq, t: Date.now() / 1000, pos: e.seq });
+        if (V.ticks.length > 1500) V.ticks.shift();
+        for (let i = 0; i < e.drafted; i++) V.drafts.push({ t0: performance.now() + i * 20, ok: i < e.accepted });
+        if (V.drafts.length > 240) V.drafts.splice(0, V.drafts.length - 240);
+      }
+    }, 250);
+  }
+  function unmount() { clearInterval(V.dflashPoll); V.dflashPoll = 0; /* keep state; the loop idles when hidden */ }
   function setPaused(paused) {
     V.paused = paused;
     if (!paused) { V.playhead = -1; if (V.replay) { V.replay = null; V.root.querySelector("#viz-session").value = ""; resetBuffers(); } }
     V.root.querySelector("#viz-pause").textContent = paused ? "Resume live" : "Pause";
   }
-  function resetBuffers() { V.ticks = []; V.tools = []; V.requests = []; V.heat = null; V.heatMax = 1; V.pills = []; V.drafts = []; }
+  function resetBuffers() { V.ticks = []; V.tools = []; V.requests = []; V.heat = null; V.heatMax = 1; V.pills = []; V.drafts = []; V.dflash = null; V.dflashSince = 0; }
   async function refreshSessions() {
     const r = await D.api("/api/sessions"); if (!r.ok) return;
     const select = V.root.querySelector("#viz-session");
@@ -187,7 +217,7 @@
     const scrub = V.root.querySelector("#viz-scrub");
     scrub.max = Math.max(0, V.ticks.length - 1);
     if (!V.paused) scrub.value = scrub.max;
-    V.root.querySelector("#viz-clock").textContent = tick ? (V.paused ? (V.replay ? "replay · " : "paused · ") : "live · ") + new Date(tick.t * 1000).toLocaleTimeString() + " · token " + tick.pos : (D.runningModel() ? "waiting for tokens" : "no model running");
+    V.root.querySelector("#viz-clock").textContent = tick ? (V.paused ? (V.replay ? "replay · " : "paused · ") : "live · ") + (tick.t ? new Date(tick.t * 1000).toLocaleTimeString() : "") + (tick.dflash ? " · cycle " + tick.seq : tick.pos != null ? " · token " + tick.pos : "") : (D.runningModel() ? "waiting for tokens" : "no model running");
     const live = S.live || {}, active = !V.paused && now - V.lastTickAt < 600;
     const colL = 14, wL = Math.max(190, W * 0.17), colM = colL + wL + 14, wM = Math.max(170, W * 0.15), colR = colM + wM + 14, wR = W - colR - 14;
     const top = 12, bottomH = 118, mainH = H - top - bottomH - 22;
@@ -310,16 +340,18 @@
     // MTP lane
     const mx = px + pw - mtpW, mw = mtpW;
     g.strokeStyle = COLORS.mtp; g.fillStyle = "rgba(127,214,163,.06)"; g.lineWidth = 1; g.beginPath(); g.roundRect(mx, py + 4, mw, ph - 8, 7); g.fill(); g.stroke();
-    label(caps().mtp ? "MTP HEAD" : "SPECULATIVE DRAFT", mx + 10, py + 12, COLORS.mtp, "600 10px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", mw - 20);
+    const dflashCycle = caps().dflash === "cycle";
+    label(caps().mtp ? "MTP HEAD" : "DFlash2 DRAFT", mx + 10, py + 12, COLORS.mtp, "600 10px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", mw - 20);
     label(caps().mtp ? "drafts next tokens;" : "a draft model proposes;", mx + 10, py + 28, COLORS.faint, "10px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", mw - 20);
-    label("trunk verifies them", mx + 10, py + 41, COLORS.faint, "10px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", mw - 20);
-    if (!caps().mtp) {
+    label("the target verifies them", mx + 10, py + 41, COLORS.faint, "10px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", mw - 20);
+    if (!caps().mtp && !dflashCycle) {
       label((model().backend || {}).speculative || "draft model", mx + 10, py + 64, COLORS.text, "600 11px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", mw - 20);
       label("per-cycle drafts not", mx + 10, py + 84, COLORS.faint, "10px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", mw - 20);
       label("reported by " + backendName(), mx + 10, py + 97, COLORS.faint, "10px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", mw - 20);
       return;
     }
-    const mtp = (S.live && S.live.mtp) || {};
+    // Native: cumulative MTP from the live hub. ds2 Splash: the per-verify-cycle DFlash2 ring (V.dflash).
+    const mtp = caps().mtp ? ((S.live && S.live.mtp) || {}) : (V.dflash || {});
     label(mtp.acceptance_pct != null ? mtp.acceptance_pct.toFixed(1) + " %" : "–", mx + 10, py + 64, COLORS.text, "600 20px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif");
     label("accepted", mx + 10, py + 90, COLORS.muted, "10px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif");
     label((mtp.accepted || 0) + " / " + (mtp.proposed || 0) + " drafts", mx + 10, py + 106, COLORS.faint, "10px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif");
@@ -385,7 +417,7 @@
     let px = x + 12; const py = y + 34;
     recent.forEach((t) => { for (let i = 0; i < t.n; i++) { g.fillStyle = i === 0 ? COLORS.text : COLORS.mtp; g.globalAlpha = 0.9; g.beginPath(); g.roundRect(px, py + (i ? 12 : 0), 6, 9, 2); g.fill(); } px += 8; if (t.dp > t.da) { g.fillStyle = COLORS.bad; g.fillRect(px - 8, py + 26, 6, 2); } });
     g.globalAlpha = 1;
-    label(caps().mtp ? "white: verified by the trunk · green: accepted MTP draft · red mark: rejected draft" : "token counts only · draft acceptance is reported as a total in the Standard view", x + 12, y + 70, COLORS.faint, "10px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", outW - 24);
+    label(caps().mtp || caps().dflash === "cycle" ? "green: accepted draft token · red mark: rejected draft" : "token counts only · draft acceptance is reported as a total in the Standard view", x + 12, y + 70, COLORS.faint, "10px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", outW - 24);
     const rates = live.rates || {}, request = live.request || {};
     label((rates.live_tps != null ? rates.live_tps.toFixed(1) : rates.decode_tps != null ? rates.decode_tps.toFixed(1) : "–") + " tok/s", x + 12, y + 88, COLORS.text, "600 15px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif");
     label((request.phase || "IDLE").replace("_", " ") + " · " + (request.generated || 0) + " generated · prompt " + (request.prompt_tokens || 0).toLocaleString(), x + 110, y + 92, COLORS.muted, "10.5px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", outW - 122);
@@ -434,9 +466,9 @@
     V.root.querySelector("#viz-facts").innerHTML = `
       <p><b>Storage.</b> Only the PLE n-gram table (${D.esc(m.quantization.ple.split(",")[0])}, ${(S.catalog.details[m.id].assets.ple.bytes / 2 ** 30).toFixed(1)} GiB) is read from disk while the model runs, a few rows per token. The model, the draft model and the vision projector are loaded into unified memory at start and stay resident; experts are <b>not</b> streamed from disk.</p>
       <p><b>Processor.</b> Each token passes through 48 layers; in every layer a router picks 10 of 512 experts. Splash-m1 does not report those selections, so the grid stays empty for live sessions. Sessions recorded with the earlier native runtime replay the selections they recorded.</p>
-      <p><b>Draft.</b> A small DFlash2 draft model proposes tokens and the model verifies them; only verified tokens are output. Splash reports acceptance as a running total (see Standard view), not per verification cycle.</p>
+      <p><b>Draft.</b> A small DFlash2 draft model proposes tokens and the target verifies them; only verified tokens are output. On the advanced-telemetry runtime this panel shows the proposals, acceptances and rejections per verify cycle, read from a bounded ring in the engine that adds no inference cost; the Standard view keeps the running total.</p>
       <p><b>Context.</b> The KV cache (K ${D.esc(m.cache.k_cache_dtype)}, V ${D.esc(m.cache.v_cache_dtype)}) is reserved for the full ${m.context_label} context at load and fills as the conversation grows.</p>
-      <p><b>Runtime.</b> Splash-m1 reports requests, rates, latency, draft acceptance, prefix-cache use and its memory plan. Router selections, PLE reads and per-cycle drafts are not reported; those regions say so instead of drawing estimates.</p>
+      <p><b>Runtime.</b> Splash-m1 reports requests, rates, latency, draft acceptance, prefix-cache use and its memory plan; the advanced-telemetry build adds per-verify-cycle speculative-decode detail. Router selections and PLE reads are not reported; those regions say so instead of drawing estimates.</p>
       <p><b>Privacy.</b> The view shows counts, ids and timings. It never shows token text, reasoning or tool arguments.</p>`;
     renderActions(); renderRequests();
   }

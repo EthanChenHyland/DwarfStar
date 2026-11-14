@@ -26,7 +26,35 @@
         "install/gguf.py": "9fe875393cfb3e1b651db8f56dd2bef971f08535fda4fadfae1dd34229b7575e"
       },
       "directory": "Runtimes/splash-m1-1.6.1-ds1",
-      "home": "runtime/splash-home"
+      "home": "runtime/splash-home",
+      "advanced_telemetry": {
+        "dflash": "none"
+      }
+    },
+    "splash-m1-1.6.1-ds2-telemetry": {
+      "kind": "splash",
+      "description": "Splash-m1 1.6.1-m1 with DwarfStar's patches (backends/splash-m1/patches) plus the advanced-telemetry patches (backends/splash-m1/patches/telemetry): a bounded in-engine ring and a GET /telemetry endpoint that reports per-verify-cycle speculative-decode activity the aggregate /status cannot. Observational only; disabled unless polled; ds1 behaviour and output are unchanged (measured OFF/ADVANCED overhead within run-to-run noise). Built by scripts/backends/build_splash.sh --telemetry. directory is relative to the assets root, home to the data root.",
+      "release": "1.6.1-m1-ds2-telemetry",
+      "source": "https://github.com/paperniuk/splash/tree/1.6.1-m1 + backends/splash-m1/patches/0001-qwen2-tokenizer-profile.patch, 0002-exact-bf16-planes.patch + backends/splash-m1/patches/telemetry/0003a-telemetry-ring-header.patch, 0003b-telemetry-engine.patch, 0004-telemetry-server.patch",
+      "tarball_sha256": "fde8cc8fff55f7706d38078638e2d518bfa1a229cd8d4b12869ca2de39facbcd",
+      "binary_sha256": "7c8d51c633174af914c6f9d59ac2bca4bd76063f6b5fefcd755dbe6073aa598b",
+      "shader_sha256": {
+        "splash.metallib": "694abdf2802e69f4215211b82da53588b4cdaefee14c059a69a69a13a79991d1",
+        "host-step.metallib": "8e177c753e2051cd8a31c79bf031b3fae8daf04f5564ced9fc37db064bdfe51a"
+      },
+      "adapter_sha256": {
+        "install/gguf.py": "9fe875393cfb3e1b651db8f56dd2bef971f08535fda4fadfae1dd34229b7575e"
+      },
+      "directory": "Runtimes/splash-m1-1.6.1-ds2-telemetry",
+      "home": "runtime/splash-home",
+      "advanced_telemetry": {
+        "dflash": "cycle",
+        "routing": "unavailable",
+        "experts": "unavailable",
+        "ple": "aggregate_via_status",
+        "kv": "via_status",
+        "memory": "via_status"
+      }
     }
   }
 }

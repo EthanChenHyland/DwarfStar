@@ -22,6 +22,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -509,6 +510,22 @@ class Service:
 
                         return self._json({**service.state(detail="detail" in query), "answering_chats": answering,
                                            "permissions": permission_status()})
+                    if path == "/api/telemetry":
+                        # Proxy the running model server's /telemetry (ds2 advanced build). Non-critical: any failure
+                        # returns an empty batch and never affects serving. Resolves the running model's endpoint.
+                        since = int(query.get("since", ["0"])[0] or 0)
+                        state = service.state()
+                        running = (state.get("running_models") or [None])[0]
+                        endpoint = (state["models"].get(running) or {}).get("endpoint") if running else None
+                        telemetry = {}
+                        if endpoint:
+                            url = endpoint.removesuffix("/v1") + f"/telemetry?since={since}&level=2"
+                            try:
+                                with urllib.request.urlopen(url, timeout=2) as stream:
+                                    telemetry = json.load(stream)
+                            except Exception:
+                                telemetry = {}
+                        return self._json({"ok": True, "telemetry": telemetry})
                     if path == "/api/live":
                         return self._json({"ok": True, "live": service.hub.snapshot(), "system": service.system_cache})
                     if path == "/api/heat":
