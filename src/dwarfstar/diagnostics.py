@@ -134,9 +134,11 @@ def _installation() -> list[dict]:
         level = "error" if missing or wrong else "ok"
         detail = "both split parts, the draft model and the vision projector present at catalog sizes" if level == "ok" else \
             "; ".join(filter(None, [("missing: " + ", ".join(missing)) if missing else "", ("wrong size: " + ", ".join(wrong)) if wrong else ""]))
+        expected = [f"{safe_path(paths.ASSETS / model['assets'][role]['path'])} ({model['assets'][role]['bytes']:,} bytes)"
+                    for role in missing + wrong]
         rows.append(_check("Models", model["display_name"], level, detail,
-                           f"Place the files named in config/models/{model_id}.json under {safe_path(paths.ASSETS)}. "
-                           "DwarfStar never downloads models on its own."))
+                           "Place " + "; ".join(expected) + f" (catalog: config/models/{model_id}.json, which also lists each "
+                           "file's SHA-256). DwarfStar never downloads models on its own."))
         drift = instance.check(model_id)
         rows.append(_check("Models", f"{model['short_name']} generated configuration", "ok" if not drift else "error",
                            "matches the catalog" if not drift else "; ".join(drift), f"Run `bin/dwarfstar generate --model {model_id}`."))

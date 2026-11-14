@@ -116,6 +116,19 @@ def _write_state(**fields) -> None:
     temporary.replace(STATE_FILE)
 
 
+def setup_document() -> dict:
+    """The doctor's checks for the first-run wizard. It reads only: every fix is a command or a file the user places,
+    and nothing is downloaded. `first_run` asks the Workstation to open the wizard on its own: setup was never
+    finished here and there are no chats yet (an installation already in use is not interrupted)."""
+    from dwarfstar import chats, diagnostics
+
+    rows = diagnostics.checks()
+    completed = _read_state().get("setup_completed")
+    has_chats = chats.ROOT.is_dir() and any(chats.ROOT.glob("c*/chat.json"))
+    return {"ok": True, "checks": rows, "summary": diagnostics.summary(rows), "completed": completed,
+            "first_run": not completed and not has_chats}
+
+
 def stored_selection() -> str:
     selected = _read_state().get("selected_profile")
     try:
@@ -622,10 +635,7 @@ class Service:
                     if path == "/api/diagnostics":
                         return self._json(service.diagnostics_document())
                     if path == "/api/setup":
-                        from dwarfstar import diagnostics
-
-                        rows = diagnostics.checks()
-                        return self._json({"ok": True, "checks": rows, "summary": diagnostics.summary(rows)})
+                        return self._json(setup_document())
                     if path.startswith("/api/"):
                         return self._json({"ok": False, "error": "Unknown endpoint"}, 404)
                     return self._static(path)
@@ -659,6 +669,9 @@ class Service:
 
                         result = {"ok": True, "permissions": approval_policy.set_mode(str(body.get("mode", "")), body.get("confirm"))}
                         lifecycle_log({"event": "approval_mode", "mode": body.get("mode")})
+                    elif path == "/api/setup/complete":
+                        _write_state(setup_completed=time.time())
+                        result = setup_document()
                     elif path == "/api/diagnostics/reconcile":
                         result = {"ok": True, **service.recover()}
                     elif path == "/api/chats":

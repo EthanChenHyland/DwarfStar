@@ -41,7 +41,7 @@ python3 app/workstation/build.py --bundle "$HOME/Applications/DwarfStar Workstat
 bin/dwarfstar zed --apply                  # seven Zed agent entries
 ```
 
-`config/local.json` is optional; every root has a default. Model weights are not in this repository.
+`config/local.json` is optional; every root has a default. Model weights are not in this repository. On a new installation the Workstation opens a **Setup** guide over the same checks as `doctor`, one area at a time, with the command or file path for each fix; it changes nothing and downloads nothing. A fresh installation starts in Workspace Auto tool approval.
 
 ## Documentation
 
