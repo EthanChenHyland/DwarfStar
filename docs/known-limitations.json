@@ -6,7 +6,7 @@
    "swift",
    "cyber"
   ],
-  "text": "Splash-m1 reports requests, time to first token, inter-token latency, prefill/decode rates, draft acceptance (as a running total), prefix-cache hits, context, memory and thermal state, but not per-token router selections, expert activity or PLE reads; the Live and Visualizer views label those regions 'not reported' instead of estimating them. Sessions recorded earlier on the retired native runtime replay their router and PLE detail."
+  "text": "Splash-m1 reports requests, time to first token, inter-token latency, prefill/decode rates, draft acceptance, prefix-cache hits, context, memory and thermal state via /status, and the production ds2 build adds a bounded per-verify-cycle speculative-decode channel (GET /telemetry) with no measurable inference cost. Per-token router selections, expert utilization and PLE reads are still not reported: Splash's per-step MoE scratch is GPU-private and reused across layers, so capturing it would need host copies on the decode hot path, which the zero-overhead rule forbids. The Advanced view labels those regions 'not reported' instead of estimating them. See docs/ADVANCED-TELEMETRY.md."
  },
  {
   "id": "splash-dflash-draft",

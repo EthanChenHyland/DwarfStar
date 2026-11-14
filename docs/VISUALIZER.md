@@ -10,13 +10,13 @@ The Advanced view of **Live** (`app/workstation/web/visualizer.js`) draws a data
 | Unified memory | controller memory plan + system sampler | Resident model, INT8 K/V cache, buffers, projector, the Metal limit and live wired memory. |
 | Processor / layers | runtime `tick` events (native replays only) | 48 layers; per-token router selections (10 of 512 experts per layer). **Splash does not report router selections**, so the grid stays empty with a label for live sessions; sessions recorded with the earlier native runtime replay the selections they captured. |
 | Routing heatmap | hub router heat | Cumulative expert selection counts per layer — native replays only, for the same reason. |
-| Speculative draft | `/status` draft totals | A DFlash2 draft model proposes tokens; the target verifies them. Splash reports acceptance as a running total (shown in the Standard view), not per verification cycle, so the per-cycle panel says so. |
+| Speculative draft (DFlash2) | `/telemetry` ring (ds2) | A DFlash2 draft model proposes tokens; the target verifies them. The production ds2 runtime reports proposals, acceptances and rejections **per verify cycle** from a bounded in-engine ring, which this panel draws (rolling acceptance, the current cycle, animated accepted/rejected draft tokens). The Standard view keeps the running total. See docs/ADVANCED-TELEMETRY.md. |
 | Context | request and `/status` | Context occupancy against the model's 128K. |
 | Prefix cache | `/status` cache | Tokens reused and the hit rate. |
 | Action timeline | agent tool events | Workspace, shell, browser, computer use (KimiCU) and vision actions with duration and result. Names and categories only. |
 | Requests | request events / replay | Splash does not send per-request events, so for a live session the latest request (from the agent's receipt) and Splash's running totals are in the Standard view; replays of native sessions show one row per request. |
 
-**Backend capabilities.** The catalog tells the page what the backend reports. Splash-m1 reports requests, rates, latency, draft acceptance, prefix-cache use and its memory plan — not per-token router, expert or PLE activity — so those regions are labelled "not reported by the Splash-m1 backend"; nothing is drawn from estimates.
+**Backend capabilities.** The catalog tells the page what the backend reports. The production ds2 runtime reports requests, rates, latency, draft acceptance (aggregate and **per verify cycle**), prefix-cache use and its memory plan — not per-token router, expert or PLE activity — so those regions are labelled "not reported by the Splash-m1 backend"; nothing is drawn from estimates. The advanced-telemetry channel is documented in docs/ADVANCED-TELEMETRY.md.
 
 Never shown: prompt text, reasoning, tool arguments, file contents or credentials. This is a compute and action view, not a transcript.
 
