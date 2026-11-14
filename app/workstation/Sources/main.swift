@@ -123,7 +123,7 @@ if CommandLine.arguments.count >= 3 && CommandLine.arguments[1] == "--headless" 
     exit(process.terminationStatus)
 }
 
-final class Shell: NSObject, NSApplicationDelegate, WKNavigationDelegate, NSWindowDelegate {
+final class Shell: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKDownloadDelegate, NSWindowDelegate {
     var window: NSWindow!
     var web: WKWebView!
     var service: Process?
@@ -239,12 +239,41 @@ final class Shell: NSObject, NSApplicationDelegate, WKNavigationDelegate, NSWind
 
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         // The window shows only the local service. Anything else opens in the user's browser.
-        if let url = action.request.url, let host = url.host, host != "127.0.0.1", host != "localhost" {
+        if let url = action.request.url, url.scheme != "blob", let host = url.host, host != "127.0.0.1", host != "localhost" {
             NSWorkspace.shared.open(url)
             decisionHandler(.cancel)
             return
         }
-        decisionHandler(.allow)
+        // A link marked `download` (chat export, a request's telemetry) is saved, never shown in place of the app.
+        decisionHandler(action.shouldPerformDownload ? .download : .allow)
+    }
+
+    func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse, decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+        let disposition = (response.response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Disposition") ?? ""
+        decisionHandler(disposition.lowercased().hasPrefix("attachment") || !response.canShowMIMEType ? .download : .allow)
+    }
+
+    func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) { download.delegate = self }
+    func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) { download.delegate = self }
+
+    /// The user picks where a download goes; nothing is written without the Save panel.
+    func download(_ download: WKDownload, decideDestinationUsing response: URLResponse, suggestedFilename: String,
+                  completionHandler: @escaping (URL?) -> Void) {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = suggestedFilename
+        panel.directoryURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+        panel.beginSheetModal(for: window) { choice in
+            guard choice == .OK, let url = panel.url else { return completionHandler(nil) }
+            try? FileManager.default.removeItem(at: url)  // the panel already confirmed replacing it
+            completionHandler(url)
+        }
+    }
+
+    func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
+        let alert = NSAlert()
+        alert.messageText = "The download did not finish"
+        alert.informativeText = error.localizedDescription
+        alert.beginSheetModal(for: window)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
