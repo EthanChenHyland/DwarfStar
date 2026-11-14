@@ -4,7 +4,7 @@ DwarfStar is reproducible in four layers: **code → runtime build → model ass
 
 ## 1. Code
 
-The repository (`~/Developer/DwarfStar`) holds the catalog, service, agent, UI, tests, patches and docs. The production baseline hashes every tracked file; `bin/dwarfstar seal --verify` checks the working tree against the sealed baseline.
+The repository (`~/Developer/DwarfStar`) holds the catalog, service, agent, UI, tests, patches and docs. The production baseline hashes every tracked file; `bin/dwarfstar seal --verify` checks the working tree against the seal and names any file that differs (product differences fail it; documentation and tests are notes).
 
 ## 2. Runtime build
 

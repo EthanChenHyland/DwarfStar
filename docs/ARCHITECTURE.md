@@ -31,7 +31,7 @@ DwarfStar is one product with three models. Everything that is not a model fact 
 | Telemetry | `src/dwarfstar/telemetry/` | Fire-and-forget UDP events (port 8039) from runtime, controller and agent; the hub aggregates and streams them over SSE. Per-request Splash metrics are read from the server's `/status` on demand, and per-verify-cycle speculative-decode detail from the ds2 runtime's `/telemetry` ring (docs/ADVANCED-TELEMETRY.md). Reasoning text is never recorded. |
 | UI | `app/workstation/web/` | Chats, Run, Models, Live (with an Advanced view, the former Visualizer), Diagnostics and Settings. Benchmark data is engineering infrastructure (`research/`, `scripts/`), never a Workstation page. Plain JS, served only on loopback. |
 | Editor | `src/dwarfstar/zed.py` | Seven generated Zed entries, all `bin/dwarfstar-acp --profile <id>`. |
-| Seal | `src/dwarfstar/seal.py` | Production baseline (every tracked file hashed) and the compact seal checked by `dwarfstar seal --verify`. |
+| Seal | `src/dwarfstar/seal.py`, `src/dwarfstar/release_check.py` | Production baseline (every tracked file hashed) and the compact seal checked by `dwarfstar seal --verify` (product files fail it, documentation differences are notes); `dwarfstar release-check` before a tag. |
 
 ## One runtime policy
 

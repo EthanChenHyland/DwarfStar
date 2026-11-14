@@ -49,3 +49,15 @@ Never edit files under `<data>/instances/` by hand; they are generated.
 bin/dwarfstar seal            # write the production baseline and seal (after committing)
 bin/dwarfstar seal --verify   # seconds; add --hash-models to rehash every model file
 ```
+
+A seal (schema 2) binds content, not history: the git tree hash and a hash of the product files (code, configuration, launchers, app, agent and runtime patches), the pinned runtime hashes, the model manifest (every file's size and SHA-256), the generated configuration, the persistent data schemas and the Workstation executable. Commit, branch and tag are metadata, so the same tree on another commit verifies. Documentation, tests, CI and research evidence are hashed in the baseline too, but a difference there is a **note**, not a failure, so a report committed after sealing does not break the seal. Verify names each changed, added or removed file. Schema 1 seals (before 1.0.0) are still read, with the same product/notes split taken from their baseline; a seal from a newer DwarfStar is refused.
+
+## Releasing
+
+```bash
+bin/dwarfstar release-check   # no model is loaded; exit 1 if anything blocks a release
+```
+
+It checks a clean tree; the branch and an annotated `v<version>` tag at HEAD; that `pyproject.toml` and the package agree on the version; the production runtime's installed hashes against its pin; the model manifest; `doctor`; repository hygiene (no giant files, weights, secrets, home paths or chats); documentation links; that persistent data is at the current schemas; the seal (current schema, sealed at this tree, verifies); and the canonical roots. The order for a release: merge to `main`, `bin/dwarfstar seal` on the merge commit, `git tag -a v<version>`, `release-check` until it passes, push the tag, then a GitHub Release with the notes and known limitations (never model weights, backups or chats as assets).
+
+**Branch protection (recommended for a solo repository).** On GitHub: Settings → Branches → Add branch ruleset (or classic rule) for `main`: require a pull request before merging (approvals: 0, so you can merge your own), require the status checks `core`, `static` and `docs` from the CI workflow to pass and the branch to be up to date, block force pushes and deletions. Leave "include administrators" off if you need an emergency path.

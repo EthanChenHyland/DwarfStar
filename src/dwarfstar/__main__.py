@@ -9,6 +9,7 @@
     dwarfstar serve                        Workstation service: API, telemetry hub and user interface
     dwarfstar switch PROFILE               stop any other model, start the profile's model
     dwarfstar seal [--verify]              write or check the installation seal
+    dwarfstar release-check [--json]       is this checkout fit to tag and release (no model is loaded)
     dwarfstar backup [--out DIR]           chats, settings and provenance to DwarfStar-Backup-<UTC>.zip
     dwarfstar restore BACKUP [--apply]     validate and restore a backup (dry run without --apply)
     dwarfstar migrate [--apply]            bring persistent data to the current schema (dry run without --apply)
@@ -116,6 +117,11 @@ def main(argv: list[str] | None = None) -> int:
         from dwarfstar import service
 
         return service.main([command, *rest])
+
+    if command == "release-check":
+        from dwarfstar import release_check
+
+        return release_check.main(rest)
 
     if command == "seal":
         from dwarfstar import seal
