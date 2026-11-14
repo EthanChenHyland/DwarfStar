@@ -6,6 +6,7 @@ and writes ``research/benchmark-index.json``. Running it again on the same
 evidence reproduces the same file.
 
     dwarfstar bench-index [--evidence-root DIR] [--check]
+    dwarfstar bench-index --structure      check the committed index alone (no evidence tree needed: CI, clean clones)
 
 The evidence root defaults to ``<assets>/Manifests/evidence/legacy``, which keeps the reports of every earlier
 benchmark review under their original relative paths. A report that is missing is listed under ``missing`` and its
@@ -221,7 +222,35 @@ def production_validation(path: Path) -> list[dict]:
     return rows
 
 
+REQUIRED_ENTRY_KEYS = ("experiment", "date", "model", "profile", "task", "report")
+
+
+def structure_problems(index: dict) -> list[str]:
+    """What is wrong with a committed index on its own: schema, required fields, and no machine paths."""
+    problems = []
+    if index.get("schema") != 1:
+        problems.append(f"schema {index.get('schema')!r}, expected 1")
+    for key in ("sources", "missing", "highlights", "entries"):
+        if not isinstance(index.get(key), list):
+            problems.append(f"{key} is not a list")
+    for number, row in enumerate(index.get("entries") or []):
+        absent = [k for k in REQUIRED_ENTRY_KEYS if k not in row]
+        if absent:
+            problems.append(f"entry {number}: missing {absent}")
+        if str(row.get("report", "")).startswith("/"):
+            problems.append(f"entry {number}: report path is absolute")
+    if "/Users/" in json.dumps(index):
+        problems.append("the index contains a home-directory path")
+    return problems
+
+
 def main(argv: list[str]) -> int:
+    if "--structure" in argv:
+        index = json.loads(OUTPUT.read_text())
+        problems = structure_problems(index)
+        print(json.dumps({"ok": not problems, "entries": len(index.get("entries") or []), "problems": problems,
+                          "note": "structure only; reproducing the index needs the evidence tree (--check)"}))
+        return 0 if not problems else 1
     root = None
     if "--evidence-root" in argv:
         root = Path(argv[argv.index("--evidence-root") + 1])

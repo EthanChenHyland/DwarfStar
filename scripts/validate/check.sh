@@ -25,8 +25,16 @@ for model in catalog.models():
     print(model, 'generated configuration matches' if not problems else problems)
     assert not problems
 "
-echo "== benchmark index is reproducible"
-bin/dwarfstar bench-index --check
+echo "== benchmark index"
+if [ -d "$("$python" -B -c 'from dwarfstar.paths import EVIDENCE; print(EVIDENCE / "legacy")')" ]; then
+  bin/dwarfstar bench-index --check
+else
+  bin/dwarfstar bench-index --structure   # evidence is machine-local; a clean clone or CI checks the committed index
+fi
+echo "== repository hygiene (large files, weights, secrets, home paths, chats)"
+out="$("$python" -B scripts/validate/repo_hygiene.py)" || { echo "$out"; exit 1; }; echo "$out" | tail -1
+echo "== documentation links"
+out="$("$python" -B scripts/validate/doc_links.py)" || { echo "$out"; exit 1; }; echo "$out" | tail -1
 echo "== JavaScript and TypeScript syntax"
 for file in agent-tools/bin/*.mjs agent-tools/lib/*.mjs app/workstation/web/*.js; do node --check "$file"; done
 if [ -x "$HOME/.bun/bin/bun" ]; then
