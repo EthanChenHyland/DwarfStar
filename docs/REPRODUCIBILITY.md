@@ -49,12 +49,42 @@ The five roots default to standard macOS locations and are each overridable in `
 | CACHE | `DWARFSTAR_CACHE` / `cache_root` | `~/Library/Caches/DwarfStar` |
 | LOGS | `DWARFSTAR_LOGS` / `logs_root` | `~/Library/Logs/DwarfStar` |
 
+## Machine prerequisites
+
+DwarfStar does not install these; `bin/dwarfstar doctor` checks each.
+
+| Prerequisite | Version | Why |
+|---|---|---|
+| Apple Silicon Mac, macOS | 26.4+ (validated: M1 Max, 64 GiB, macOS 26.5.2) | Splash-m1's Metal kernels and the Metal working-set limit |
+| Python | 3.10+ (Homebrew 3.12 used) | the CLI, service and tests; standard library only |
+| Node | 22.15+ | agent tools (`agent-tools/`) |
+| Bun | 1.x | runs the Oh My Pi agent |
+| Oh My Pi agent | **18.4.5** (`bun add -g @oh-my-pi/pi-coding-agent@18.4.5`) | the ACP agent; `bin/dwarfstar agent-patch --apply` applies DwarfStar's approval scoping to exactly this version |
+| Xcode command-line tools | — | `swiftc` for the Workstation app |
+| Xcode 26.6 + Metal toolchain | — | only to rebuild the runtime |
+| Zed, KimiCU | optional | editor integration; computer-use tool |
+
+## The agent approval patch
+
+The approval presets (Workspace Auto, Full Auto) are enforced partly inside the Oh My Pi agent bundle. The edits are four exact snippet replacements recorded in `acp/omp-patch.json`, applied by `bin/dwarfstar agent-patch --apply` (`--revert` restores the stock snippets). They act only under the environment `bin/dwarfstar-acp` sets; other uses of the agent behave as upstream. The command writes `permission-runtime.json` in the data root, and the launcher refuses an agent bundle that no longer matches it, so an agent update cannot silently drop the scoping. Before 2026-11 this patch existed only on the development machine, and its Full Auto path imported a file from the retired `~/local-ai-setup` tree; `agent-patch --apply` migrates such a bundle.
+
+## A second checkout
+
+A clean clone (for testing, or a second working copy) must not share the installed data: give it its own data, cache and logs roots, and a free service and telemetry port, while it may read the canonical assets root:
+
+```bash
+export DWARFSTAR_DATA=/tmp/ds/data DWARFSTAR_CACHE=/tmp/ds/cache DWARFSTAR_LOGS=/tmp/ds/logs DWARFSTAR_TELEMETRY_PORT=8049
+bin/dwarfstar generate && bin/dwarfstar doctor && bin/dwarfstar serve --port 8048
+```
+
+Only one model runs at a time on a machine (ports 8030–8032), whichever checkout starts it.
+
 ## Rebuilding on another machine
 
-1. Clone the repository; copy `config/local.example.json` to `config/local.json` (only machine-local tool paths need setting; the roots default).
+1. Install the machine prerequisites (above) and clone the repository. `config/local.json` is optional: the roots default to the standard locations.
 2. Place the model files under `<assets>/Models/<Model>/` with the catalog's names; `bin/dwarfstar assets --hash` verifies them.
 3. Build the runtime (step 2 above) into `<assets>/Runtimes/splash-m1-1.6.1-ds1/`; the controller checks its hashes.
-4. `bin/dwarfstar generate`, `scripts/validate/check.sh`, then build the app (`docs/WORKSTATION.md`) and `bin/dwarfstar zed --apply`.
+4. `bin/dwarfstar generate`, `bin/dwarfstar agent-patch --apply`, `scripts/validate/check.sh`, then build the app (`docs/WORKSTATION.md`) and `bin/dwarfstar zed --apply`.
 5. `bin/dwarfstar doctor` should report every check ready; `bin/dwarfstar seal --verify` should pass.
 
 ## Evidence index

@@ -47,7 +47,9 @@ def main(argv: list[str] | None = None) -> None:
     namespace = selected.get("state_namespace", args.profile)
     selected_mode = approval_mode()
 
-    permission_runtime = json.loads((paths.SHARED_CONFIG / "permission-runtime.json").read_text())
+    record = paths.SHARED_CONFIG / "permission-runtime.json"
+    assert record.is_file(), "The agent's approval scoping is not installed: run `bin/dwarfstar agent-patch --apply`."
+    permission_runtime = json.loads(record.read_text())
     cli_digest = hashlib.sha256(paths.omp().resolve().read_bytes()).hexdigest()
     assert cli_digest == permission_runtime["cli_sha256"], (
         "The agent CLI changed: verify the scoped ACP permission patch before enabling workspace-safe auto approval."
@@ -98,6 +100,8 @@ def main(argv: list[str] | None = None) -> None:
     env["DWARFSTAR_TELEMETRY"] = "1" if telemetry.enabled() else "0"
     env["DWARFSTAR_APPROVAL_MODE"] = selected_mode
     env["DWARFSTAR_PERMISSION_POLICY"] = "full-auto-v1" if selected_mode == "full_auto" else "workspace-safe-v1"
+    # The patched agent answers Full Auto permission requests through this checkout's policy module (acp/omp-patch.json p3).
+    env["DWARFSTAR_PERMISSION_MODULE"] = str(CODE / "acp" / "permission-policy.ts")
     env["V7_SEATBELT_ACTIVE"] = "0" if selected_mode == "full_auto" else "1"
     env["DWARFSTAR_PERMISSION_JOURNAL"] = str(ROOT / "state/permissions" / ("client-" + str(os.getpid()) + ".jsonl"))
     latency = ROOT / "state/latency" / ("client-" + str(os.getpid()) + ".jsonl")

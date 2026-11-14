@@ -1,0 +1,42 @@
+{
+ "schema": 1,
+ "package": "@oh-my-pi/pi-coding-agent",
+ "version": "18.4.5",
+ "file": "dist/cli.js",
+ "name": "dwarfstar-omp-permission-v3",
+ "purpose": "Scope DwarfStar's tool-approval presets inside the Oh My Pi ACP agent: Workspace Auto never auto-allows or caches bash approvals (p0-p2); Full Auto answers ACP permission requests through acp/permission-policy.ts, located by DWARFSTAR_PERMISSION_MODULE, which only bin/dwarfstar-acp sets (p3). Without DwarfStar's environment variables the agent behaves exactly as upstream.",
+ "stock_sha256": "5e44c4ee54753fa166d04449a24ad42ec5d988f4a15a02dabaafa46d44a92868",
+ "patched_sha256": "02073da16535a45b6de7d4db833cd506a5132f28a99bb9f003c3cc0ba4fe00dd",
+ "stock_sha256_source": "reference only: the development machine's bundle before DwarfStar's edits (matches the 2026-10-21 record); a fresh install may differ elsewhere in the file, which is why state is judged by the snippets",
+ "legacy": [
+  {
+   "name": "dwarfstar-omp-permission-v2",
+   "sha256": "bc624ee0812e6aa9cbd0829fe2f22cb7e313e3cf66465fb4f483765e1cf0bcf7",
+   "note": "p3 imported acp/permission-policy.ts from the retired ~/local-ai-setup tree (broken after the 2026-11 storage consolidation); {home} is the user's home directory",
+   "p3_new": "requestPermission(e){if(process.env.DWARFSTAR_APPROVAL_MODE===\"full_auto\")return import(\"{home}/local-ai-setup/challengers/dwarfstar-paperniuk/acp/permission-policy.ts\").then(m=>m.answerPermission(e));return this.#e.request(\"session/request_permission\",e)}"
+  }
+ ],
+ "patches": [
+  {
+   "id": "p0",
+   "old": "if(!n||n===\"allow\")return e}return new Proxy(e,{get:(s,n)=>{if(n!==\"execute\")return s[n];return async(o,r,i,a,l)=>{let u=H$s(s.name,r);",
+   "new": "if((!n||n===\"allow\")&&!(process.env.DWARFSTAR_PERMISSION_POLICY===\"workspace-safe-v1\"&&e.name===\"bash\"))return e}return new Proxy(e,{get:(s,n)=>{if(n!==\"execute\")return s[n];return async(o,r,i,a,l)=>{if(process.env.DWARFSTAR_PERMISSION_POLICY===\"workspace-safe-v1\"&&s.name===\"bash\"&&this.#ne()){let policy=BA.get(this.#e.settings)[s.name],decision=typeof s.approval===\"function\"?s.approval(r):s.approval;if(policy===\"deny\"||decision?.policy===\"deny\")throw new U(\"Tool call denied by configured policy\");if(decision?.policy===\"allow\"&&policy!==\"prompt\")return await s.execute(o,r,i,a,l)}let u=H$s(s.name,r);"
+  },
+  {
+   "id": "p1",
+   "old": "f=this.#W.get(u.cacheKey);if(f===\"allow_always\")",
+   "new": "f=process.env.DWARFSTAR_PERMISSION_POLICY===\"workspace-safe-v1\"&&s.name===\"bash\"?void 0:this.#W.get(u.cacheKey);if(f===\"allow_always\")"
+  },
+  {
+   "id": "p2",
+   "old": "},UHt,i).then((b)=>({kind:\"permission\",outcome:b}))",
+   "new": "},process.env.DWARFSTAR_PERMISSION_POLICY===\"workspace-safe-v1\"&&s.name===\"bash\"?UHt.filter(option=>option.kind===\"allow_once\"||option.kind===\"reject_once\"):UHt,i).then((b)=>({kind:\"permission\",outcome:b}))"
+  },
+  {
+   "id": "p3",
+   "old": "requestPermission(e){return this.#e.request(\"session/request_permission\",e)}",
+   "new": "requestPermission(e){if(process.env.DWARFSTAR_APPROVAL_MODE===\"full_auto\"&&process.env.DWARFSTAR_PERMISSION_MODULE)return import(process.env.DWARFSTAR_PERMISSION_MODULE).then(m=>m.answerPermission(e));return this.#e.request(\"session/request_permission\",e)}"
+  }
+ ],
+ "patched_sha256_source": "reference only: that bundle after these edits"
+}

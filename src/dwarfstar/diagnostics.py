@@ -81,6 +81,17 @@ def _software() -> list[dict]:
     vendor = CODE / "acp" / "vendor" / "omp"
     rows.append(_check("Software", "Agent sources link", "ok" if vendor.exists() else "error", safe_path(vendor),
                        "Run `bin/dwarfstar generate` to link acp/vendor/omp to the installed agent."))
+    from dwarfstar import agent_patch
+
+    try:
+        patch = agent_patch.report()
+    except (OSError, ValueError) as error:
+        patch = {"ok": False, "state": f"unreadable ({type(error).__name__})", "runtime_record": "unknown"}
+    detail = {"patched": "scoped approval edits applied", "stock": "stock bundle: approval presets not scoped",
+              "legacy": "older DwarfStar edits (imports a retired path)", "missing": "agent bundle not found"}.get(patch["state"], patch["state"])
+    rows.append(_check("Software", "Agent approval scoping", "ok" if patch["ok"] else "error",
+                       f"{detail}; permission record {patch.get('runtime_record')}",
+                       "Run `bin/dwarfstar agent-patch --apply` (exact, reversible edits from acp/omp-patch.json; nothing is downloaded)."))
     swiftc = shutil.which("swiftc")
     rows.append(_check("Software", "Swift compiler", "ok" if swiftc else "warn", swiftc or "not found",
                        "Install the Xcode command-line tools (`xcode-select --install`) to build the Workstation app."))
@@ -143,7 +154,9 @@ def _integrations() -> list[dict]:
         try:
             entries = zed.check()
             rows.append(_check("Integrations", "Zed agent entries", "ok" if entries["ok"] else "warn",
-                               "seven entries match the catalog" if entries["ok"] else f"missing {entries['missing']}, obsolete {entries['obsolete']}",
+                               "seven entries match the catalog" if entries["ok"] else
+                               (f"missing {entries['missing']}, obsolete {entries['obsolete']}" if entries["missing"] or entries["obsolete"]
+                                else f"{len(entries['different'])} entries launch a different checkout or profile settings"),
                                "Run `bin/dwarfstar zed --apply` (unrelated Zed settings are kept)."))
         except (OSError, ValueError):
             rows.append(_check("Integrations", "Zed agent entries", "warn", "no Zed settings file", "Open Zed once, then run `bin/dwarfstar zed --apply`."))

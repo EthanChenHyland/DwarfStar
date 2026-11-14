@@ -9,6 +9,7 @@
     dwarfstar serve                        Workstation service: API, telemetry hub and user interface
     dwarfstar switch PROFILE               stop any other model, start the profile's model
     dwarfstar seal [--verify]              write or check the installation seal
+    dwarfstar agent-patch [--apply|--revert]  scoped approval edits to the Oh My Pi agent (from acp/omp-patch.json)
     dwarfstar doctor                       installation and health checks with remedies
     dwarfstar storage [--json]            disk use by category, unreferenced large files (--empty-chat-trash [--apply])
     dwarfstar cache status | clean        recreatable cache; clean is a dry run unless --apply (--browsers to include them)
@@ -63,6 +64,12 @@ def main(argv: list[str] | None = None) -> int:
 
         selected = _option(rest, "--model")
         results = []
+        if command == "generate":
+            # A fresh install has none of the per-user roots yet; create them so doctor does not block on a mkdir.
+            from dwarfstar import paths
+
+            for root in (paths.DATA, paths.CACHE, paths.LOGS):
+                root.mkdir(parents=True, exist_ok=True)
         for model_id in [selected] if selected else list(catalog.models()):
             if command == "generate":
                 results.append(instance.generate(model_id))
@@ -117,6 +124,10 @@ def main(argv: list[str] | None = None) -> int:
 
         return diagnostics.main(rest)
 
+    if command == "agent-patch":
+        from dwarfstar import agent_patch
+
+        return agent_patch.main(rest)
     if command in ("storage", "cache"):
         from dwarfstar import storage
 

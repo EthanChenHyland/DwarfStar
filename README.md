@@ -27,16 +27,21 @@ Seven profiles, one per model × reasoning effort. Context is a model property; 
 
 ## Quick start
 
+Machine prerequisites (not installed by DwarfStar): Apple Silicon with macOS 26.4+ (validated: M1 Max, 64 GiB), Homebrew Python 3.12, Node 22.15+, Bun, the Oh My Pi agent **18.4.5** (`bun add -g @oh-my-pi/pi-coding-agent@18.4.5`), and the Xcode command-line tools; Zed and KimiCU are optional. Models and the runtime live outside the repository (docs/REPRODUCIBILITY.md).
+
 ```bash
-cp config/local.example.json config/local.json      # point data_root at your model data
-(cd agent-tools && npm ci)
-bin/dwarfstar generate && bin/dwarfstar assets
-scripts/validate/check.sh                            # no model is loaded
+git clone https://github.com/EthanChenHyland/DwarfStar.git ~/Developer/DwarfStar && cd ~/Developer/DwarfStar
+(cd agent-tools && npm ci)                 # then `npx playwright install chromium` for the agent's browser
+bin/dwarfstar generate                     # creates the per-user roots, instance configuration and agent links
+bin/dwarfstar agent-patch --apply          # scopes the approval presets inside the agent (exact, reversible)
+bin/dwarfstar assets                       # verifies models under ~/AI/DwarfStar against the catalog
+bin/dwarfstar doctor                       # every check should be ready
+scripts/validate/check.sh                  # no model is loaded
 python3 app/workstation/build.py --bundle "$HOME/Applications/DwarfStar Workstation.app"
-bin/dwarfstar zed --apply                            # seven Zed agent entries
+bin/dwarfstar zed --apply                  # seven Zed agent entries
 ```
 
-Model weights are not in this repository. See [docs/REPRODUCIBILITY.md](docs/REPRODUCIBILITY.md).
+`config/local.json` is optional; every root has a default. Model weights are not in this repository.
 
 ## Documentation
 
