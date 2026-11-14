@@ -8,17 +8,17 @@ The repository (`~/Developer/DwarfStar`) holds the catalog, service, agent, UI, 
 
 ## 2. Runtime build
 
-One runtime for every model, pinned in `config/runtimes.json`:
+One runtime for every model, pinned in `config/runtimes.json`. Production is the advanced-telemetry build **ds2** (`splash-m1-1.6.1-ds2-telemetry`); ds1 is kept as the rollback (docs/ADVANCED-TELEMETRY.md):
 
 | Item | Pin |
 |---|---|
 | Source | [paperniuk/splash](https://github.com/paperniuk/splash) tag `1.6.1-m1`, commit `5312c54` |
-| Patches | `backends/splash-m1/patches/0001-qwen2-tokenizer-profile.patch`, `0002-exact-bf16-planes.patch` |
-| Engine | SHA-256 `75bc297f…` |
+| Patches | `0001-qwen2-tokenizer-profile`, `0002-exact-bf16-planes`, and for ds2 `telemetry/0003a`, `0003b`, `0004` |
+| Engine (ds2) | SHA-256 `7c8d51c6…` (ds1 engine `75bc297f…`) |
 | Shaders | `splash.metallib` `694abdf2…`, `host-step.metallib` `8e177c75…` |
 | Metadata adapter | `install/gguf.py` `9fe87539…` |
 
-Build it with `scripts/backends/build_splash.sh` (Xcode 26.6 + its Metal toolchain, `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`); the result goes to `<assets>/Runtimes/splash-m1-1.6.1-ds1/`. The controller refuses to start a runtime whose engine, shader or adapter hashes do not match the pin. The retired native ds4 runtime is not built or installed; `docs/NATIVE-RETIREMENT.md` says how to reconstruct it from git for comparison.
+Build it with `scripts/backends/build_splash.sh … --telemetry` for ds2 (omit `--telemetry` for ds1) (Xcode 26.6 + its Metal toolchain, `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`); the result goes to `<assets>/Runtimes/splash-m1-1.6.1-ds1/`. The controller refuses to start a runtime whose engine, shader or adapter hashes do not match the pin. The retired native ds4 runtime is not built or installed; `docs/NATIVE-RETIREMENT.md` says how to reconstruct it from git for comparison.
 
 ## 3. Model assets
 

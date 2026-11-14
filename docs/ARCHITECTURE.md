@@ -28,7 +28,7 @@ DwarfStar is one product with three models. Everything that is not a model fact 
 | Lifecycle | `src/dwarfstar/service.py` (`Lifecycle`) | Switches profiles: stops the other model, waits for its port, checks memory, starts, health-checks. Same-model effort changes do not restart. |
 | Agent | `src/dwarfstar/agent.py`, `acp/`, `agent-tools/` | One ACP launcher for every profile. Full Auto, workspace/shell/browser/KimiCU/vision tools, compaction and recovery are identical across profiles; only the provider file (model + effort) differs. |
 | Runtime | `backends/splash-m1/` → `<assets>/Runtimes/splash-m1-1.6.1-ds1/` | Splash-m1 1.6.1-m1 built from source with DwarfStar's two patches (`scripts/backends/build_splash.sh`), pinned by engine, shader and metadata-adapter hashes. It is the one runtime for every model. The retired native ds4 build is not installed; its source and behaviour are recoverable from git (`docs/BACKENDS.md`). |
-| Telemetry | `src/dwarfstar/telemetry/` | Fire-and-forget UDP events (port 8039) from runtime, controller and agent; the hub aggregates and streams them over SSE. Per-request Splash metrics are read from the server's `/status` on demand. Reasoning text is never recorded. |
+| Telemetry | `src/dwarfstar/telemetry/` | Fire-and-forget UDP events (port 8039) from runtime, controller and agent; the hub aggregates and streams them over SSE. Per-request Splash metrics are read from the server's `/status` on demand, and per-verify-cycle speculative-decode detail from the ds2 runtime's `/telemetry` ring (docs/ADVANCED-TELEMETRY.md). Reasoning text is never recorded. |
 | UI | `app/workstation/web/` | Chats, Run, Models, Live (with an Advanced view, the former Visualizer), Diagnostics and Settings. Benchmark data is engineering infrastructure (`research/`, `scripts/`), never a Workstation page. Plain JS, served only on loopback. |
 | Editor | `src/dwarfstar/zed.py` | Seven generated Zed entries, all `bin/dwarfstar-acp --profile <id>`. |
 | Seal | `src/dwarfstar/seal.py` | Production baseline (every tracked file hashed) and the compact seal checked by `dwarfstar seal --verify`. |
@@ -39,7 +39,7 @@ DwarfStar is one product with three models. Everything that is not a model fact 
 
 | Common to every model | Value |
 |---|---|
-| Runtime build | `splash-m1-1.6.1-ds1` for every model |
+| Runtime build | `splash-m1-1.6.1-ds2-telemetry` for every model (ds1 is the rollback) |
 | Context / output ceiling | 131072 / 81920 tokens |
 | K / V cache | INT8 / INT8 (Splash-m1) |
 | Prefill chunk | 2048 tokens |

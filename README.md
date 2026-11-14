@@ -50,6 +50,7 @@ Model weights are not in this repository. See [docs/REPRODUCIBILITY.md](docs/REP
 | [Benchmarks](docs/BENCHMARKS.md) | Results, how they were measured, the production validation |
 | [Backends](docs/BACKENDS.md) | Splash-m1, the one runtime; native and MLX as history; prefill chunk and prefix reuse |
 | [Draft models](docs/DRAFT-MODELS.md) | The shared DFlash2 draft, measured acceptance per model, whether a matched draft is worth building |
+| [Advanced telemetry](docs/ADVANCED-TELEMETRY.md) | The ds2 runtime's per-cycle DFlash channel: what it reports, overhead, build identity, rollback |
 | [Native retirement](docs/NATIVE-RETIREMENT.md) | How native was retired and how to reconstruct it from Git |
 | [Cyber conversion](docs/CYBER-CONVERSION.md) | NVFP4 → DwarfStar, fidelity and limitations |
 | [Storage](docs/STORAGE.md) | The five roots, disk use, the 2026-11 consolidation, safe cleanup |

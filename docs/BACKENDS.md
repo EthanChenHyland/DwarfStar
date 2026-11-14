@@ -1,14 +1,16 @@
 # Inference backends
 
-DwarfStar is the product: Workstation, catalog, lifecycle, chats, compaction, ACP tools, memory admission, telemetry and diagnostics. The inference backend under each model is an implementation detail. **One runtime is in production for every model: Splash-m1 (`splash-m1-1.6.1-ds1`).** This page records which backends were evaluated on the reference machine (M1 Max, 24-core GPU, 64 GiB, macOS 26.5.2), why Splash won, and how the retired native behaviour is recovered.
+DwarfStar is the product: Workstation, catalog, lifecycle, chats, compaction, ACP tools, memory admission, telemetry and diagnostics. The inference backend under each model is an implementation detail. **One runtime is in production for every model: Splash-m1 (`splash-m1-1.6.1-ds2-telemetry`), the advanced-telemetry build; `splash-m1-1.6.1-ds1` is kept as the rollback.** This page records which backends were evaluated on the reference machine (M1 Max, 24-core GPU, 64 GiB, macOS 26.5.2), why Splash won, and how the retired native behaviour is recovered.
 
 ## Candidates
 
 | Backend | What it is | Status on this Mac |
 |---|---|---|
-| **Splash-m1** 1.6.1-m1 (`splash-m1-1.6.1-ds1`) | [paperniuk/splash](https://github.com/paperniuk/splash), the M1/M2 port of [incoai/splash](https://github.com/incoai/splash): Apple7 Metal kernels, DFlash2 speculative decoding, INT8 KV, prefix cache, PLE row streaming. Built from source with DwarfStar's two patches. Needs macOS 26.4+ | **Production, every model.** Installed at `<assets>/Runtimes/splash-m1-1.6.1-ds1/` |
+| **Splash-m1** 1.6.1-m1 (`ds2-telemetry` in production, `ds1` as rollback) | [paperniuk/splash](https://github.com/paperniuk/splash), the M1/M2 port of [incoai/splash](https://github.com/incoai/splash): Apple7 Metal kernels, DFlash2 speculative decoding, INT8 KV, prefix cache, PLE row streaming. Built from source with DwarfStar's two patches. Needs macOS 26.4+ | **Production, every model.** Installed at `<assets>/Runtimes/splash-m1-1.6.1-ds1/` |
 | **Native** (`ds4-unified`) | The pinned Paperniuk ds4 Metal runtime with DwarfStar's tokenizer adapter and telemetry hooks | **Retired.** Not installed; was production until 2026-11-13. Its source and behaviour are recoverable from git (below) |
 | **Native oMLX / MLX** | [jundot/omlx](https://github.com/jundot/omlx) on MLX | Not installed: not practical for these models (below) |
+
+The production build ds2 adds a bounded per-verify-cycle speculative-decode telemetry channel at no measurable inference cost; ds1 is byte-identical except for that engine change (docs/ADVANCED-TELEMETRY.md).
 
 ## Compatibility per model
 
