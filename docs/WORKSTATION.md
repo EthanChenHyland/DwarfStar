@@ -31,7 +31,11 @@ Changing reasoning on a running model never restarts it; the effort is carried p
 | **Workspace Auto** | Tools run without asking inside the session's workspace folder, in a macOS sandbox; anything outside it is refused. |
 | **Full Auto** | Every tool call runs without asking, outside any sandbox. Turning it on always needs an explicit confirmation. |
 
-The preset is installation-wide (`<data>/config/approval.json`), applies to new agent sessions and the next chat turn, and is the same for every profile. It is set on the **Settings** page or from the Run page's agent panel. macOS's own permission prompts (screen recording, accessibility) are separate and always apply.
+The preset is installation-wide (`<data>/config/approval.json`), applies to new agent sessions and the next chat turn, and is the same for every profile, in the Workstation and in Zed (both start the agent through `bin/dwarfstar-acp`). It is set on the **Settings** page or from the Run page's agent panel, and the composer and Run page always show it. A fresh installation starts in Workspace Auto; Full Auto is entered only by an explicit confirmation and then stays until it is changed, across restarts. A Workspace Auto agent cannot raise its own preset: its sandbox can write only inside its workspace (not `approval.json`) and cannot connect to the Workstation service's port. macOS's own permission prompts (screen recording, accessibility) are separate and always apply.
+
+### Local service exposure
+
+The Workstation service (port 8038, `DWARFSTAR_HTTP_PORT`), the telemetry event socket (UDP 8039, `DWARFSTAR_TELEMETRY_PORT`) and every model server bind `127.0.0.1` only, so nothing is reachable from the network. The service also answers only requests whose `Host` is `127.0.0.1` or `localhost` and, when a browser sends an `Origin`, only a loopback origin, which stops another web page (or a DNS-rebinding name) from driving it. Static files are served only from the app's web folder. `/api/telemetry` carries numeric timings and counters and no prompt or reply text. Copied diagnostics write home paths as `~`.
 
 ## Shared conversations with Zed
 

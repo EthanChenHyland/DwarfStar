@@ -215,8 +215,10 @@ def _answering_chats() -> list:
     """Chats the running Workstation service is answering; restoring under them could lose a reply."""
     import urllib.request
 
+    from dwarfstar.telemetry import http_port
+
     try:
-        with urllib.request.urlopen("http://127.0.0.1:8038/api/state", timeout=2) as stream:
+        with urllib.request.urlopen(f"http://127.0.0.1:{http_port()}/api/state", timeout=2) as stream:
             return json.load(stream).get("answering_chats") or []
     except Exception:
         return []

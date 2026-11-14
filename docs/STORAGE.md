@@ -65,6 +65,8 @@ A backup holds every chat record, the agent session files that are the canonical
 
 Persistent records carry a schema version; `bin/dwarfstar migrate` (dry run) and `--apply` bring them current, backing up each original to `<data>/backups/migrations/` first. The service migrates at start.
 
+**Running an older checkout on migrated data.** Builds before 1.0.0 read only chat schema 1 and report "Unsupported chat schema 2" for a migrated chat. Schema 2 adds only defaults those builds applied by omission, so going back is lossless: stop the Workstation service, run `bin/dwarfstar migrate --rollback --apply` from this release (it backs up first), then start the older build. This release migrates the records forward again when its service next starts. A service that was already running when the data was migrated is still the old code: restart it.
+
 ## External Swift BF16 backup
 
 Swift's BF16 rebuild source is an **external, off-SSD backup**. It is **not mounted** and is intentionally **not copied onto the internal disk** — production does not need it (Swift runs from its GSQ-RCO Q2_0 files like the others). It exists only to reconstruct Swift's weights from scratch if ever required. Do not mount, copy or delete it as part of routine work.

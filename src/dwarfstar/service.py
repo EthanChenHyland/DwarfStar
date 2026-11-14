@@ -383,6 +383,36 @@ def state_document(lifecycle: Lifecycle | None = None, detail: bool = False) -> 
 # ------------------------------------------------------------------------ http
 
 
+LOOPBACK_NAMES = ("127.0.0.1", "localhost")
+
+
+def loopback_request(host: str | None, origin: str | None) -> bool:
+    """Whether a request may use the API. The server binds 127.0.0.1, so only this Mac can connect; the Host check stops a
+    DNS-rebinding name, and the Origin check stops another web page (a browser always sends Origin on a cross-site or
+    POST request). An opaque origin ("null": sandboxed frames, file pages) is refused."""
+    name = (host or "").rsplit(":", 1)[0] if not (host or "").startswith("[") else ""
+    if name not in LOOPBACK_NAMES:
+        return False
+    if origin is None:
+        return True
+    try:
+        parsed = urlsplit(origin)
+    except ValueError:
+        return False
+    return parsed.scheme in ("http", "https") and parsed.hostname in LOOPBACK_NAMES
+
+
+def static_target(path: str, root: Path | None = None) -> Path | None:
+    """The file under the web folder a URL path names, or None (missing, a folder, or anywhere outside it)."""
+    base = (root or WEB_ROOT).resolve()
+    relative = "index.html" if path in ("", "/") else path.lstrip("/")
+    try:
+        target = (base / relative).resolve()
+    except (OSError, ValueError):
+        return None
+    return target if target.is_relative_to(base) and target.is_file() else None
+
+
 class Service:
     def __init__(self, port: int, serve_ui: bool = True):
         from dwarfstar.telemetry.hub import Hub
@@ -492,10 +522,7 @@ class Service:
                 self._send(status, json.dumps(value).encode())
 
             def _local_only(self) -> bool:
-                host = (self.headers.get("Host") or "").split(":")[0]
-                origin = self.headers.get("Origin")
-                allowed = ("127.0.0.1", "localhost")
-                if host not in allowed or (origin and urlsplit(origin).hostname not in allowed):
+                if not loopback_request(self.headers.get("Host"), self.headers.get("Origin")):
                     self._json({"ok": False, "error": "Loopback requests only"}, 403)
                     return False
                 return True
@@ -724,9 +751,8 @@ class Service:
             def _static(self, path: str) -> None:
                 if not service.serve_ui:
                     return self._json({"ok": False, "error": "User interface disabled"}, 404)
-                relative = "index.html" if path in ("", "/") else path.lstrip("/")
-                target = (WEB_ROOT / relative).resolve()
-                if not target.is_relative_to(WEB_ROOT.resolve()) or not target.is_file():
+                target = static_target(path)
+                if target is None:
                     return self._json({"ok": False, "error": "Not found"}, 404)
                 content_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
                 self._send(200, target.read_bytes(), content_type + ("; charset=utf-8" if content_type.startswith("text/") or content_type.endswith(("javascript", "json")) else ""))
@@ -785,7 +811,7 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="dwarfstar")
     parser.add_argument("command", choices=["serve", "switch", "stop-all", "state"])
     parser.add_argument("profile", nargs="?")
-    parser.add_argument("--port", type=int, default=int(os.environ.get("DWARFSTAR_HTTP_PORT", telemetry.DEFAULT_HTTP_PORT)))
+    parser.add_argument("--port", type=int, default=telemetry.http_port())
     parser.add_argument("--no-ui", action="store_true")
     args = parser.parse_args(argv)
     if args.command == "serve":

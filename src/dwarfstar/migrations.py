@@ -3,6 +3,9 @@
     dwarfstar migrate            report what would change (dry run)
     dwarfstar migrate --apply    migrate; the original of every changed file is copied first to
                                  <data>/backups/migrations/<UTC time>/, keeping its path under the data root
+    dwarfstar migrate --rollback [--apply]
+                                 write the versions the previous release reads (ROLLBACK), before running an
+                                 older checkout on this data; this release migrates them forward again at start
 
 Each store records its version under "schema". A migration is a pure function from one version of a record to the
 next; MIGRATIONS lists them in order, so version N reaches CURRENT by applying N->N+1 repeatedly. Migrations are
@@ -88,6 +91,19 @@ CURRENT = {kind: len(steps) for kind, steps in MIGRATIONS.items()}
 CURRENT["approval"] = 1  # born versioned
 
 
+# The versions the previous release (before 1.0.0's versioning) reads, where they differ from CURRENT. Its chat reader
+# accepts only schema 1. Chat schema 2 adds only defaults that reader already applied by omission, so going back is
+# the version number alone and loses nothing.
+ROLLBACK = {"chat": 1}
+
+
+def _chat_2_to_1(record: dict) -> dict:
+    return {**record, "schema": 1}
+
+
+DOWNGRADES: dict[str, dict[int, Migration]] = {"chat": {2: _chat_2_to_1}}  # version N -> N-1
+
+
 class SchemaError(ValueError):
     pass
 
@@ -114,6 +130,15 @@ def migrate_record(kind: str, record: dict) -> tuple[dict, bool]:
     return current, current != record
 
 
+def rollback_record(kind: str, record: dict) -> tuple[dict, bool]:
+    """The record at the version the previous release reads (bringing an older one to CURRENT first)."""
+    current, _ = migrate_record(kind, record)
+    target = ROLLBACK.get(kind, CURRENT[kind])
+    while version(current) > target:
+        current = DOWNGRADES[kind][version(current)](current)
+    return current, current != record
+
+
 def stores(root: Path | None = None) -> list[tuple[str, Path]]:
     data = root or paths.DATA
     found = [("chat", path) for path in sorted((data / "chats").glob("c*/chat.json"))]
@@ -132,22 +157,24 @@ def _write_atomic(path: Path, value: dict) -> None:
     temporary.replace(path)
 
 
-def migrate_all(apply: bool = False, root: Path | None = None) -> dict:
+def migrate_all(apply: bool = False, root: Path | None = None, rollback: bool = False) -> dict:
     data = root or paths.DATA
+    convert = rollback_record if rollback else migrate_record
+    targets = {**CURRENT, **ROLLBACK} if rollback else CURRENT
     changed, current, errors = [], 0, []
     backup = None
     for kind, path in stores(data):
         relative = str(path.relative_to(data))
         try:
             record = json.loads(path.read_text())
-            migrated, differs = migrate_record(kind, record)
+            migrated, differs = convert(kind, record)
         except (OSError, ValueError) as error:
             errors.append({"file": relative, "error": str(error)})
             continue
         if not differs:
             current += 1
             continue
-        changed.append({"file": relative, "kind": kind, "from": version(record), "to": CURRENT[kind]})
+        changed.append({"file": relative, "kind": kind, "from": version(record), "to": targets[kind]})
         if apply:
             if backup is None:
                 backup = (paths.BACKUPS if root is None else data / "backups") / "migrations" / time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
@@ -157,15 +184,17 @@ def migrate_all(apply: bool = False, root: Path | None = None) -> dict:
             _write_atomic(path, migrated)
             if json.loads(path.read_text()) != migrated:  # what is on disk is what was meant
                 raise RuntimeError(f"{relative}: the migrated record did not read back")
-    return {"ok": not errors, "applied": apply, "changed": changed, "current": current, "errors": errors,
-            "backup": str(backup) if backup else None, "versions": CURRENT}
+    return {"ok": not errors, "applied": apply, "rollback": rollback, "changed": changed, "current": current,
+            "errors": errors, "backup": str(backup) if backup else None, "versions": targets}
 
 
 def main(argv: list[str]) -> int:
-    result = migrate_all(apply="--apply" in argv)
+    result = migrate_all(apply="--apply" in argv, rollback="--rollback" in argv)
     print(json.dumps(result, indent=1))
     if not result["applied"] and result["changed"]:
-        print("dry run: nothing written; add --apply to migrate (originals are backed up first)")
+        print("dry run: nothing written; add --apply to write (originals are backed up first)")
+    if result["applied"] and result["rollback"]:
+        print("rolled back: stop this release's service before starting an older one (it migrates forward at start)")
     return 0 if result["ok"] else 1
 
 

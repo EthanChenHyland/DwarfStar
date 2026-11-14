@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT.parent / "src"))
 sys.path.insert(0, str(ROOT))
 from policy.sandbox import policy, check_workspace as strict_check_workspace
-from dwarfstar import catalog, paths as ds_paths
+from dwarfstar import catalog, paths as ds_paths, telemetry
 from dwarfstar.approval_policy import mode
 
 # cache/ and state/ are links into the local data root; sandbox rules need the real locations.
@@ -98,6 +98,10 @@ def tooling_policy(workspace, read_extra=()):
         rules += "(deny file-read* file-write* (subpath " + json.dumps(str(Path.home() / path)) + "))\n"
     rules += '(deny file-read* file-write* (subpath "/Library/Keychains"))\n'
     rules += '(deny process-exec (literal "/usr/bin/security") (literal "/opt/homebrew/bin/brew"))\n'
+    # The Workstation service controls approval mode, models and chats. A sandboxed agent must not reach it,
+    # or a Workspace Auto chat could switch the installation to Full Auto. Later rules win in seatbelt.
+    for port in sorted({telemetry.DEFAULT_HTTP_PORT, telemetry.http_port()}):
+        rules += '(deny network-outbound (remote tcp "localhost:' + str(int(port)) + '"))\n'
     return rules
 
 

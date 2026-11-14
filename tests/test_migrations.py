@@ -119,6 +119,19 @@ class StoreMigrationTests(unittest.TestCase):
         self.assertEqual(broken.read_text(), "{not json")
         self.assertEqual(json.loads(future.read_text())["schema"], 99)
 
+    def test_rollback_writes_what_the_previous_release_reads_and_comes_back_losslessly(self):
+        migrations.migrate_all(apply=True, root=self.data)
+        forward = {p: json.loads(p.read_text()) for p in (self.data / "chats").glob("c*/chat.json")}
+        result = migrations.migrate_all(apply=True, root=self.data, rollback=True)
+        self.assertTrue(result["ok"])
+        self.assertEqual(len(result["changed"]), 5)
+        for path, record in forward.items():
+            back = json.loads(path.read_text())
+            self.assertEqual(back["schema"], 1)  # the previous release's reader accepts exactly schema 1
+            self.assertEqual({k: v for k, v in back.items() if k != "schema"}, {k: v for k, v in record.items() if k != "schema"})
+        migrations.migrate_all(apply=True, root=self.data)
+        self.assertEqual({p: json.loads(p.read_text()) for p in forward}, forward)
+
     def test_chat_store_reads_migrated_fixtures(self):
         with mock.patch.object(chats, "ROOT", self.data / "chats"):
             rows = chats.list_chats(archived=None)

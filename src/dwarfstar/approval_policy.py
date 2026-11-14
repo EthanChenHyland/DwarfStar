@@ -19,10 +19,15 @@ DESCRIPTIONS = {
 }
 
 
+# A fresh installation (no approval.json) runs in Workspace Auto. Full Auto is only ever entered through set_mode with
+# its explicit confirmation, and that choice persists in approval.json; a restart never changes it.
+DEFAULT_MODE = "safe_auto"
+
+
 def mode(value=None):
     selected = value or os.environ.get("DWARFSTAR_APPROVAL_MODE")
     if selected is None:
-        selected = json.loads(CONFIG.read_text()).get("approval_mode") if CONFIG.exists() else "full_auto"
+        selected = json.loads(CONFIG.read_text()).get("approval_mode") if CONFIG.exists() else DEFAULT_MODE
     if selected not in MODES:
         raise ValueError("Invalid DwarfStar approval mode")
     return selected
