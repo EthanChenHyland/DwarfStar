@@ -43,6 +43,8 @@ Branch `release/hardening-v1`, based on the ds2 experiment tip `09a6d91` (PR #2,
     - the setup guide was offered; the fresh approval mode was Workspace Auto; a foreign Host and a foreign Origin POST both got 403; path traversal got 404;
     - migrate (nothing to migrate), backup, and `release-check`. The only release blocker was the seal, as expected, since it is re-sealed after the merge.
 
+    - **Tiny Scope smoke** from the clean clone's own service and temp data roots: Scope LOW loaded in 55 s and answered "17 + 25" with `42`. The ds2 ring returned 10 decode cycles (52 drafted, 31 accepted, 0 dropped), with numeric fields only. Shared-session discovery found 18 Zed threads, 10 of them with session files. The model was then stopped and its port freed.
+
     I did not run `zed --apply`, so your Zed settings were left untouched. The run used a local clone rather than a GitHub clone, because of the push block in item 3.
 
 ## Data
