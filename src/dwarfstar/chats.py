@@ -38,7 +38,7 @@ from pathlib import Path
 from dwarfstar import catalog, migrations, shared_sessions
 from dwarfstar.paths import CODE, DATA
 
-SCHEMA = 2  # see migrations.py: version 2 names every field; older records are migrated
+SCHEMA = 3  # see migrations.py: version 2 names every field, 3 adds the folder; older records are migrated
 ROOT = DATA / "chats"
 ID_PATTERN = re.compile(r"^c\d{14}-[0-9a-f]{6}$")
 TURN_TIMEOUT_S = 3600
@@ -92,6 +92,7 @@ def new_record(profile_id: str, now: float | None = None) -> dict:
         "pinned": False,
         "starred": False,
         "tags": [],
+        "folder": None,
         "messages": [],
     }
 
@@ -188,11 +189,19 @@ def summary(record: dict) -> dict:
     return {k: record[k] for k in ("id", "title", "created", "updated", "archived", "profile", "model", "reasoning", "context")} | {
         "messages": len(record["messages"]), "preview": (last or {}).get("text", "")[:140], "pinned": bool(record.get("pinned")),
         "starred": bool(record.get("starred")), "tags": list(record.get("tags") or []), "forked_from": record.get("forked_from"),
-        "shared": bool(record.get("shared"))}
+        "shared": bool(record.get("shared")), "folder": record.get("folder")}
 
 
-def list_chats(query: str | None = None, archived: bool | None = False, tag: str | None = None, starred: bool = False) -> list[dict]:
-    """Pinned chats first, then most recently updated. Search covers titles, tags and message text."""
+def list_chats(query: str | None = None, archived: bool | None = False, tag: str | None = None, starred: bool = False,
+               folder: str | None = None) -> list[dict]:
+    """Pinned chats first, then most recently updated. Search covers titles, tags and message text. `folder` is a folder
+    id (its subfolders' chats included) or "unfiled"; a chat whose folder no longer exists counts as unfiled."""
+    known = {f["id"] for f in load_folders()}
+    scope = None
+    if folder == "unfiled":
+        scope = {None}
+    elif folder:
+        scope = folder_descendants(folder)
     rows = []
     for path in ROOT.glob("c*/chat.json"):
         try:
@@ -204,6 +213,8 @@ def list_chats(query: str | None = None, archived: bool | None = False, tag: str
         if tag and tag not in (record.get("tags") or []):
             continue
         if starred and not record.get("starred"):
+            continue
+        if scope is not None and (record.get("folder") if record.get("folder") in known else None) not in scope:
             continue
         if query:
             needle = query.lower()
@@ -252,6 +263,7 @@ def fork(chat_id: str, upto: int | None = None, keep_messages: bool = True) -> d
     copied and handed to the agent as context on the fork's first turn; the original chat is untouched."""
     source = get(chat_id)
     record = new_record(source["profile"])
+    record["folder"] = source.get("folder")  # a fork stays in its original's folder
     if keep_messages:
         record["tags"] = list(source.get("tags") or [])
         messages = [m for m in source["messages"][:upto] if m["role"] in ("user", "assistant")]
@@ -305,14 +317,20 @@ def export(chat_id: str, fmt: str) -> tuple[str, str, str]:
     return f"{stem}.md", "text/markdown; charset=utf-8", "\n".join(out) + "\n"
 
 
-def bulk(chat_ids: list, action: str, confirm: str = "") -> dict:
-    """Archive, unarchive or delete several chats. Deleting needs the confirmation text "delete N chats"."""
+def bulk(chat_ids: list, action: str, confirm: str = "", folder: str | None = None) -> dict:
+    """Archive, unarchive, move to a folder (None: Unfiled) or delete several chats. Deleting needs the confirmation
+    text "delete N chats"."""
     ids = [str(i) for i in chat_ids][:500]
+    if action == "move" and folder is not None:
+        _folder(folder)  # the folder must exist before anything changes
     for chat_id in ids:
         get(chat_id)  # every id must exist before anything changes
     if action in ("archive", "unarchive"):
         for chat_id in ids:
             set_archived(chat_id, action == "archive")
+    elif action == "move":
+        for chat_id in ids:
+            set_folder(chat_id, folder)
     elif action == "delete":
         expected = f"delete {len(ids)} chat{'s' if len(ids) != 1 else ''}"
         if confirm != expected:
@@ -322,6 +340,148 @@ def bulk(chat_ids: list, action: str, confirm: str = "") -> dict:
     else:
         raise ChatError("Unknown bulk action")
     return {"ok": True, "action": action, "chats": ids}
+
+
+# ------------------------------------------------------------------- folders
+# Folders are organizational metadata only: a chat holds a folder id. Moving a chat never touches its agent session,
+# workspace, transcript, model or timestamps, so a Zed-linked chat resumes exactly as before. Two levels at most
+# (Projects / DwarfStar). Deleting a folder never deletes a chat: its chats become Unfiled.
+
+FOLDER_SCHEMA = 1
+FOLDER_DEPTH = 2
+FOLDER_NAME = re.compile(r"^[^/\n\r\t]{1,40}$")
+
+
+def _folders_file() -> Path:
+    return ROOT / "folders.json"
+
+
+def load_folders() -> list[dict]:
+    try:
+        value = json.loads(_folders_file().read_text())
+    except (OSError, ValueError):
+        return []
+    value, _ = migrations.migrate_record("folders", value)
+    return [f for f in value.get("folders", []) if isinstance(f, dict) and f.get("id")]
+
+
+def _save_folders(folders: list[dict]) -> None:
+    path = _folders_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps({"schema": FOLDER_SCHEMA, "folders": folders}, indent=1, ensure_ascii=False) + "\n")
+    os.chmod(temporary, 0o600)
+    temporary.replace(path)
+
+
+def _folder(folder_id: str, folders: list[dict] | None = None) -> dict:
+    found = next((f for f in (folders if folders is not None else load_folders()) if f["id"] == folder_id), None)
+    if found is None:
+        raise ChatError("Unknown folder")
+    return found
+
+
+def _folder_name(name) -> str:
+    name = " ".join(str(name or "").split())
+    if not FOLDER_NAME.match(name):
+        raise ChatError("A folder name is 1-40 characters, without /")
+    return name
+
+
+def folder_descendants(folder_id: str, folders: list[dict] | None = None) -> set:
+    folders = folders if folders is not None else load_folders()
+    found, frontier = {folder_id}, [folder_id]
+    while frontier:
+        parent = frontier.pop()
+        for f in folders:
+            if f.get("parent") == parent and f["id"] not in found:
+                found.add(f["id"])
+                frontier.append(f["id"])
+    return found
+
+
+def folder_path(folder_id: str | None, folders: list[dict] | None = None) -> str | None:
+    folders = folders if folders is not None else load_folders()
+    names, current = [], next((f for f in folders if f["id"] == folder_id), None)
+    while current is not None and len(names) <= FOLDER_DEPTH:
+        names.append(current["name"])
+        current = next((f for f in folders if f["id"] == current.get("parent")), None)
+    return " / ".join(reversed(names)) or None
+
+
+def create_folder(name, parent: str | None = None) -> dict:
+    folders = load_folders()
+    name = _folder_name(name)
+    if parent is not None:
+        if _folder(parent, folders).get("parent") is not None:
+            raise ChatError(f"Folders nest {FOLDER_DEPTH} levels deep at most")
+    if any(f["name"].lower() == name.lower() and f.get("parent") == parent for f in folders):
+        raise ChatError("A folder with that name is already here")
+    folder = {"id": "f" + secrets.token_hex(4), "name": name, "parent": parent, "created": time.time()}
+    _save_folders(folders + [folder])
+    return folder
+
+
+def rename_folder(folder_id: str, name) -> dict:
+    folders = load_folders()
+    folder, name = _folder(folder_id, folders), _folder_name(name)
+    if any(f["id"] != folder_id and f["name"].lower() == name.lower() and f.get("parent") == folder.get("parent") for f in folders):
+        raise ChatError("A folder with that name is already here")
+    folder["name"] = name
+    _save_folders(folders)
+    return folder
+
+
+def delete_folder(folder_id: str, subfolders: bool = False) -> dict:
+    """Remove a folder (and, only when asked, its subfolders). Every chat in them, archived ones included, becomes
+    Unfiled; no chat is deleted."""
+    folders = load_folders()
+    _folder(folder_id, folders)
+    doomed = folder_descendants(folder_id, folders)
+    if len(doomed) > 1 and not subfolders:
+        raise ChatError(f"This folder has {len(doomed) - 1} subfolder{'s' if len(doomed) > 2 else ''}; delete them too, or move them first")
+    unfiled = []
+    for path in ROOT.glob("c*/chat.json"):
+        try:
+            record = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if record.get("folder") in doomed:
+            moved = get(record["id"])
+            moved["folder"] = None
+            _write(moved)
+            unfiled.append(record["id"])
+    _save_folders([f for f in folders if f["id"] not in doomed])
+    return {"ok": True, "deleted": sorted(doomed), "unfiled": sorted(unfiled)}
+
+
+def set_folder(chat_id: str, folder_id: str | None) -> dict:
+    """Move a chat to a folder (None: Unfiled). Organizational only: the chat keeps its place in Recent."""
+    if folder_id is not None:
+        _folder(folder_id)
+    record = get(chat_id)
+    record["folder"] = folder_id
+    return _write(record)
+
+
+def folder_tree() -> dict:
+    """Folders with their active (unarchived) chat counts, own and including subfolders, plus the Unfiled count."""
+    folders = load_folders()
+    known = {f["id"] for f in folders}
+    counts: dict = {}
+    for path in ROOT.glob("c*/chat.json"):
+        try:
+            record = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if record.get("archived"):
+            continue
+        key = record.get("folder") if record.get("folder") in known else None
+        counts[key] = counts.get(key, 0) + 1
+    rows = [{**f, "chats": counts.get(f["id"], 0), "total": sum(counts.get(i, 0) for i in folder_descendants(f["id"], folders)),
+             "path": folder_path(f["id"], folders)} for f in folders]
+    rows.sort(key=lambda f: (f["path"] or "").lower())
+    return {"folders": rows, "unfiled": counts.get(None, 0), "depth": FOLDER_DEPTH}
 
 
 def rename(chat_id: str, title: str) -> dict:
@@ -350,6 +510,32 @@ def delete(chat_id: str, confirm: str) -> dict:
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(source), str(target))
     return {"ok": True, "deleted": chat_id}
+
+
+# Chat trash policy: Delete moves a chat to <data>/chats/.deleted, where it stays recoverable (move its folder back)
+# until the user empties the trash, from Settings or `bin/dwarfstar storage --empty-chat-trash --apply`. Nothing is
+# purged on a timer.
+TRASH_CONFIRM = "empty trash"
+
+
+def trash_status() -> dict:
+    trash = ROOT / ".deleted"
+    entries = [p for p in trash.iterdir() if p.is_dir()] if trash.is_dir() else []
+    size = sum(f.stat().st_size for e in entries for f in e.rglob("*") if f.is_file() and not f.is_symlink())
+    return {"chats": len(entries), "bytes": size, "oldest": min((e.stat().st_mtime for e in entries), default=None)}
+
+
+def empty_trash(confirm: str) -> dict:
+    """Permanently remove every deleted chat. Needs the confirmation text "empty trash"."""
+    if confirm != TRASH_CONFIRM:
+        raise ChatError(f'Type "{TRASH_CONFIRM}" to confirm')
+    trash = ROOT / ".deleted"
+    removed = 0
+    for entry in sorted(trash.iterdir()) if trash.is_dir() else []:
+        if entry.is_dir() and not entry.is_symlink():
+            shutil.rmtree(entry)
+            removed += 1
+    return {"ok": True, "removed": removed}
 
 
 def auto_title(text: str) -> str:

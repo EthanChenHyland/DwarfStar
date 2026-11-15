@@ -594,8 +594,16 @@ class Service:
                         flag = query.get("archived", ["0"])[0]
                         archived = None if flag == "all" else flag == "1"
                         return self._json({"ok": True, "chats": chats.list_chats(query.get("q", [None])[0], archived, query.get("tag", [None])[0],
-                                                                                 query.get("starred", ["0"])[0] == "1"),
-                                           "tags": chats.all_tags()})
+                                                                                 query.get("starred", ["0"])[0] == "1", query.get("folder", [None])[0]),
+                                           "tags": chats.all_tags(), **chats.folder_tree()})
+                    if path == "/api/chats-trash":
+                        from dwarfstar import chats
+
+                        return self._json({"ok": True, **chats.trash_status()})
+                    if path == "/api/folders":
+                        from dwarfstar import chats
+
+                        return self._json({"ok": True, **chats.folder_tree()})
                     if path == "/api/zed-threads":
                         from dwarfstar import shared_sessions
 
@@ -685,7 +693,26 @@ class Service:
                     elif path == "/api/chats-bulk":
                         from dwarfstar import chats
 
-                        result = chats.bulk(body.get("ids") or [], str(body.get("action", "")), str(body.get("confirm", "")))
+                        result = chats.bulk(body.get("ids") or [], str(body.get("action", "")), str(body.get("confirm", "")), body.get("folder"))
+                    elif path == "/api/chats-trash/empty":
+                        from dwarfstar import chats
+
+                        result = chats.empty_trash(str(body.get("confirm", "")))
+                    elif path == "/api/folders":
+                        from dwarfstar import chats
+
+                        result = {"ok": True, "folder": chats.create_folder(body.get("name"), body.get("parent"))}
+                    elif path.startswith("/api/folders/"):
+                        from dwarfstar import chats
+
+                        parts = path.split("/")
+                        folder_id, action = parts[3], (parts[4] if len(parts) > 4 else "")
+                        if action == "rename":
+                            result = {"ok": True, "folder": chats.rename_folder(folder_id, body.get("name"))}
+                        elif action == "delete":
+                            result = chats.delete_folder(folder_id, bool(body.get("subfolders")))
+                        else:
+                            return self._json({"ok": False, "error": "Unknown endpoint"}, 404)
                     elif path.startswith("/api/chats/"):
                         from dwarfstar import chats
 
@@ -703,6 +730,8 @@ class Service:
                             result = service.turns.answer_permission(chat_id, body.get("option"))
                         elif action == "organize":
                             result = {"ok": True, "chat": chats.summary(chats.organize(chat_id, body.get("pinned"), body.get("starred"), body.get("tags")))}
+                        elif action == "folder":
+                            result = {"ok": True, "chat": chats.summary(chats.set_folder(chat_id, body.get("folder")))}
                         elif action == "share-zed":
                             result = chats.share_with_zed(chat_id)
                         elif action == "fork":
