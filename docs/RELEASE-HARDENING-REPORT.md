@@ -13,7 +13,7 @@ Branch `release/hardening-v1`, based on the ds2 experiment tip `09a6d91` (PR #2,
 ## CI and reproducibility
 
 6. **CI.** `.github/workflows/ci.yml` (GitHub Actions, no weights) runs three parallel jobs:
-   - **core** (macOS 14): unit tests on temporary roots, catalog and generated configuration, and a benchmark-index structure check.
+   - **core** (macOS, `macos-latest`; the pinned `macos-14` image is no longer offered): unit tests on temporary roots, catalog and generated configuration, and a benchmark-index structure check.
    - **static and security** (Ubuntu): AST parse, ruff 0.6.9, `node --check`, and repository hygiene.
    - **docs** (Ubuntu): links, anchors, and known-limitations validity.
 
