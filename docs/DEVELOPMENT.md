@@ -41,7 +41,7 @@ Never edit files under `<data>/instances/` by hand; they are generated.
 
 ## Building the runtime
 
-`scripts/backends/build_splash.sh` builds Splash-m1 from the pinned `1.6.1-m1` source with DwarfStar's two patches (`backends/splash-m1/patches/`) using Xcode 26.6's Metal toolchain, into `<assets>/Runtimes/splash-m1-1.6.1-ds1/`. `config/runtimes.json` pins the engine, shader and metadata-adapter SHA-256; the controller refuses anything that does not match. The native ds4 runtime is retired and not built; `docs/NATIVE-RETIREMENT.md` covers reconstructing it from git for comparison.
+`scripts/backends/build_splash.sh` builds Splash-m1 from the pinned `1.6.1-m1` source with DwarfStar's patches (`backends/splash-m1/patches/`) using Xcode 26.6's Metal toolchain: with `--telemetry` the production `splash-m1-1.6.1-ds2-telemetry`, without it the `splash-m1-1.6.1-ds1` rollback, into the output folder given (`<assets>/Runtimes/<runtime id>/`). `config/runtimes.json` pins the engine, shader and metadata-adapter SHA-256; the controller refuses anything that does not match. The native ds4 runtime is retired and not built; `docs/NATIVE-RETIREMENT.md` covers reconstructing it from git for comparison.
 
 ## Seal
 

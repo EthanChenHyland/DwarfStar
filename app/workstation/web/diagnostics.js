@@ -43,7 +43,7 @@
     const groups = {};
     doc.checks.forEach((c) => (groups[c.group] = groups[c.group] || []).push(c));
     root.innerHTML = `
-      <div class="page-head"><h1>Diagnostics</h1><span class="spacer"></span>
+      <div class="page-head"><h1>Diagnostics</h1>${doc.version ? `<span class="small muted mono" title="Include this in a bug report">DwarfStar ${esc(doc.version.dwarfstar)}${doc.version.revision ? " · " + esc(doc.version.revision) : ""} · ${esc(doc.version.runtime)}</span>` : ""}<span class="spacer"></span>
         <button class="quiet small-button" id="diag-reconcile" title="Re-check saved ownership, interrupted chats and open telemetry sessions against the real processes. Never stops a model.">Reconcile state</button>
         <button class="ghost small-button" id="diag-copy">Copy diagnostics</button>
         <button class="ghost small-button" id="diag-setup" title="Walk through the same checks one area at a time, with what to run for each">Setup guide</button>

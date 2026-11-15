@@ -16,7 +16,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
-VERSION = "3.0"
+# The bundle carries the product version (src/dwarfstar/__init__.py), so a bug report from the app names the release.
+VERSION = next(line.split('"')[1] for line in (REPO / "src/dwarfstar/__init__.py").read_text().splitlines() if line.startswith("__version__"))
 
 
 def compile_to(output: Path) -> None:
@@ -47,7 +48,7 @@ def main() -> None:
             "CFBundleIdentifier": "local.dwarfstar.Workstation",
             "CFBundlePackageType": "APPL",
             "CFBundleShortVersionString": VERSION,
-            "CFBundleVersion": VERSION.split(".")[0],
+            "CFBundleVersion": VERSION,
             "LSMinimumSystemVersion": "14.0",
             "NSHighResolutionCapable": True,
             "NSAppTransportSecurity": {"NSAllowsLocalNetworking": True},

@@ -64,7 +64,7 @@ def _workspace_files(workspace: Path) -> list[Path]:
         parts = path.relative_to(workspace).parts
         top = parts[0]
         if top.startswith(".omp-dwarfstar-") and top.endswith("-agent"):
-            if len(parts) > 2 and parts[1] == "sessions":
+            if len(parts) > 2 and parts[1] == "sessions" and ".lock" not in path.name:  # session lock files are transient
                 keep.append(path)
             continue
         if top.startswith(".") or any(part in SKIP_WORKSPACE_DIRS for part in parts):

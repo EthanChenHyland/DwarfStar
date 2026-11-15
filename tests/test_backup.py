@@ -32,6 +32,7 @@ class BackupRestoreTests(unittest.TestCase):
         session = workspace / ".omp-dwarfstar-cyber-low-agent" / "sessions" / "-ws" / f"2026_{SESSION}.jsonl"
         session.parent.mkdir(parents=True)
         session.write_text('{"type":"session","id":"%s"}\n' % SESSION)
+        (session.parent / f".2026_{SESSION}.jsonl.lock.os").write_text("lock")
         (workspace / "report.md").write_text("agent wrote this for the user\n")
         for scratch in (".dwarfstar-cyber-low-tmp/bun-cache/x", ".omp-dwarfstar-cyber-low-agent/agent.db", ".dwarfstar-tooling-logs/a.log"):
             (workspace / scratch).parent.mkdir(parents=True, exist_ok=True)
@@ -64,7 +65,7 @@ class BackupRestoreTests(unittest.TestCase):
         self.assertIn("config/approval.json", names)
         self.assertIn("code/config/local.json", names)
         self.assertIn("catalog/models.json", names)
-        for excluded in ("bun-cache", "agent.db", "tooling-logs", "permission-runtime.json"):
+        for excluded in ("bun-cache", "agent.db", "tooling-logs", "permission-runtime.json", ".lock"):
             self.assertFalse(any(excluded in n for n in names), excluded)
         self.assertEqual(Path(self.make()).stat().st_mode & 0o777, 0o600)
 

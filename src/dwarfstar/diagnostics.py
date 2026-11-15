@@ -250,12 +250,26 @@ def chat_section(turns) -> dict:
     }
 
 
+def version_info() -> dict:
+    """What a bug report needs to name the build: product version, repository revision, production runtime."""
+    import subprocess
+
+    from dwarfstar import __version__
+
+    try:
+        revision = subprocess.run(["git", "-C", str(CODE), "rev-parse", "--short", "HEAD"], capture_output=True, text=True, timeout=5).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        revision = ""
+    return {"dwarfstar": __version__, "revision": revision or None,
+            "runtime": ", ".join(sorted({m["runtime"] for m in catalog.models().values()}))}
+
+
 def document(state: dict, live: dict, system: dict, hub: dict, turns=None) -> dict:
     from dwarfstar.approval_policy import status as permission_status
 
     rows = checks()
     return {
-        "ok": True, "generated": time.time(),
+        "ok": True, "generated": time.time(), "version": version_info(),
         "runtime": runtime_section(state, live, system),
         "chats": chat_section(turns),
         "permissions": permission_status(),
@@ -274,6 +288,8 @@ def document(state: dict, live: dict, system: dict, hub: dict, turns=None) -> di
 def main(argv: list[str]) -> int:
     """`dwarfstar doctor`: print every check with its remedy; exit 1 when something blocks use."""
     rows = checks()
+    version = version_info()
+    print(f"DwarfStar {version['dwarfstar']}" + (f" ({version['revision']})" if version["revision"] else "") + f" · runtime {version['runtime']}")
     marks = {"ok": "✓", "warn": "!", "error": "✗"}
     for row in rows:
         print(f"{marks[row['level']]} {row['group']:<12} {row['name']:<34} {row['detail']}")

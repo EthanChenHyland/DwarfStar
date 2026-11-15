@@ -630,8 +630,6 @@ class Service:
                         if "open" in query:
                             _write_state(last_chat=chat_id)
                         return self._json({"ok": True, "chat": chat, "progress": service.turns.progress(chat_id)})
-                    if path == "/api/benchmarks":
-                        return self._json(service.benchmarks_document())
                     if path == "/api/diagnostics":
                         return self._json(service.diagnostics_document())
                     if path == "/api/setup":
@@ -802,13 +800,6 @@ class Service:
             }
         document["telemetry"] = {"schema": telemetry.SCHEMA_VERSION, "event_port": telemetry.event_port()}
         return document
-
-    def benchmarks_document(self) -> dict:
-        path = CODE / "research" / "benchmark-index.json"
-        try:
-            return {"ok": True, **json.loads(path.read_text())}
-        except (OSError, ValueError):
-            return {"ok": False, "error": "Benchmark index has not been generated (run `dwarfstar bench-index`)."}
 
     def diagnostics_document(self) -> dict:
         from dwarfstar import diagnostics
