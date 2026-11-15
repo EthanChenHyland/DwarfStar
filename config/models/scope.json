@@ -108,17 +108,17 @@
         "note": "Aggregate quality 8.76; Swift LOW was faster but missed critical Ledger behaviour (2026-11-01)"
       },
       {
-        "name": "Latency decomposition",
+        "name": "Latency decomposition (retired native runtime)",
         "result": "Model-compute bound",
         "note": "Native inference is about 95 % of warm task time; decode 36 to 37 tok/s on real coding (2026-11-03)"
       },
       {
-        "name": "Stable-prefix restore",
+        "name": "Stable-prefix restore (retired native runtime)",
         "result": "Partial success, not adopted",
         "note": "Median first-token saving 21.1 s, median paired task-wall saving 5.65 % against a 15 % target"
       },
       {
-        "name": "Native adaptive MTP",
+        "name": "Adaptive MTP (retired native runtime; Splash uses DFlash2)",
         "result": "+5.34 % decode",
         "note": "Median ON 32.35 tok/s against OFF 30.96 tok/s; real coding with MTP 37.95 tok/s median"
       },

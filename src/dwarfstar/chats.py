@@ -35,10 +35,10 @@ import threading
 import time
 from pathlib import Path
 
-from dwarfstar import catalog, shared_sessions
+from dwarfstar import catalog, migrations, shared_sessions
 from dwarfstar.paths import CODE, DATA
 
-SCHEMA = 1
+SCHEMA = 2  # see migrations.py: version 2 names every field; older records are migrated
 ROOT = DATA / "chats"
 ID_PATTERN = re.compile(r"^c\d{14}-[0-9a-f]{6}$")
 TURN_TIMEOUT_S = 3600
@@ -105,8 +105,10 @@ def get(chat_id: str) -> dict:
         record = json.loads(_path(chat_id).read_text())
     except OSError as error:
         raise ChatError("Unknown chat") from error
-    if record.get("schema") != SCHEMA:
-        raise ChatError(f"Unsupported chat schema {record.get('schema')}")
+    try:
+        record, _ = migrations.migrate_record("chat", record)  # an unmigrated older record reads in the current shape
+    except migrations.SchemaError as error:
+        raise ChatError(str(error)) from error
     return _shared_view(record)
 
 
@@ -194,7 +196,7 @@ def list_chats(query: str | None = None, archived: bool | None = False, tag: str
     rows = []
     for path in ROOT.glob("c*/chat.json"):
         try:
-            record = json.loads(path.read_text())
+            record, _ = migrations.migrate_record("chat", json.loads(path.read_text()))
         except (OSError, ValueError):
             continue
         if archived is not None and bool(record.get("archived")) != archived:

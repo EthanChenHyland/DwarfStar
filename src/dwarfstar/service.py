@@ -22,6 +22,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -98,19 +99,34 @@ def model_states(detail: bool = False) -> dict[str, dict]:
 
 
 def _read_state() -> dict:
+    from dwarfstar import migrations
+
     try:
-        value = json.loads(STATE_FILE.read_text())
-        return value if isinstance(value, dict) else {}
+        value, _ = migrations.migrate_record("workstation_state", json.loads(STATE_FILE.read_text()))
+        return value
     except (OSError, ValueError):
         return {}
 
 
 def _write_state(**fields) -> None:
-    value = {**_read_state(), **fields, "updated": time.time()}
+    value = {**_read_state(), **fields, "updated": time.time(), "schema": 1}
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     temporary = STATE_FILE.with_suffix(".tmp")
     temporary.write_text(json.dumps(value) + "\n")
     temporary.replace(STATE_FILE)
+
+
+def setup_document() -> dict:
+    """The doctor's checks for the first-run wizard. It reads only: every fix is a command or a file the user places,
+    and nothing is downloaded. `first_run` asks the Workstation to open the wizard on its own: setup was never
+    finished here and there are no chats yet (an installation already in use is not interrupted)."""
+    from dwarfstar import chats, diagnostics
+
+    rows = diagnostics.checks()
+    completed = _read_state().get("setup_completed")
+    has_chats = chats.ROOT.is_dir() and any(chats.ROOT.glob("c*/chat.json"))
+    return {"ok": True, "checks": rows, "summary": diagnostics.summary(rows), "completed": completed,
+            "first_run": not completed and not has_chats}
 
 
 def stored_selection() -> str:
@@ -380,6 +396,36 @@ def state_document(lifecycle: Lifecycle | None = None, detail: bool = False) -> 
 # ------------------------------------------------------------------------ http
 
 
+LOOPBACK_NAMES = ("127.0.0.1", "localhost")
+
+
+def loopback_request(host: str | None, origin: str | None) -> bool:
+    """Whether a request may use the API. The server binds 127.0.0.1, so only this Mac can connect; the Host check stops a
+    DNS-rebinding name, and the Origin check stops another web page (a browser always sends Origin on a cross-site or
+    POST request). An opaque origin ("null": sandboxed frames, file pages) is refused."""
+    name = (host or "").rsplit(":", 1)[0] if not (host or "").startswith("[") else ""
+    if name not in LOOPBACK_NAMES:
+        return False
+    if origin is None:
+        return True
+    try:
+        parsed = urlsplit(origin)
+    except ValueError:
+        return False
+    return parsed.scheme in ("http", "https") and parsed.hostname in LOOPBACK_NAMES
+
+
+def static_target(path: str, root: Path | None = None) -> Path | None:
+    """The file under the web folder a URL path names, or None (missing, a folder, or anywhere outside it)."""
+    base = (root or WEB_ROOT).resolve()
+    relative = "index.html" if path in ("", "/") else path.lstrip("/")
+    try:
+        target = (base / relative).resolve()
+    except (OSError, ValueError):
+        return None
+    return target if target.is_relative_to(base) and target.is_file() else None
+
+
 class Service:
     def __init__(self, port: int, serve_ui: bool = True):
         from dwarfstar.telemetry.hub import Hub
@@ -445,7 +491,13 @@ class Service:
         Never stops or signals a process; a valid running model is kept and reconnected."""
         from dwarfstar import chats
 
+        from dwarfstar import migrations
+
         report = {"t": time.time(), "models": {}, "interrupted_chats": [], "telemetry_sessions_finalized": getattr(self.hub, "finalized", [])}
+        try:  # persistent data in the current shape before anything reads it; originals are backed up first
+            report["migrations"] = migrations.migrate_all(apply=True)
+        except Exception as error:  # a failed migration leaves the data as it was and is reported, never fatal
+            report["migrations"] = {"ok": False, "error": str(error)}
         for model_id in catalog.models():
             report["models"][model_id] = controller(model_id, "reconcile", timeout=60)
         if not self.turns.active:
@@ -483,10 +535,7 @@ class Service:
                 self._send(status, json.dumps(value).encode())
 
             def _local_only(self) -> bool:
-                host = (self.headers.get("Host") or "").split(":")[0]
-                origin = self.headers.get("Origin")
-                allowed = ("127.0.0.1", "localhost")
-                if host not in allowed or (origin and urlsplit(origin).hostname not in allowed):
+                if not loopback_request(self.headers.get("Host"), self.headers.get("Origin")):
                     self._json({"ok": False, "error": "Loopback requests only"}, 403)
                     return False
                 return True
@@ -509,6 +558,22 @@ class Service:
 
                         return self._json({**service.state(detail="detail" in query), "answering_chats": answering,
                                            "permissions": permission_status()})
+                    if path == "/api/telemetry":
+                        # Proxy the running model server's /telemetry (ds2 advanced build). Non-critical: any failure
+                        # returns an empty batch and never affects serving. Resolves the running model's endpoint.
+                        since = int(query.get("since", ["0"])[0] or 0)
+                        state = service.state()
+                        running = (state.get("running_models") or [None])[0]
+                        endpoint = (state["models"].get(running) or {}).get("endpoint") if running else None
+                        telemetry = {}
+                        if endpoint:
+                            url = endpoint.removesuffix("/v1") + f"/telemetry?since={since}&level=2"
+                            try:
+                                with urllib.request.urlopen(url, timeout=2) as stream:
+                                    telemetry = json.load(stream)
+                            except Exception:
+                                telemetry = {}
+                        return self._json({"ok": True, "telemetry": telemetry})
                     if path == "/api/live":
                         return self._json({"ok": True, "live": service.hub.snapshot(), "system": service.system_cache})
                     if path == "/api/heat":
@@ -565,15 +630,10 @@ class Service:
                         if "open" in query:
                             _write_state(last_chat=chat_id)
                         return self._json({"ok": True, "chat": chat, "progress": service.turns.progress(chat_id)})
-                    if path == "/api/benchmarks":
-                        return self._json(service.benchmarks_document())
                     if path == "/api/diagnostics":
                         return self._json(service.diagnostics_document())
                     if path == "/api/setup":
-                        from dwarfstar import diagnostics
-
-                        rows = diagnostics.checks()
-                        return self._json({"ok": True, "checks": rows, "summary": diagnostics.summary(rows)})
+                        return self._json(setup_document())
                     if path.startswith("/api/"):
                         return self._json({"ok": False, "error": "Unknown endpoint"}, 404)
                     return self._static(path)
@@ -607,6 +667,9 @@ class Service:
 
                         result = {"ok": True, "permissions": approval_policy.set_mode(str(body.get("mode", "")), body.get("confirm"))}
                         lifecycle_log({"event": "approval_mode", "mode": body.get("mode")})
+                    elif path == "/api/setup/complete":
+                        _write_state(setup_completed=time.time())
+                        result = setup_document()
                     elif path == "/api/diagnostics/reconcile":
                         result = {"ok": True, **service.recover()}
                     elif path == "/api/chats":
@@ -699,9 +762,8 @@ class Service:
             def _static(self, path: str) -> None:
                 if not service.serve_ui:
                     return self._json({"ok": False, "error": "User interface disabled"}, 404)
-                relative = "index.html" if path in ("", "/") else path.lstrip("/")
-                target = (WEB_ROOT / relative).resolve()
-                if not target.is_relative_to(WEB_ROOT.resolve()) or not target.is_file():
+                target = static_target(path)
+                if target is None:
                     return self._json({"ok": False, "error": "Not found"}, 404)
                 content_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
                 self._send(200, target.read_bytes(), content_type + ("; charset=utf-8" if content_type.startswith("text/") or content_type.endswith(("javascript", "json")) else ""))
@@ -739,13 +801,6 @@ class Service:
         document["telemetry"] = {"schema": telemetry.SCHEMA_VERSION, "event_port": telemetry.event_port()}
         return document
 
-    def benchmarks_document(self) -> dict:
-        path = CODE / "research" / "benchmark-index.json"
-        try:
-            return {"ok": True, **json.loads(path.read_text())}
-        except (OSError, ValueError):
-            return {"ok": False, "error": "Benchmark index has not been generated (run `dwarfstar bench-index`)."}
-
     def diagnostics_document(self) -> dict:
         from dwarfstar import diagnostics
 
@@ -760,7 +815,7 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="dwarfstar")
     parser.add_argument("command", choices=["serve", "switch", "stop-all", "state"])
     parser.add_argument("profile", nargs="?")
-    parser.add_argument("--port", type=int, default=int(os.environ.get("DWARFSTAR_HTTP_PORT", telemetry.DEFAULT_HTTP_PORT)))
+    parser.add_argument("--port", type=int, default=telemetry.http_port())
     parser.add_argument("--no-ui", action="store_true")
     args = parser.parse_args(argv)
     if args.command == "serve":

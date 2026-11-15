@@ -41,7 +41,7 @@ Never edit files under `<data>/instances/` by hand; they are generated.
 
 ## Building the runtime
 
-`scripts/backends/build_splash.sh` builds Splash-m1 from the pinned `1.6.1-m1` source with DwarfStar's two patches (`backends/splash-m1/patches/`) using Xcode 26.6's Metal toolchain, into `<assets>/Runtimes/splash-m1-1.6.1-ds1/`. `config/runtimes.json` pins the engine, shader and metadata-adapter SHA-256; the controller refuses anything that does not match. The native ds4 runtime is retired and not built; `docs/NATIVE-RETIREMENT.md` covers reconstructing it from git for comparison.
+`scripts/backends/build_splash.sh` builds Splash-m1 from the pinned `1.6.1-m1` source with DwarfStar's patches (`backends/splash-m1/patches/`) using Xcode 26.6's Metal toolchain: with `--telemetry` the production `splash-m1-1.6.1-ds2-telemetry`, without it the `splash-m1-1.6.1-ds1` rollback, into the output folder given (`<assets>/Runtimes/<runtime id>/`). `config/runtimes.json` pins the engine, shader and metadata-adapter SHA-256; the controller refuses anything that does not match. The native ds4 runtime is retired and not built; `docs/NATIVE-RETIREMENT.md` covers reconstructing it from git for comparison.
 
 ## Seal
 
@@ -49,3 +49,15 @@ Never edit files under `<data>/instances/` by hand; they are generated.
 bin/dwarfstar seal            # write the production baseline and seal (after committing)
 bin/dwarfstar seal --verify   # seconds; add --hash-models to rehash every model file
 ```
+
+A seal (schema 2) binds content, not history: the git tree hash and a hash of the product files (code, configuration, launchers, app, agent and runtime patches), the pinned runtime hashes, the model manifest (every file's size and SHA-256), the generated configuration, the persistent data schemas and the Workstation executable. Commit, branch and tag are metadata, so the same tree on another commit verifies. Documentation, tests, CI and research evidence are hashed in the baseline too, but a difference there is a **note**, not a failure, so a report committed after sealing does not break the seal. Verify names each changed, added or removed file. Schema 1 seals (before 1.0.0) are still read, with the same product/notes split taken from their baseline; a seal from a newer DwarfStar is refused.
+
+## Releasing
+
+```bash
+bin/dwarfstar release-check   # no model is loaded; exit 1 if anything blocks a release
+```
+
+It checks a clean tree; the branch and an annotated `v<version>` tag at HEAD; that `pyproject.toml` and the package agree on the version; the production runtime's installed hashes against its pin; the model manifest; `doctor`; repository hygiene (no giant files, weights, secrets, home paths or chats); documentation links; that persistent data is at the current schemas; the seal (current schema, sealed at this tree, verifies); and the canonical roots. The order for a release: merge to `main`, `bin/dwarfstar seal` on the merge commit, `git tag -a v<version>`, `release-check` until it passes, push the tag, then a GitHub Release with the notes and known limitations (never model weights, backups or chats as assets).
+
+**Branch protection (recommended for a solo repository).** On GitHub: Settings → Branches → Add branch ruleset (or classic rule) for `main`: require a pull request before merging (approvals: 0, so you can merge your own), require the three CI status checks to pass (`core (unit, catalog, generated config, migrations)`, `static and security (syntax, lint, JS, hygiene)`, `docs (links, known limitations)`; they appear in the picker after the workflow has run once) and the branch to be up to date, block force pushes and deletions. Leave "include administrators" off if you need an emergency path.

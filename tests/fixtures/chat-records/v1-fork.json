@@ -1,0 +1,52 @@
+{
+ "schema": 1,
+ "id": "c20261111100000-dddddd",
+ "title": "Before organization (fork)",
+ "title_manual": true,
+ "created": 1794000100.0,
+ "updated": 1794000100.0,
+ "archived": false,
+ "profile": "swift-medium",
+ "model": "swift",
+ "reasoning": "medium",
+ "context": {
+  "tokens": 0,
+  "window": 131072
+ },
+ "agent_session_id": null,
+ "compactions": 0,
+ "pinned": false,
+ "starred": false,
+ "tags": [],
+ "messages": [
+  {
+   "role": "user",
+   "text": "List the files here.",
+   "t": 1794000000.0
+  },
+  {
+   "role": "assistant",
+   "text": "There are two files: a.txt and b.txt.",
+   "t": 1794000005.0,
+   "tools": [
+    {
+     "id": "t1",
+     "title": "$ ls",
+     "kind": "execute",
+     "status": "completed"
+    }
+   ],
+   "stop": "end_turn",
+   "usage": {
+    "inputTokens": 900,
+    "outputTokens": 20,
+    "totalTokens": 920
+   }
+  }
+ ],
+ "forked_from": {
+  "id": "c20261105100000-bbbbbb",
+  "title": "Before organization",
+  "messages": 2
+ }
+}

@@ -316,6 +316,18 @@ def memory_plan(row) -> dict:
     return splash_memory_plan() if row else {}
 
 
+def advanced_telemetry(base_url: str, since: int = 0, level: int = 2) -> dict:
+    """Proxy a model server's GET /telemetry (the ds2 advanced-telemetry build) at `base_url` (an endpoint without the
+    /v1 suffix): per-verify-cycle speculative-decode events since `since`. Returns {} when the runtime does not expose
+    it (ds1) or is unreachable; telemetry is never load-bearing, so a failure here is silent."""
+    try:
+        url = base_url.removesuffix("/v1") + f"/telemetry?since={int(since)}&level={int(level)}"
+        with urllib.request.urlopen(url, timeout=2) as stream:
+            return json.load(stream)
+    except Exception:
+        return {}
+
+
 def splash_memory_plan() -> dict:
     """Splash reports its own plan on /status; mapped to the catalog's memory fields."""
     try:

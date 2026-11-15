@@ -25,7 +25,7 @@ class RedactionTests(unittest.TestCase):
             self.assertNotIn(base64.b64encode(b"abcdef1234567890XYZ").decode(), clean)
 
     def test_private_keys_and_sensitive_json_keys(self):
-        value = {"password": "hunter2hunter2", "note": "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----"}
+        value = {"password": "hunter2hunter2", "note": "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----"}  # hygiene: allow (synthetic redaction fixture)
         clean = redaction.redact_obj(value, set())
         self.assertEqual(clean["password"], "[REDACTED]")
         self.assertEqual(clean["note"], "[REDACTED PRIVATE KEY]")

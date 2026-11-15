@@ -64,8 +64,12 @@ def _apply_policy(raw: dict, defaults: dict) -> dict:
 def _backend(model: dict, runtimes: dict) -> dict:
     """What the runtime serving every model reports, for the user interfaces."""
     pin = runtimes["runtimes"][model["runtime"]]
+    advanced = pin.get("advanced_telemetry") or {}
+    dflash = advanced.get("dflash", "none")
     return {"id": model["runtime"], "kind": pin["kind"], "release": pin.get("release"), "model_name": model["splash_model_name"],
-            "telemetry": {"router": False, "ple": False, "mtp": False, "requests": True, "memory_plan": True},
+            # requests/memory come from /status for every build; dflash per-cycle only on a telemetry build (ds2+).
+            "telemetry": {"router": False, "ple": False, "mtp": False, "requests": True, "memory_plan": True,
+                          "dflash": dflash},
             "speculative": "DFlash2 draft model, verified by the target"}
 
 

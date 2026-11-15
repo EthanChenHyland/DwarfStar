@@ -81,6 +81,17 @@ def _software() -> list[dict]:
     vendor = CODE / "acp" / "vendor" / "omp"
     rows.append(_check("Software", "Agent sources link", "ok" if vendor.exists() else "error", safe_path(vendor),
                        "Run `bin/dwarfstar generate` to link acp/vendor/omp to the installed agent."))
+    from dwarfstar import agent_patch
+
+    try:
+        patch = agent_patch.report()
+    except (OSError, ValueError) as error:
+        patch = {"ok": False, "state": f"unreadable ({type(error).__name__})", "runtime_record": "unknown"}
+    detail = {"patched": "scoped approval edits applied", "stock": "stock bundle: approval presets not scoped",
+              "legacy": "older DwarfStar edits (imports a retired path)", "missing": "agent bundle not found"}.get(patch["state"], patch["state"])
+    rows.append(_check("Software", "Agent approval scoping", "ok" if patch["ok"] else "error",
+                       f"{detail}; permission record {patch.get('runtime_record')}",
+                       "Run `bin/dwarfstar agent-patch --apply` (exact, reversible edits from acp/omp-patch.json; nothing is downloaded)."))
     swiftc = shutil.which("swiftc")
     rows.append(_check("Software", "Swift compiler", "ok" if swiftc else "warn", swiftc or "not found",
                        "Install the Xcode command-line tools (`xcode-select --install`) to build the Workstation app."))
@@ -123,9 +134,11 @@ def _installation() -> list[dict]:
         level = "error" if missing or wrong else "ok"
         detail = "both split parts, the draft model and the vision projector present at catalog sizes" if level == "ok" else \
             "; ".join(filter(None, [("missing: " + ", ".join(missing)) if missing else "", ("wrong size: " + ", ".join(wrong)) if wrong else ""]))
+        expected = [f"{safe_path(paths.ASSETS / model['assets'][role]['path'])} ({model['assets'][role]['bytes']:,} bytes)"
+                    for role in missing + wrong]
         rows.append(_check("Models", model["display_name"], level, detail,
-                           f"Place the files named in config/models/{model_id}.json under {safe_path(paths.ASSETS)}. "
-                           "DwarfStar never downloads models on its own."))
+                           "Place " + "; ".join(expected) + f" (catalog: config/models/{model_id}.json, which also lists each "
+                           "file's SHA-256). DwarfStar never downloads models on its own."))
         drift = instance.check(model_id)
         rows.append(_check("Models", f"{model['short_name']} generated configuration", "ok" if not drift else "error",
                            "matches the catalog" if not drift else "; ".join(drift), f"Run `bin/dwarfstar generate --model {model_id}`."))
@@ -143,7 +156,9 @@ def _integrations() -> list[dict]:
         try:
             entries = zed.check()
             rows.append(_check("Integrations", "Zed agent entries", "ok" if entries["ok"] else "warn",
-                               "seven entries match the catalog" if entries["ok"] else f"missing {entries['missing']}, obsolete {entries['obsolete']}",
+                               "seven entries match the catalog" if entries["ok"] else
+                               (f"missing {entries['missing']}, obsolete {entries['obsolete']}" if entries["missing"] or entries["obsolete"]
+                                else f"{len(entries['different'])} entries launch a different checkout or profile settings"),
                                "Run `bin/dwarfstar zed --apply` (unrelated Zed settings are kept)."))
         except (OSError, ValueError):
             rows.append(_check("Integrations", "Zed agent entries", "warn", "no Zed settings file", "Open Zed once, then run `bin/dwarfstar zed --apply`."))
@@ -235,12 +250,26 @@ def chat_section(turns) -> dict:
     }
 
 
+def version_info() -> dict:
+    """What a bug report needs to name the build: product version, repository revision, production runtime."""
+    import subprocess
+
+    from dwarfstar import __version__
+
+    try:
+        revision = subprocess.run(["git", "-C", str(CODE), "rev-parse", "--short", "HEAD"], capture_output=True, text=True, timeout=5).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        revision = ""
+    return {"dwarfstar": __version__, "revision": revision or None,
+            "runtime": ", ".join(sorted({m["runtime"] for m in catalog.models().values()}))}
+
+
 def document(state: dict, live: dict, system: dict, hub: dict, turns=None) -> dict:
     from dwarfstar.approval_policy import status as permission_status
 
     rows = checks()
     return {
-        "ok": True, "generated": time.time(),
+        "ok": True, "generated": time.time(), "version": version_info(),
         "runtime": runtime_section(state, live, system),
         "chats": chat_section(turns),
         "permissions": permission_status(),
@@ -259,6 +288,8 @@ def document(state: dict, live: dict, system: dict, hub: dict, turns=None) -> di
 def main(argv: list[str]) -> int:
     """`dwarfstar doctor`: print every check with its remedy; exit 1 when something blocks use."""
     rows = checks()
+    version = version_info()
+    print(f"DwarfStar {version['dwarfstar']}" + (f" ({version['revision']})" if version["revision"] else "") + f" · runtime {version['runtime']}")
     marks = {"ok": "✓", "warn": "!", "error": "✗"}
     for row in rows:
         print(f"{marks[row['level']]} {row['group']:<12} {row['name']:<34} {row['detail']}")

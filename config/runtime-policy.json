@@ -1,9 +1,9 @@
 {
   "schema": 1,
-  "version": "2026.11.4",
+  "version": "2026.11.5",
   "description": "The one runtime policy every DwarfStar model uses. A model file in config/models may override a model_defaults key only with a reason in its override_reasons; repeating a default is rejected.",
   "model_defaults": {
-    "runtime": "splash-m1-1.6.1-ds1",
+    "runtime": "splash-m1-1.6.1-ds2-telemetry",
     "context": 131072,
     "max_output": 81920,
     "sampling": {

@@ -143,9 +143,14 @@ class PolicyTests(unittest.TestCase):
 
 class RuntimeTests(unittest.TestCase):
     def test_splash_serves_every_model(self):
+        # The advanced-telemetry build (ds2) is the production runtime; ds1 is kept as the documented rollback.
         for model in catalog.models().values():
-            self.assertEqual((model["backend"]["kind"], model["backend"]["id"]), ("splash", "splash-m1-1.6.1-ds1"))
-        self.assertEqual(list(catalog.load()["runtimes"]["runtimes"]), ["splash-m1-1.6.1-ds1"])
+            self.assertEqual((model["backend"]["kind"], model["backend"]["id"]), ("splash", "splash-m1-1.6.1-ds2-telemetry"))
+            # ds2 reports per-verify-cycle speculative-decode detail; router/PLE stay unavailable.
+            self.assertEqual(model["backend"]["telemetry"]["dflash"], "cycle")
+            self.assertFalse(model["backend"]["telemetry"]["router"])
+        self.assertEqual(set(catalog.load()["runtimes"]["runtimes"]),
+                         {"splash-m1-1.6.1-ds1", "splash-m1-1.6.1-ds2-telemetry"})
 
     def test_assets_are_the_split_parts_draft_and_projector_under_the_assets_root(self):
         from dwarfstar import instance

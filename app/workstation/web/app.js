@@ -131,7 +131,7 @@ function show(view) {
   connect(view === "visualizer" ? 2 : 1);
   if (view !== "chats") window.Chats?.unmount();
   ({ run: renderRun, chats: () => window.Chats?.mount(), models: renderModels, live: renderLive, visualizer: () => window.Visualizer?.mount(),
-     diagnostics: () => window.Diagnostics?.mount(), settings: renderSettings })[view]?.();
+     diagnostics: () => window.Diagnostics?.mount(), settings: renderSettings, setup: () => window.Setup?.mount() })[view]?.();
   if (view !== "visualizer") window.Visualizer?.unmount();
   clearInterval(S.livePoll);
   if (view === "live") S.livePoll = setInterval(async () => { S.renderedKey = null; await refreshState(); renderLive(); }, 2000);
@@ -554,19 +554,22 @@ async function boot() {
   S.model = selected.model; S.effort = selected.reasoning_effort;
   connect(1);
   const initial = location.hash.slice(1);
-  show(["run", "chats", "models", "live", "visualizer", "diagnostics", "settings"].includes(initial) ? initial : (S.state.running_models || []).length ? "chats" : "run");
+  show(["run", "chats", "models", "live", "visualizer", "diagnostics", "settings", "setup"].includes(initial) ? initial : (S.state.running_models || []).length ? "chats" : "run");
   window.addEventListener("hashchange", () => { const v = location.hash.slice(1); if (v && v !== S.view && document.querySelector("#view-" + v)) show(v); });
   setInterval(refreshState, 4000);
-  firstRun();
+  firstRun(initial);
 }
-/* First run (or a broken installation): if any setup check blocks a start, say so once on every page. */
-async function firstRun() {
+/* First run: a new installation (setup never finished, no chats yet) opens the setup wizard once. Otherwise, if any
+ * setup check blocks a start, say so once on every page. */
+async function firstRun(requested) {
   const setup = await api("/api/setup").catch(() => null);
-  if (!setup?.ok || !setup.summary.error) return;
+  if (!setup?.ok) return;
+  if (setup.first_run && !requested) return window.Setup?.open();  // a page asked for by its address opens as asked
+  if (!setup.summary.error) return;
   const blocking = setup.checks.filter((c) => c.level === "error");
   const banner = el(`<div class="notice setup-banner" role="alert"><b>Setup needs attention:</b> ${blocking.length} check${blocking.length === 1 ? "" : "s"} would block a model start
-    (${esc(blocking.slice(0, 3).map((c) => c.name).join(", "))}${blocking.length > 3 ? ", …" : ""}). <button class="ghost small-button">Open Diagnostics</button></div>`);
-  banner.querySelector("button").onclick = () => show("diagnostics");
+    (${esc(blocking.slice(0, 3).map((c) => c.name).join(", "))}${blocking.length > 3 ? ", …" : ""}). <button class="ghost small-button">Open setup</button></div>`);
+  banner.querySelector("button").onclick = () => window.Setup?.open();
   $("#main").prepend(banner);
 }
 window.DwarfStar = { S, api, esc, modelOf, runningModel, TONE, show, toast, gib, runningLine, liveModeSwitch, bindLiveModes, profileLabel };

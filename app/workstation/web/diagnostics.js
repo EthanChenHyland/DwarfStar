@@ -43,9 +43,10 @@
     const groups = {};
     doc.checks.forEach((c) => (groups[c.group] = groups[c.group] || []).push(c));
     root.innerHTML = `
-      <div class="page-head"><h1>Diagnostics</h1><span class="spacer"></span>
+      <div class="page-head"><h1>Diagnostics</h1>${doc.version ? `<span class="small muted mono" title="Include this in a bug report">DwarfStar ${esc(doc.version.dwarfstar)}${doc.version.revision ? " · " + esc(doc.version.revision) : ""} · ${esc(doc.version.runtime)}</span>` : ""}<span class="spacer"></span>
         <button class="quiet small-button" id="diag-reconcile" title="Re-check saved ownership, interrupted chats and open telemetry sessions against the real processes. Never stops a model.">Reconcile state</button>
         <button class="ghost small-button" id="diag-copy">Copy diagnostics</button>
+        <button class="ghost small-button" id="diag-setup" title="Walk through the same checks one area at a time, with what to run for each">Setup guide</button>
         <button class="ghost small-button" id="diag-refresh">Refresh</button></div>
       <div class="panel"><div class="metrics">
         ${metric("Model", r.model ? esc(r.display_name.replace("DwarfStar ", "")) : '<span class="faint">None</span>', r.model ? `<span class="status ${r.healthy ? "ok" : "bad"}">${r.healthy ? "Healthy" : "Not healthy"}</span>` : "stopped")}
@@ -89,6 +90,7 @@
       <details class="disclosure" style="margin-top:var(--sp-3)"><summary>Locations</summary>
         <div class="panel" style="margin-top:var(--sp-2)"><dl class="kv">${Object.entries(doc.locations).map(([k, v]) => `<dt>${esc(k.replaceAll("_", " "))}</dt><dd class="mono small">${esc(v)}</dd>`).join("")}</dl></div></details>`;
     root.querySelector("#diag-refresh").onclick = mount;
+    root.querySelector("#diag-setup").onclick = () => window.Setup?.open();
     root.querySelector("#diag-copy").onclick = copy;
     root.querySelector("#diag-reconcile").onclick = reconcile;
   }

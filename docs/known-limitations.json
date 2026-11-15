@@ -6,7 +6,7 @@
    "swift",
    "cyber"
   ],
-  "text": "Splash-m1 reports requests, time to first token, inter-token latency, prefill/decode rates, draft acceptance (as a running total), prefix-cache hits, context, memory and thermal state, but not per-token router selections, expert activity or PLE reads; the Live and Visualizer views label those regions 'not reported' instead of estimating them. Sessions recorded earlier on the retired native runtime replay their router and PLE detail."
+  "text": "Splash-m1 reports requests, time to first token, inter-token latency, prefill/decode rates, draft acceptance, prefix-cache hits, context, memory and thermal state via /status, and the production ds2 build adds a bounded per-verify-cycle speculative-decode channel (GET /telemetry) with no measurable inference cost. Per-token router selections, expert utilization and PLE reads are still not reported: Splash's per-step MoE scratch is GPU-private and reused across layers, so capturing it would need host copies on the decode hot path, which the zero-overhead rule forbids. The Advanced view labels those regions 'not reported' instead of estimating them. See docs/ADVANCED-TELEMETRY.md."
  },
  {
   "id": "splash-dflash-draft",
@@ -93,5 +93,50 @@
    "cyber"
   ],
   "text": "The reported Cyber MEDIUM -> Stop -> LOW failure was not reproduced exactly from the user's run (the service log of that run was not kept). The real-runtime gate found and fixed three lifecycle races that produce that class of failure while the window is open (ledger removal racing a status poll, stale cached state after a stop, telemetry session not finalized); the reported sequence and the full matrix now pass through the installed app's service and through the UI."
+ },
+ {
+  "id": "request-history-segmentation",
+  "models": [
+   "scope",
+   "swift",
+   "cyber"
+  ],
+  "text": "The Visualizer's request history is built from the ds2 per-cycle channel, which reports decode cycles, not request ids. A request there is one uninterrupted decode run, split after 400 ms with no cycle; agent turns always separate (tool time and prefill produce no cycles), but two clients decoding at once would share one entry. History lives in the window only (last 20 requests, first 4,096 cycles each) and is gone on reload."
+ },
+ {
+  "id": "older-builds-chat-schema",
+  "models": [
+   "scope",
+   "swift",
+   "cyber"
+  ],
+  "text": "Persistent records are versioned from 1.0.0 (chat schema 2). Builds before 1.0.0 accept only chat schema 1: before running one on migrated data, stop the service and run `bin/dwarfstar migrate --rollback --apply` (lossless; this release migrates forward again at start). A Workstation service started before a migration keeps the old code until it is restarted."
+ },
+ {
+  "id": "agent-patch-version",
+  "models": [
+   "scope",
+   "swift",
+   "cyber"
+  ],
+  "text": "Workspace Auto and Full Auto depend on four exact edits to the Oh My Pi agent 18.4.5 bundle (acp/omp-patch.json, applied by `bin/dwarfstar agent-patch --apply`). Another agent version is refused, not guessed: updating the agent needs a new patch record. The launcher refuses an agent whose bundle no longer matches the permission record."
+ },
+ {
+  "id": "sandbox-network",
+  "models": [
+   "scope",
+   "swift",
+   "cyber"
+  ],
+  "text": "Workspace Auto confines writes to the chat's workspace and denies the Workstation service's port, but allows outbound network (the browser and web tools need it) and reads of the tool locations it lists. Full Auto has no sandbox at all. Neither is a defence against a hostile model: the presets limit accidents, not intent."
+ },
+ {
+  "id": "setup-guide-no-install",
+  "models": [
+   "scope",
+   "swift",
+   "cyber"
+  ],
+  "text": "The setup guide and `doctor` only check and explain. Nothing is installed or downloaded for you: model files (about 70 GB per model), the runtime build, Bun, the agent and its browser are explicit steps in docs/REPRODUCIBILITY.md."
  }
 ]

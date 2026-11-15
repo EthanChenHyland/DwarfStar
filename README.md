@@ -20,23 +20,28 @@ Seven profiles, one per model × reasoning effort. Context is a model property; 
 * **One controller** that only ever runs one model, refuses unpinned binaries or model files, and checks each model's own memory plan before loading.
 * **Chats** in the Workstation: durable conversations with pins, stars, tags, forks and Markdown/JSON export that run through the same agent (tools, automatic compaction) and stay on your Mac.
 * **One agent launcher** for every profile: `bin/dwarfstar-acp --profile <id>` (ACP, workspace/shell/browser/computer-use/vision tools, compaction, recovery) with three approval presets: Ask, Workspace Auto and Full Auto.
-* **One runtime** for all three models: Splash-m1 1.6.1-m1 with two DwarfStar patches (`splash-m1-1.6.1-ds1`: Swift's tokenizer profile, exact BF16 planes for Cyber), with DFlash2 speculative decoding, an INT8 KV cache and a prefix cache. It is faster and leaner than the earlier native ds4 runtime on every model, with the same answers, so native is retired: its behaviour is recoverable from git for comparison, not installed as a second runtime ([docs/BACKENDS.md](docs/BACKENDS.md)).
+* **One runtime** for all three models: Splash-m1 1.6.1-m1 with DwarfStar's patches (`splash-m1-1.6.1-ds2-telemetry`: Swift's tokenizer profile, exact BF16 planes for Cyber, and a bounded per-cycle telemetry ring; `ds1`, without the ring, is kept as the rollback), with DFlash2 speculative decoding, an INT8 KV cache and a prefix cache. It is faster and leaner than the earlier native ds4 runtime on every model, with the same answers, so native is retired: its behaviour is recoverable from git for comparison, not installed as a second runtime ([docs/BACKENDS.md](docs/BACKENDS.md)).
 * **Real telemetry**: the runtime's own measurements — request counts, time to first token, inter-token latency, prefill and decode rates, draft acceptance, prefix-cache hits, context occupancy, memory and thermal state — plus the agent's tool actions, produced only while someone is watching. Splash does not expose per-token router, expert or PLE activity; the Live and Visualizer views label those regions "not reported" rather than estimate them.
 
 ![Visualizer](docs/assets/visualizer.png)
 
 ## Quick start
 
+Machine prerequisites (not installed by DwarfStar): Apple Silicon with macOS 26.4+ (validated: M1 Max, 64 GiB), Homebrew Python 3.12, Node 22.15+, Bun, the Oh My Pi agent **18.4.5** (`bun add -g @oh-my-pi/pi-coding-agent@18.4.5`), and the Xcode command-line tools; Zed and KimiCU are optional. Models and the runtime live outside the repository (docs/REPRODUCIBILITY.md).
+
 ```bash
-cp config/local.example.json config/local.json      # point data_root at your model data
-(cd agent-tools && npm ci)
-bin/dwarfstar generate && bin/dwarfstar assets
-scripts/validate/check.sh                            # no model is loaded
+git clone https://github.com/EthanChenHyland/DwarfStar.git ~/Developer/DwarfStar && cd ~/Developer/DwarfStar
+(cd agent-tools && npm ci)                 # then `npx playwright install chromium` for the agent's browser
+bin/dwarfstar generate                     # creates the per-user roots, instance configuration and agent links
+bin/dwarfstar agent-patch --apply          # scopes the approval presets inside the agent (exact, reversible)
+bin/dwarfstar assets                       # verifies models under ~/AI/DwarfStar against the catalog
+bin/dwarfstar doctor                       # every check should be ready
+scripts/validate/check.sh                  # no model is loaded
 python3 app/workstation/build.py --bundle "$HOME/Applications/DwarfStar Workstation.app"
-bin/dwarfstar zed --apply                            # seven Zed agent entries
+bin/dwarfstar zed --apply                  # seven Zed agent entries
 ```
 
-Model weights are not in this repository. See [docs/REPRODUCIBILITY.md](docs/REPRODUCIBILITY.md).
+`config/local.json` is optional; every root has a default. Model weights are not in this repository. On a new installation the Workstation opens a **Setup** guide over the same checks as `doctor`, one area at a time, with the command or file path for each fix; it changes nothing and downloads nothing. A fresh installation starts in Workspace Auto tool approval.
 
 ## Documentation
 
@@ -50,6 +55,7 @@ Model weights are not in this repository. See [docs/REPRODUCIBILITY.md](docs/REP
 | [Benchmarks](docs/BENCHMARKS.md) | Results, how they were measured, the production validation |
 | [Backends](docs/BACKENDS.md) | Splash-m1, the one runtime; native and MLX as history; prefill chunk and prefix reuse |
 | [Draft models](docs/DRAFT-MODELS.md) | The shared DFlash2 draft, measured acceptance per model, whether a matched draft is worth building |
+| [Advanced telemetry](docs/ADVANCED-TELEMETRY.md) | The ds2 runtime's per-cycle DFlash channel: what it reports, overhead, build identity, rollback |
 | [Native retirement](docs/NATIVE-RETIREMENT.md) | How native was retired and how to reconstruct it from Git |
 | [Cyber conversion](docs/CYBER-CONVERSION.md) | NVFP4 → DwarfStar, fidelity and limitations |
 | [Storage](docs/STORAGE.md) | The five roots, disk use, the 2026-11 consolidation, safe cleanup |

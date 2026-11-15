@@ -30,6 +30,11 @@ def event_port() -> int:
     return int(os.environ.get("DWARFSTAR_TELEMETRY_PORT", DEFAULT_EVENT_PORT))
 
 
+def http_port() -> int:
+    """The Workstation service's loopback HTTP port."""
+    return int(os.environ.get("DWARFSTAR_HTTP_PORT", DEFAULT_HTTP_PORT))
+
+
 def enabled() -> bool:
     return os.environ.get("DWARFSTAR_TELEMETRY", "1") != "0"
 

@@ -1,0 +1,208 @@
+diff --git a/server/backend.py b/server/backend.py
+index 88900ea..e986f8d 100644
+--- a/server/backend.py
++++ b/server/backend.py
+@@ -840,6 +840,32 @@ class NativeBackend:
+         self._cache_status(snapshot, restarts)
+         return snapshot
+ 
++    def telemetry(self, since_sequence, level, timeout=5.0):
++        """Drain the engine's advanced-telemetry ring since `since_sequence` at `level`. Returns the
++        decoded batch (events, capabilities, next, dropped). Telemetry is non-critical: engine
++        errors surface as a normal API error and never affect serving."""
++        with self.lock:
++            if self.closing:
++                raise self._closed_error_locked()
++        try:
++            event = self.runtime.telemetry(since_sequence, level, timeout=timeout)
++        except TimeoutError:
++            raise APIError(
++                503,
++                f"the engine did not answer within {timeout:g} s; retry shortly",
++                "engine_busy",
++            ) from None
++        except (
++            engine_runtime.EngineUnhealthy,
++            engine_runtime.ProtocolFatal,
++            engine_runtime.RuntimeClosed,
++        ) as error:
++            raise self.refusal() or self._api_error(error) from None
++        batch = json_codec.loads(event.json)
++        if not isinstance(batch, dict) or batch.get("schema") != 1:
++            raise ValueError("native telemetry does not match the current schema")
++        return batch
++
+     def submit(self, job):
+         state = None
+ 
+diff --git a/server/protocol.py b/server/protocol.py
+index b0e9944..5844d99 100644
+--- a/server/protocol.py
++++ b/server/protocol.py
+@@ -54,6 +54,7 @@ _REQUEST_END = struct.Struct("<Q")
+ _MASK_RESPONSE = struct.Struct("<QQI")
+ _STATUS_REQUEST = struct.Struct("<Q")
+ _RELEASE_REQUEST = struct.Struct("<Q")
++_TELEMETRY_REQUEST = struct.Struct("<QQB")  # correlation, since, level
+ # Concurrent requests, context, vision, vocabulary, mask rows, stop count.
+ _READY = struct.Struct("<IIBIII")
+ _START = struct.Struct("<QII")
+@@ -95,6 +96,7 @@ class FrameType(IntEnum):
+     STATUS_REQUEST = 0x0004
+     RELEASE_REQUEST = 0x0005
+     STOP = 0x0006
++    TELEMETRY_REQUEST = 0x0007
+ 
+     READY = 0x0100
+     START = 0x0101
+@@ -338,6 +340,17 @@ class ReleaseRequestFrame:
+     correlation_id: int
+ 
+ 
++@dataclass(slots=True, frozen=True)
++class TelemetryRequestFrame:
++    """DwarfStar advanced telemetry: drain the engine's telemetry ring since a sequence at a level
++    (0 off, 1 standard, 2 advanced). Answered by a status JSON with the same correlation id whose
++    body is the telemetry batch."""
++
++    correlation_id: int
++    since_sequence: int
++    level: int
++
++
+ # Sent before Ready once the engine holds its weights, as its warm-up begins
+ # and as each step ends: on the first start after an update the warm-up also
+ # prepares the GPU's programs, and the 27B's start then took 118 s on a 48 GB
+@@ -498,6 +511,7 @@ ClientMessage: TypeAlias = (
+     | MaskResponseFrame
+     | StatusRequestFrame
+     | ReleaseRequestFrame
++    | TelemetryRequestFrame
+     | StopFrame
+ )
+ EngineEvent: TypeAlias = (
+@@ -674,6 +688,8 @@ def _payload_bounds(frame_type: FrameType) -> tuple[int, int]:
+             bounds = (_STATUS_REQUEST.size, _STATUS_REQUEST.size)
+         case FrameType.RELEASE_REQUEST:
+             bounds = (_RELEASE_REQUEST.size, _RELEASE_REQUEST.size)
++        case FrameType.TELEMETRY_REQUEST:
++            bounds = (_TELEMETRY_REQUEST.size, _TELEMETRY_REQUEST.size)
+         case FrameType.READY:
+             # The stop tokens are the target's, inside its vocabulary; the
+             # frame limit is the bound.
+@@ -1024,6 +1040,18 @@ def _release_request_frame(request: ReleaseRequestFrame) -> bytearray:
+     return frame
+ 
+ 
++def _telemetry_request_frame(request: TelemetryRequestFrame) -> bytearray:
++    try:
++        correlation_id = _u64(request.correlation_id, "telemetry correlation id")
++        since = _u64(request.since_sequence, "telemetry since sequence")
++    except ValueError as error:
++        _fail_request(IssueCode.INTEGER_OVERFLOW, str(error))
++    level = request.level if 0 <= request.level <= 2 else 0
++    frame = _frame(FrameType.TELEMETRY_REQUEST, _TELEMETRY_REQUEST.size)
++    _TELEMETRY_REQUEST.pack_into(frame, FRAME_HEADER_BYTES, correlation_id, since, level)
++    return frame
++
++
+ # What a request's fingerprint leaves out: what differs between a request and
+ # its retry (its id, priority, deadlines and seed, random per request unless
+ # the client sets it), and the pixels its image spans' digests name.
+@@ -1070,6 +1098,8 @@ def serialize_message(message: ClientMessage) -> bytearray:
+             return _status_request_frame(message)
+         if isinstance(message, ReleaseRequestFrame):
+             return _release_request_frame(message)
++        if isinstance(message, TelemetryRequestFrame):
++            return _telemetry_request_frame(message)
+         if isinstance(message, StopFrame):
+             return _request_end_frame(FrameType.STOP, message.request_id)
+     except MemoryError as error:
+diff --git a/server/runtime.py b/server/runtime.py
+index ca73646..e5fdafc 100644
+--- a/server/runtime.py
++++ b/server/runtime.py
+@@ -741,6 +741,41 @@ class MultiplexedRuntime:
+         the request unanswered for `timeout` fails the engine it ran."""
+         return self._status(timeout, None, fail_unanswered)
+ 
++    def telemetry(
++        self, since_sequence: int, level: int, timeout: float = 5.0
++    ) -> wire.StatusJsonEvent:
++        """Drain the engine's telemetry ring since `since_sequence` at `level`. The engine answers
++        with a StatusJson (same correlation machinery as status) whose body is the telemetry batch."""
++        if not math.isfinite(timeout) or timeout <= 0:
++            raise ValueError("telemetry timeout must be positive")
++        deadline = time.monotonic() + timeout
++        with self._state_lock:
++            if self._closed:
++                raise RuntimeClosed("runtime is closed")
++            generation = self._generation
++            self._require_generation_ready_locked(generation)
++            correlation_id = next(self._status_ids)
++            self._last_status_id = correlation_id
++            waiter = _StatusWaiter()
++            self._status_waiters[correlation_id] = waiter
++        try:
++            encoded = wire.serialize_message(
++                wire.TelemetryRequestFrame(correlation_id, since_sequence, level)
++            )
++            self._write_bytes(encoded, generation, deadline=deadline)
++        except BaseException:
++            with self._state_lock:
++                self._status_waiters.pop(correlation_id, None)
++            raise
++        if not waiter.event.wait(max(0.0, deadline - time.monotonic())):
++            with self._state_lock:
++                if self._status_waiters.pop(correlation_id, None) is waiter:
++                    raise TimeoutError("native telemetry response timed out")
++        if waiter.error:
++            raise waiter.error.restate()
++        assert waiter.result is not None
++        return waiter.result
++
+     def release_weights(self, timeout: float = 5.0) -> wire.StatusJsonEvent:
+         """Asks the engine to give its weights back now. It does so only while
+         it holds no request and no restore is under way, with
+diff --git a/server/server.py b/server/server.py
+index 1301fae..a20711d 100644
+--- a/server/server.py
++++ b/server/server.py
+@@ -22,7 +22,7 @@ from dataclasses import asdict, dataclass
+ from http import HTTPStatus
+ from http.server import BaseHTTPRequestHandler, HTTPServer
+ from pathlib import Path
+-from urllib.parse import unquote
++from urllib.parse import parse_qs, unquote, urlsplit
+ 
+ from transformers import AutoTokenizer
+ 
+@@ -547,6 +547,20 @@ class FrontendHandler(BaseHTTPRequestHandler):
+     def _get_status(self):
+         self.send_json(200, self.server.status())
+ 
++    def _get_telemetry(self):
++        # DwarfStar advanced telemetry: drain the engine's ring since `since` at `level` (0..2).
++        # Non-critical: a bad parameter is a 400, an engine hiccup a normal error; serving is never
++        # affected. The Workstation polls this for the Advanced Live view.
++        query = parse_qs(urlsplit(self.path).query)
++        try:
++            since = int(query.get("since", ["0"])[0])
++            level = int(query.get("level", ["2"])[0])
++        except (TypeError, ValueError):
++            raise APIError(400, "since and level must be integers", "invalid_request")
++        if since < 0 or not 0 <= level <= 2:
++            raise APIError(400, "since must be >= 0 and level in 0..2", "invalid_request")
++        self.send_json(200, self.app.backend.telemetry(since, level))
++
+     def _get_metrics(self):
+         self._send(
+             200,
+@@ -957,6 +971,7 @@ ROUTES = {
+     ("GET", "/health"): Route(FrontendHandler._get_health, public=True),
+     ("GET", "/ready"): Route(FrontendHandler._get_ready, public=True),
+     ("GET", "/status"): Route(FrontendHandler._get_status),
++    ("GET", "/telemetry"): Route(FrontendHandler._get_telemetry),
+     ("GET", "/metrics"): Route(FrontendHandler._get_metrics),
+     ("GET", dialects.responses.RESPONSE_PATH): Route(dialects.responses.get),
+     ("DELETE", dialects.responses.RESPONSE_PATH): Route(dialects.responses.delete),

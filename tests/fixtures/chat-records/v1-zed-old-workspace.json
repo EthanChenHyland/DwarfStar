@@ -1,0 +1,30 @@
+{
+ "schema": 1,
+ "id": "c20261112100000-eeeeee",
+ "title": "Zed thread",
+ "title_manual": true,
+ "created": 1794000200.0,
+ "updated": 1794000200.0,
+ "archived": false,
+ "profile": "cyber-low",
+ "model": "cyber",
+ "reasoning": "low",
+ "context": {
+  "tokens": 920,
+  "window": 131072
+ },
+ "agent_session_id": "01a1aaaa-0000-7000-8000-000000000003",
+ "compactions": 0,
+ "pinned": false,
+ "starred": false,
+ "tags": [],
+ "messages": [],
+ "workspace": "/legacy/Library/Application Support/DwarfStar Workstation/scratch/20261112-204929-eef7133e",
+ "transcript": "agent_session",
+ "shared": {
+  "client": "zed",
+  "agent": "DwarfStar Cyber LOW",
+  "thread": "01ab",
+  "linked": 1794000200.0
+ }
+}

@@ -1,9 +1,5 @@
 {
-  "_comment": "Optional. Every key may be omitted; the defaults are the standard macOS locations (see src/dwarfstar/paths.py).",
-  "assets_root": "~/AI/DwarfStar",
-  "data_root": "~/Library/Application Support/DwarfStar",
-  "cache_root": "~/Library/Caches/DwarfStar",
-  "logs_root": "~/Library/Logs/DwarfStar",
+  "_comment": "Optional: copy to config/local.json only to change something. Every root defaults to the standard macOS location (src/dwarfstar/paths.py: assets ~/AI/DwarfStar, data ~/Library/Application Support/DwarfStar, cache ~/Library/Caches/DwarfStar, logs ~/Library/Logs/DwarfStar). Set assets_root, data_root, cache_root or logs_root here (or DWARFSTAR_ASSETS/_DATA/_CACHE/_LOGS) only to move one. A second checkout must use its own data, cache and logs roots, never the installed ones.",
   "extra_tool_paths": [],
   "extra_read_paths": []
 }

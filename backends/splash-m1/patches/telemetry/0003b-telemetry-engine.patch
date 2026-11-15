@@ -1,0 +1,316 @@
+diff --git a/runtime/engine/Bootstrap.hpp b/runtime/engine/Bootstrap.hpp
+index b5618b0..fbd2f08 100644
+--- a/runtime/engine/Bootstrap.hpp
++++ b/runtime/engine/Bootstrap.hpp
+@@ -195,6 +195,9 @@ private:
+ 
+     // The status document the loop answers a status request with.
+     [[nodiscard]] std::string statusJson();
++    // The telemetry batch the loop answers a telemetry request with: the ring's records since
++    // `sinceSequence`, serialized at `level`, with capability metadata and a dropped count.
++    [[nodiscard]] std::string telemetryJson(uint64_t sinceSequence, int level);
+ 
+     // Records the thermal state macOS reports for the status document, and
+     // logs a change: nothing else tells why serving slowed down. The control
+diff --git a/runtime/engine/Bootstrap.mm b/runtime/engine/Bootstrap.mm
+index d0e714c..35af250 100644
+--- a/runtime/engine/Bootstrap.mm
++++ b/runtime/engine/Bootstrap.mm
+@@ -1,4 +1,5 @@
+ #include "engine/Bootstrap.hpp"
++#include "engine/Json.hpp"
+ #include "StderrLine.hpp"
+ 
+ #include <algorithm>
+@@ -188,6 +189,7 @@ RuntimeBootstrapReport reportForPlan(const EngineMemoryPlan &plan) {
+   // The runtime owns the loop and is never moved, so the loop never calls
+   // a runtime that is gone.
+   nativeLoop_->serveStatus([this] { return statusJson(); });
++  nativeLoop_->serveTelemetry([this](uint64_t since, int level) { return telemetryJson(since, level); });
+ }
+ 
+ ServingRuntime::~ServingRuntime() {
+@@ -237,6 +239,51 @@ RuntimeBootstrapReport reportForPlan(const EngineMemoryPlan &plan) {
+                            sample);
+ }
+ 
++// DwarfStar advanced telemetry. The ring's records since `sinceSequence`, with a dropped count and
++// the sequence to continue from, plus capability metadata so a consumer renders only what the
++// runtime reports. Fields per decode-cycle record: the batch width, output tokens, drafted and
++// accepted draft tokens, and the step's wall and cycle milliseconds. PLE, KV, prefix cache and
++// memory are not duplicated here: they are already in /status, from which a consumer takes deltas.
++std::string ServingRuntime::telemetryJson(uint64_t sinceSequence, int level) {
++  std::vector<TelemetryRecord> records;
++  const TelemetryRing::Drain drain = nativeLoop_->telemetryRing().drain(sinceSequence, records);
++  json::Writer w;
++  w.object([&] {
++    w.field("schema", 1u);
++    w.field("level", level);
++    w.field("next", drain.next);
++    w.field("dropped", drain.dropped);
++    w.object("capabilities", [&] {
++      // What this runtime can report, and how. A consumer draws only these.
++      w.field("dflash", "cycle");          // per verify-cycle proposals and acceptance (this ring)
++      w.field("routing", "unavailable");   // Splash does not report per-token expert selections
++      w.field("experts", "unavailable");
++      w.field("ple", "aggregate_via_status");
++      w.field("kv", "via_status");
++      w.field("prefix_cache", "via_status");
++      w.field("memory", "via_status");
++    });
++    w.array("events", [&] {
++      for (const TelemetryRecord &record : records) {
++        if (record.kind != TelemetryKind::DecodeCycle)
++          continue;
++        w.object([&] {
++          w.field("seq", record.sequence);
++          w.key("t").exact(record.monotonicMs);
++          w.field("kind", "decode_cycle");
++          w.field("width", record.a);
++          w.field("output", record.b);
++          w.field("drafted", record.c);
++          w.field("accepted", record.d);
++          w.key("wall_ms").exact(record.e);
++          w.key("cycle_ms").exact(record.f);
++        });
++      }
++    });
++  });
++  return w.str();
++}
++
+ void ServingRuntime::sampleThermalState() {
+   const std::string transition = thermalState_.update(queryThermalState());
+   if (!transition.empty())
+diff --git a/runtime/engine/NativeRuntime.cpp b/runtime/engine/NativeRuntime.cpp
+index c99c797..321720f 100644
+--- a/runtime/engine/NativeRuntime.cpp
++++ b/runtime/engine/NativeRuntime.cpp
+@@ -39,6 +39,12 @@ void NativeRuntime::serveStatus(StatusProvider provider) {
+   statusProvider_ = std::move(provider);
+ }
+ 
++void NativeRuntime::serveTelemetry(TelemetryProvider provider) {
++  if (!provider)
++    throw std::invalid_argument("the native engine loop was given no telemetry source");
++  telemetryProvider_ = std::move(provider);
++}
++
+ bool NativeRuntime::receive(std::span<const uint8_t> bytes) {
+   if (closeConnection_)
+     return false;
+@@ -185,6 +191,8 @@ bool NativeRuntime::handle(protocol::ClientMessage &message) {
+           return handleRelease(typed);
+         } else if constexpr (std::is_same_v<T, protocol::StopFrame>) {
+           return handleStop(typed);
++        } else if constexpr (std::is_same_v<T, protocol::TelemetryRequestFrame>) {
++          return handleTelemetry(typed);
+         } else {
+           return handleStatus(typed);
+         }
+@@ -299,6 +307,21 @@ bool NativeRuntime::handleRelease(const protocol::ReleaseRequestFrame &release)
+   return handleStatus(protocol::StatusRequestFrame{release.correlationId});
+ }
+ 
++// A telemetry poll keeps the ring recording for its window and is answered with the source's JSON
++// batch (a StatusJson reuses the status correlation machinery). An unknown level is clamped off.
++bool NativeRuntime::handleTelemetry(const protocol::TelemetryRequestFrame &request) {
++  if (!telemetryProvider_)
++    throw std::runtime_error("no telemetry source");
++  const int level = request.level > static_cast<uint8_t>(TelemetryLevel::Advanced)
++                        ? static_cast<int>(TelemetryLevel::Advanced)
++                        : static_cast<int>(request.level);
++  advancedTelemetry_.refresh(static_cast<TelemetryLevel>(level), config_.monotonicMilliseconds());
++  std::string json = telemetryProvider_(request.sinceSequence, level);
++  if (json.empty())
++    throw std::runtime_error("empty telemetry document");
++  return send(protocol::StatusJsonEvent{request.correlationId, std::move(json)});
++}
++
+ bool NativeRuntime::handleMaskIssue(protocol::ProtocolIssue issue) {
+   if (!telemetry_.contains(issue.requestId)) {
+     // Once framing establishes the request id, ignore late mask responses
+@@ -395,6 +418,17 @@ void NativeRuntime::batchCompleted(WorkKind kind, uint32_t width,
+   metrics_.batchCompleted(kind, width, inputTokens, outputTokens,
+                                   draftedTokens, acceptedDraftTokens,
+                                   wallMilliseconds, cycleMilliseconds);
++  // DwarfStar advanced telemetry: one decode-cycle record from values already in hand, only while
++  // a recent poll keeps the ring recording. Nobody watching: one relaxed atomic load and return.
++  if (kind != WorkKind::Decode || advancedTelemetry_.captureLevel() == 0)
++    return;
++  const double now = config_.monotonicMilliseconds();
++  if (advancedTelemetry_.expired(now)) {
++    advancedTelemetry_.stopCapture();
++    return;
++  }
++  advancedTelemetry_.record(TelemetryKind::DecodeCycle, now, width, outputTokens, draftedTokens,
++                            acceptedDraftTokens, wallMilliseconds, cycleMilliseconds);
+ }
+ 
+ void NativeRuntime::started(uint64_t requestId, uint32_t matchedTokens,
+diff --git a/runtime/engine/NativeRuntime.hpp b/runtime/engine/NativeRuntime.hpp
+index 7a9553a..021bcb9 100644
+--- a/runtime/engine/NativeRuntime.hpp
++++ b/runtime/engine/NativeRuntime.hpp
+@@ -4,6 +4,7 @@
+ #include "engine/Engine.hpp"
+ #include "engine/Protocol.hpp"
+ #include "engine/RuntimeMetrics.hpp"
++#include "engine/Telemetry.hpp"
+ 
+ #include <cstdint>
+ #include <exception>
+@@ -48,6 +49,7 @@ struct NativeLoopConfig {
+ // healthy.
+ // Request-scoped problems never arrive as exceptions here except
+ // std::invalid_argument from Engine::submit.
++// (telemetry ring)
+ class NativeRuntime final : private EngineEventSink {
+ public:
+   using ByteSink = std::function<void(std::span<const uint8_t>)>;
+@@ -62,6 +64,13 @@ public:
+   // for an empty provider.
+   void serveStatus(StatusProvider provider);
+ 
++  // DwarfStar advanced telemetry. serveTelemetry connects a source that serializes the ring's
++  // records since a sequence at a level (set like serveStatus, before any frame). A telemetry poll
++  // refreshes the ring's capture window and is answered with the source's JSON as a StatusJson.
++  using TelemetryProvider = std::function<std::string(uint64_t sinceSequence, int level)>;
++  void serveTelemetry(TelemetryProvider provider);
++  [[nodiscard]] TelemetryRing &telemetryRing() noexcept { return advancedTelemetry_; }
++
+   // Processes every complete frame in bytes. False means the connection
+   // must close. Request-scoped errors return true and preserve framing.
+   bool receive(std::span<const uint8_t> bytes);
+@@ -146,6 +155,7 @@ private:
+   bool handleMask(const protocol::MaskResponseFrame &mask);
+   bool handleStatus(const protocol::StatusRequestFrame &status);
+   bool handleRelease(const protocol::ReleaseRequestFrame &release);
++  bool handleTelemetry(const protocol::TelemetryRequestFrame &request);
+   bool handleMaskIssue(protocol::ProtocolIssue issue);
+   bool handleIssue(protocol::ProtocolIssue issue);
+   void requestError(uint64_t requestId, std::string code, std::string message,
+@@ -181,6 +191,9 @@ private:
+   NativeLoopConfig config_;
+   ByteSink output_;
+   StatusProvider statusProvider_;
++  TelemetryProvider telemetryProvider_;
++  // Bounded ring of decode-cycle telemetry; ~200 KB, several minutes of history.
++  TelemetryRing advancedTelemetry_{4096};
+   protocol::ProtocolLimits limits_;
+   protocol::FrameParser parser_;
+   // Before core_, which reports to it through this loop's EngineEventSink.
+diff --git a/runtime/engine/Protocol.cpp b/runtime/engine/Protocol.cpp
+index 7696335..5d86f8e 100644
+--- a/runtime/engine/Protocol.cpp
++++ b/runtime/engine/Protocol.cpp
+@@ -29,6 +29,7 @@ constexpr uint64_t kRequestEndFixedBytes = 8;
+ constexpr uint64_t kMaskResponseFixedBytes = 20;
+ constexpr uint64_t kStatusRequestFixedBytes = 8;
+ constexpr uint64_t kReleaseRequestFixedBytes = 8;
++constexpr uint64_t kTelemetryRequestFixedBytes = 17; // u64 correlation, u64 since, u8 level
+ constexpr uint64_t kReadyFixedBytes = 21;
+ constexpr uint64_t kStartFixedBytes = 16;
+ constexpr uint64_t kPromptProgressFixedBytes = 20;
+@@ -94,6 +95,8 @@ std::optional<PayloadBounds> payloadBounds(FrameType type,
+     return bounded(kStatusRequestFixedBytes, kStatusRequestFixedBytes);
+   case FrameType::ReleaseRequest:
+     return bounded(kReleaseRequestFixedBytes, kReleaseRequestFixedBytes);
++  case FrameType::TelemetryRequest:
++    return bounded(kTelemetryRequestFixedBytes, kTelemetryRequestFixedBytes);
+   default:
+     // The engine never receives an event.
+     return std::nullopt;
+@@ -133,6 +136,7 @@ bool clientFrameType(uint16_t raw, FrameType &type) {
+   case FrameType::MaskResponse:
+   case FrameType::StatusRequest:
+   case FrameType::ReleaseRequest:
++  case FrameType::TelemetryRequest:
+   case FrameType::Stop:
+     type = static_cast<FrameType>(raw);
+     return true;
+@@ -928,6 +932,18 @@ ProtocolResult<ClientMessage> decodeReleaseRequest(const Frame &frame) {
+   return success(ClientMessage{request});
+ }
+ 
++ProtocolResult<ClientMessage> decodeTelemetryRequest(const Frame &frame) {
++  Reader reader(frame.payload);
++  TelemetryRequestFrame request;
++  if (!reader.u64(request.correlationId) || !reader.u64(request.sinceSequence) ||
++      !reader.u8(request.level) || reader.remaining()) {
++    return failure<ClientMessage>(
++        makeIssue(FailureClass::ProtocolFatal, IssueCode::InvalidPayloadLength,
++                  0, "telemetry request payload has an invalid length"));
++  }
++  return success(ClientMessage{request});
++}
++
+ std::string_view frameTypeName(FrameType type) {
+   switch (type) {
+   case FrameType::Request:
+@@ -940,6 +956,8 @@ std::string_view frameTypeName(FrameType type) {
+     return "status_request";
+   case FrameType::ReleaseRequest:
+     return "release_request";
++  case FrameType::TelemetryRequest:
++    return "telemetry_request";
+   case FrameType::Stop:
+     return "stop";
+   case FrameType::Ready:
+@@ -1079,6 +1097,8 @@ ProtocolResult<ClientMessage> decodeFrame(Frame &&frame,
+       return decodeStatusRequest(frame);
+     case FrameType::ReleaseRequest:
+       return decodeReleaseRequest(frame);
++    case FrameType::TelemetryRequest:
++      return decodeTelemetryRequest(frame);
+     case FrameType::Stop:
+       return decodeRequestEnd<StopFrame>(frame);
+     default:
+diff --git a/runtime/engine/Protocol.hpp b/runtime/engine/Protocol.hpp
+index b5db05c..22d1a3d 100644
+--- a/runtime/engine/Protocol.hpp
++++ b/runtime/engine/Protocol.hpp
+@@ -37,6 +37,8 @@ enum class FrameType : uint16_t {
+   StatusRequest = 0x0004,
+   ReleaseRequest = 0x0005,
+   Stop = 0x0006,
++  // DwarfStar advanced telemetry: a bounded ring of runtime events, drained since a sequence.
++  TelemetryRequest = 0x0007,
+ 
+   Ready = 0x0100,
+   Start = 0x0101,
+@@ -195,6 +197,7 @@ struct RequestFrame {
+ //   MaskResponse   u64 requestId, u64 maskRequestId, u32 count, u32 words
+ //   StatusRequest  u64 correlationId
+ //   ReleaseRequest u64 correlationId
++//   TelemetryRequest u64 correlationId, u64 sinceSequence, u8 level
+ //   Stop           u64 requestId
+ //   Ready          u32 maxConcurrentRequests, u32 maxContextTokens, u8 vision,
+ //                  u32 vocabularySize, u32 maskRows, u32 stop token count,
+@@ -246,6 +249,17 @@ struct ReleaseRequestFrame {
+   bool operator==(const ReleaseRequestFrame &) const = default;
+ };
+ 
++// DwarfStar advanced telemetry. The engine answers with a StatusJson whose JSON is the telemetry
++// batch: every ring record with a sequence greater than `sinceSequence`, serialized at `level`
++// (0 off, 1 standard, 2 advanced). A poll also keeps the engine recording for a short window.
++struct TelemetryRequestFrame {
++  uint64_t correlationId = 0;
++  uint64_t sinceSequence = 0;
++  uint8_t level = 0;
++
++  bool operator==(const TelemetryRequestFrame &) const = default;
++};
++
+ // The client matched a stop condition: the engine finishes the request as
+ // Stop, a completion, or cancels it before its first token. The Done event
+ // still ends the request.
+@@ -431,7 +445,7 @@ struct StartFailedEvent {
+ 
+ using ClientMessage = std::variant<RequestFrame, CancelFrame, MaskResponseFrame,
+                                    StatusRequestFrame, ReleaseRequestFrame,
+-                                   StopFrame>;
++                                   TelemetryRequestFrame, StopFrame>;
+ using EngineEvent =
+     std::variant<ReadyEvent, StartEvent, PromptProgressEvent, TokensEvent,
+                  MaskRequestEvent, DoneEvent, ErrorEvent, StatusJsonEvent,
