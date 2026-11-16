@@ -217,6 +217,9 @@ def main(argv: list[str]) -> int:
     BASELINE.write_text(json.dumps(baseline, indent=1) + "\n")
     seal["baseline_file"] = {"path": BASELINE.name, "sha256": sha(BASELINE)}
     SEAL.write_text(json.dumps(seal, indent=2) + "\n")
-    print(json.dumps({"ok": True, "seal": str(SEAL), "baseline": str(BASELINE), "tracked_files": seal["repository"]["tracked_files"],
-                      "revision": seal["repository"]["revision"], "dirty": seal["repository"]["dirty"]}, indent=2))
+    repository = seal["repository"]
+    print(json.dumps({"ok": True, "seal": str(SEAL), "baseline": str(BASELINE), "schema": seal["schema"], "tree": repository["tree"],
+                      "revision": repository["metadata"]["commit"], "tag": repository["metadata"]["tag"],
+                      "tracked_files": repository["tracked_files"], "product_files": repository["product_files"],
+                      "dirty": repository["dirty"]}, indent=2))
     return 0
