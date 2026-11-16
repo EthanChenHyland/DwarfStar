@@ -84,27 +84,24 @@ Only one model runs at a time on a machine (ports 8030–8032), whichever checko
 1. Install the machine prerequisites (above) and clone the repository. `config/local.json` is optional: the roots default to the standard locations.
 2. Place the model files under `<assets>/Models/<Model>/` with the catalog's names; `bin/dwarfstar assets --hash` verifies them.
 3. Build the runtime (step 2 above) into `<assets>/Runtimes/splash-m1-1.6.1-ds2-telemetry/` (and, for a rollback, ds1 into `…-ds1/`); the controller checks its hashes.
-4. `bin/dwarfstar generate`, `bin/dwarfstar agent-patch --apply`, `scripts/validate/check.sh`, then build the app (`docs/WORKSTATION.md`) and `bin/dwarfstar zed --apply`.
+4. `bin/dwarfstar setup` (configuration, agent patch, Zed entries and the app), then `scripts/validate/check.sh`.
 5. `bin/dwarfstar doctor` should report every check ready; `bin/dwarfstar seal --verify` should pass.
 
 ## Updating an installation
 
-To move an existing installation to a newer release (each step is safe to repeat):
+The short form is in the README (backup, stop, pull, `bin/dwarfstar setup`). In detail, each step safe to repeat:
 
 ```bash
-bin/dwarfstar backup                       # chats, sessions and settings, checksummed
+bin/dwarfstar backup                       # chats, folders, sessions and settings, checksummed
 bin/dwarfstar stop-all                     # no model running; then quit the Workstation app (it stops its service)
 git fetch --tags && git checkout v<new>    # or `git pull` on main
 (cd agent-tools && npm ci)                 # only if agent-tools/package-lock.json changed
-bin/dwarfstar generate                     # instance configuration and agent links for the new catalog
-bin/dwarfstar agent-patch                  # reports the approval patch; add --apply if it is not "patched"
 bin/dwarfstar migrate                      # dry run: what the service will migrate at its next start
-python3 app/workstation/build.py --bundle "$HOME/Applications/DwarfStar Workstation.app"
-bin/dwarfstar doctor                       # a changed runtime pin or Zed entry shows here with its fix
+bin/dwarfstar setup                        # generate, agent patch, Zed entries, app rebuild (old bundle kept in the cache), checks
 bin/dwarfstar seal                         # re-seal this installation at the new tree
 ```
 
-Then open the app; its service migrates persistent data at start. If `doctor` reports a runtime that does not match its pin, the release changed `config/runtimes.json`: build that runtime (section 2) before starting a model. **Going back:** stop everything, check out the previous tag, run `bin/dwarfstar migrate --rollback --apply` first if you are going back to a build before 1.0.0, then `generate` and rebuild the app; `bin/dwarfstar restore <backup>` recovers chats and settings if anything is lost.
+Then open the app; its service migrates persistent data at start. If `setup` reports a runtime that does not match its pin, the release changed `config/runtimes.json`: build that runtime (section 2) before starting a model. **Going back:** stop everything, check out the previous tag, run `bin/dwarfstar migrate --rollback --apply` first if you are going back to a build before 1.0.0, then `bin/dwarfstar setup`; `bin/dwarfstar restore <backup>` recovers chats, folders and settings if anything is lost.
 
 ## Evidence index
 

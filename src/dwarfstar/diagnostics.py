@@ -176,9 +176,12 @@ def _integrations() -> list[dict]:
     rows.append(_check("Integrations", "KimiCU computer use", "ok" if kimicu.get("enabled") and command.exists() else "warn",
                        safe_path(command) if command.exists() else "not installed",
                        "Install KimiCU at /Applications/KimiCU.app and grant it Accessibility and Screen Recording; the Mac must be unlocked for GUI actions."))
-    app = Path.home() / "Applications/DwarfStar Workstation.app"
-    rows.append(_check("Integrations", "Workstation app", "ok" if app.is_dir() else "warn", safe_path(app),
-                       'Build it: `python3 app/workstation/build.py --bundle "$HOME/Applications/DwarfStar Workstation.app"`.'))
+    from dwarfstar import setup
+
+    app = setup.app_status()
+    rows.append(_check("Integrations", "Workstation app", "ok" if app["current"] else "warn",
+                       f"{safe_path(setup.APP)} · {app['version']} ({app['revision']})" if app["current"] else f"{safe_path(setup.APP)}: {app['why']}",
+                       "Run `bin/dwarfstar setup` (it builds and installs the app; the previous bundle is kept in the cache)."))
     return rows
 
 

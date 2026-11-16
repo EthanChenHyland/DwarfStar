@@ -52,6 +52,14 @@ bin/dwarfstar seal --verify   # seconds; add --hash-models to rehash every model
 
 A seal (schema 2) binds content, not history: the git tree hash and a hash of the product files (code, configuration, launchers, app, agent and runtime patches), the pinned runtime hashes, the model manifest (every file's size and SHA-256), the generated configuration, the persistent data schemas and the Workstation executable. Commit, branch and tag are metadata, so the same tree on another commit verifies. Documentation, tests, CI and research evidence are hashed in the baseline too, but a difference there is a **note**, not a failure, so a report committed after sealing does not break the seal. Verify names each changed, added or removed file. Schema 1 seals (before 1.0.0) are still read, with the same product/notes split taken from their baseline; a seal from a newer DwarfStar is refused.
 
+## App icon
+
+`app/workstation/icon/dwarfstar.svg` is the only source of the app icon: a dense white-hot stellar core and corona, one inclined orbit carrying a body, and a ring of measurement ticks, on a deep-space tile (the computation, and the instrument observing it). `python3 app/workstation/icon/build_icon.py [--out DIR]` renders it with AppKit (`render.swift`; no third-party tools) at every `.icns` size (16-512 pt, 1x and 2x), leaving out the tick ring and thickening the orbit at 64 px and below, and packs `DwarfStar.icns` with `iconutil`. `app/workstation/build.py` runs it for every build, so nothing rendered is committed. The navigation, setup guide and About panel use a small inline version of the same mark.
+
+## Building and installing the app
+
+`bin/dwarfstar setup` installs the app when it is missing, from another checkout, or another version. Directly: `python3 app/workstation/build.py --install "$HOME/Applications/DwarfStar Workstation.app"` builds, verifies the bundle (version, icon, executable, signature), moves the previous bundle to `<cache>/build/app-rollback/` and puts the new one in place. The bundle's version is the package version (`src/dwarfstar/__init__.py`), and it records the git revision shown in Diagnostics and About.
+
 ## Releasing
 
 ```bash

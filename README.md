@@ -25,23 +25,28 @@ Seven profiles, one per model × reasoning effort. Context is a model property; 
 
 ![Visualizer](docs/assets/visualizer.png)
 
-## Quick start
+## Set up DwarfStar
 
-Machine prerequisites (not installed by DwarfStar): Apple Silicon with macOS 26.4+ (validated: M1 Max, 64 GiB), Homebrew Python 3.12, Node 22.15+, Bun, the Oh My Pi agent **18.4.5** (`bun add -g @oh-my-pi/pi-coding-agent@18.4.5`), and the Xcode command-line tools; Zed and KimiCU are optional. Models and the runtime live outside the repository (docs/REPRODUCIBILITY.md).
+Machine prerequisites (not installed by DwarfStar): Apple Silicon with macOS 26.4+ (validated: M1 Max, 64 GiB), Homebrew Python 3.12, Node 22.15+, Bun, the Oh My Pi agent **18.4.5** (`bun add -g @oh-my-pi/pi-coding-agent@18.4.5`) and the Xcode command-line tools; Zed and KimiCU are optional. The models (about 70 GB each) and the Splash runtime live outside the repository, under `~/AI/DwarfStar`, and are never downloaded for you: [docs/REPRODUCIBILITY.md](docs/REPRODUCIBILITY.md) says where each file goes and how to build the runtime.
 
 ```bash
 git clone https://github.com/EthanChenHyland/DwarfStar.git ~/Developer/DwarfStar && cd ~/Developer/DwarfStar
 (cd agent-tools && npm ci)                 # then `npx playwright install chromium` for the agent's browser
-bin/dwarfstar generate                     # creates the per-user roots, instance configuration and agent links
-bin/dwarfstar agent-patch --apply          # scopes the approval presets inside the agent (exact, reversible)
-bin/dwarfstar assets                       # verifies models under ~/AI/DwarfStar against the catalog
-bin/dwarfstar doctor                       # every check should be ready
-scripts/validate/check.sh                  # no model is loaded
-python3 app/workstation/build.py --bundle "$HOME/Applications/DwarfStar Workstation.app"
-bin/dwarfstar zed --apply                  # seven Zed agent entries
+bin/dwarfstar setup                        # roots, configuration, agent patch, Zed entries, the app; then the checks
 ```
 
-`config/local.json` is optional; every root has a default. Model weights are not in this repository. On a new installation the Workstation opens a **Setup** guide over the same checks as `doctor`, one area at a time, with the command or file path for each fix; it changes nothing and downloads nothing. A fresh installation starts in Workspace Auto tool approval.
+`setup` does only what is missing and ends with a status summary (runtime, each model, Workstation, Zed, chats, doctor). Run it again at any time: a second run changes nothing. Anything it cannot do itself, such as a model file that is not in place, is listed with where it belongs. Open **DwarfStar Workstation** from `~/Applications`; on a new installation it shows a Setup guide over the same checks. A fresh installation starts in Workspace Auto tool approval. `config/local.json` is optional; every root has a default.
+
+## Update DwarfStar
+
+```bash
+bin/dwarfstar backup                       # chats, folders, sessions and settings, checksummed
+bin/dwarfstar stop-all                     # then quit the Workstation app
+git pull                                   # or: git fetch --tags && git checkout v<version>
+bin/dwarfstar setup                        # brings configuration, Zed and the app to the new version
+```
+
+Chats, folders and settings are kept; the service migrates stored data when it next starts (the originals are backed up first). Going back, and what to do when a release changes the runtime pin: [docs/REPRODUCIBILITY.md](docs/REPRODUCIBILITY.md#updating-an-installation).
 
 ## Documentation
 

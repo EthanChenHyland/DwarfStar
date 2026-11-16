@@ -6,12 +6,12 @@
 
 | View | Contents |
 |---|---|
-| **Chats** | New chat (uses the model and reasoning chosen on Run), Recent / Starred / Archived, tag filters and search (titles, tags, messages), pins (kept on top), stars, tags, inline rename (never overwritten by the automatic title), fork the whole chat or from any reply, new chat with the same settings, export as Markdown or JSON, select mode for bulk archive/restore/delete (deleting needs the count typed out; chats are moved aside, not erased), context used and left, compactions. Turns run through the same ACP agent as Zed and resume its session, so tools, the approval mode and the agent's automatic compaction apply; the full transcript is kept separately under `<data>/chats/` (never in Git). In Ask mode a tool call shows an approval card in the chat. Reasoning is not shown. The last chat reopens after a restart. |
+| **Chats** | New chat (uses the model and reasoning chosen on Run), Recent / Starred / Archived, **folders** (see below), tag filters and search (titles, tags, messages, across every folder), pins (kept on top), stars, tags, inline rename (never overwritten by the automatic title), fork the whole chat or from any reply, new chat with the same settings, export as Markdown or JSON, select mode for bulk archive/restore/delete (deleting needs the count typed out; chats are moved aside, not erased), context used and left, compactions. Turns run through the same ACP agent as Zed and resume its session, so tools, the approval mode and the agent's automatic compaction apply; the full transcript is kept separately under `<data>/chats/` (never in Git). In Ask mode a tool call shows an approval card in the chat. Reasoning is not shown. The last chat reopens after a restart. |
 | **Run** | Model selector (Scope Vanilla, Swift 1.5, Cyber), a reasoning selector that changes per model (the last level used with each model is remembered), the model's context as a fixed capability (128K for all three), launch/switch/stop with a stage row (stop current, memory check, load with a timer against the measured load time, health check, ready), a pre-switch summary when a running model or an answering chat would be interrupted, memory admission, key measured numbers, the matching Zed entry and the tool approval presets. |
 | **Models** | One page per model with the same schema: a measured headline (decode, first token, prefill, start, memory, reasoning levels), then identity, quantization, memory composition and storage; runtime policy, capabilities and file hashes sit behind a disclosure. Anything not measured says **Not measured**. |
 | **Live** | Two views, toggled at the top. **Standard**: the latest request (from the agent's own receipt), then Splash's running measurements since the model started — requests, time to first token, inter-token latency, prefill and decode rates, draft acceptance, prefix-cache hits — plus context, unified memory, thermal state, the processor and tool activity. **Advanced** is the former Visualizer (`docs/VISUALIZER.md`): a data map with a live per-verify-cycle DFlash2 draft panel (from the ds2 runtime's telemetry ring); what Splash does not report (router, experts, PLE) is labelled, never estimated. |
 | **Diagnostics** | A status strip (model, reasoning, runtime, context, checks); one memory composition bar with system RAM, the admission requirement, the Metal limit and the measured peak; performance since the model started and system facts side by side; chats, approval mode, telemetry and the last recovery. "All passed" stands for every ready check (27 on a complete installation), with the full list and the data roots behind disclosures; a failing or optional-missing check surfaces in a Needs-attention panel. Refresh, Copy diagnostics (home paths as `~`) and Reconcile state. `bin/dwarfstar doctor` prints the same checks. |
-| **Settings** | Tool approval (the three presets with their behaviour), the Zed agent entries and how to install them, shared Workstation/Zed conversations, and the five data roots. |
+| **Settings** | Tool approval (the three presets with their behaviour), the Zed agent entries and how to install them, shared Workstation/Zed conversations, About (version, runtime, build), the five data roots, and the chat trash. |
 | **Setup** | The first-run guide. It opens on its own once on a new installation (setup never finished and no chats yet); later from Diagnostics → **Setup guide** or the setup banner. It walks the `doctor` checks by area (this Mac, software, folders and runtime, models, integrations) in green / yellow / red, each problem with its remedy: commands to copy, and for a missing model every expected file path and size. It reads only and never downloads; **Check again** re-runs the checks. Then it offers the tool approval presets (Full Auto keeps its confirmation) and **Finish** records that setup was seen (`setup_completed` in `<data>/state/workstation.json`). |
 
 ## Profiles
@@ -23,6 +23,18 @@
 | Cyber | OFF, LOW, MEDIUM, XHIGH | 128K | INT8 / INT8 | no |
 
 Changing reasoning on a running model never restarts it; the effort is carried per request by the agent's provider file. Swift LOW and MEDIUM keep separate session namespaces.
+
+## Folders
+
+Folders organize chats into projects: **Folders** in the chat sidebar lists them with counts (All chats, your folders, Unfiled). A folder can hold one level of subfolders (*Projects / DwarfStar*).
+
+* **Create** with `+` (inside the selected top-level folder, or at the top); **Rename**, **New subfolder** and **Delete…** appear under the list when a folder is selected.
+* **Move** a chat with *Move to folder…* in its menu, with *Move to folder…* in Select mode for several at once, or by dragging it onto a folder.
+* **Selecting a folder** shows its chats and its subfolders' chats; a **search** looks in every folder and shows each result's folder.
+* **Deleting a folder never deletes a chat:** its chats (archived ones too) become Unfiled; deleting a folder with subfolders says so and removes them with it.
+* A folder is organization only. Moving a chat does not change its agent session, workspace, transcript, model or place in Recent, so a chat shared with Zed resumes in either client exactly as before. A fork starts in its original's folder; archiving keeps the folder, so an unarchived chat is back where it was. Tags stay separate: one folder, any number of tags.
+
+**Deleted chats** go to the chat trash (`<data>/chats/.deleted`) and stay recoverable until you empty it, from **Settings → Deleted chats** (typed confirmation) or `bin/dwarfstar storage --empty-chat-trash --apply`. Nothing is removed on a timer.
 
 ## Tool approval
 
