@@ -14,6 +14,9 @@ The first tagged release: the Splash-m1 workstation as validated on an M1 Max (6
 * **Visualizer:** per-cycle DFlash2 draft panel (rolling acceptance, current cycle, accepted/rejected tokens), and a bounded **request history** (last 20 requests, named by profile and time) with View/scrub/Back to live and an explicit per-request JSON export.
 * **Setup guide:** a new installation opens a first-run guide over the `doctor` checks (green/yellow/red with the command or file path for each fix). It never downloads anything.
 * **Downloads** (chat export, request export) now go through a Save panel in the app.
+* **Chat folders:** two levels (*Projects / DwarfStar*), Move to folder… from the chat menu, the bulk bar or drag and drop, counts, search across folders. Folders are organization only: a chat's agent session, workspace and Zed link are never touched. Deleting a folder never deletes a chat (its chats become Unfiled). Tags stay independent.
+* **Chat trash:** Settings shows deleted chats and empties the trash on typed confirmation; nothing is purged on a timer.
+* **App:** a DwarfStar icon rendered from one SVG at build time, an About panel, and the product version in the bundle, Diagnostics and `doctor`.
 
 ### Data
 
@@ -26,6 +29,10 @@ The first tagged release: the Splash-m1 workstation as validated on an M1 Max (6
 * **A fresh installation starts in Workspace Auto**, not Full Auto. Full Auto is entered only by explicit confirmation and persists across restarts.
 * Loopback-only API checks (Host and Origin; opaque origins refused), static files confined to the web folder, and a test that every request method is guarded. All listeners bind `127.0.0.1`. Telemetry carries numbers, ids and short enums only; diagnostics write home paths as `~`.
 
+### Setup
+
+* **`bin/dwarfstar setup`**: one idempotent command for configuration, the agent patch, Zed entries and the Workstation app (installed safely, the previous bundle kept in the cache), ending with a status summary. The README has one *Set up* and one *Update* section.
+
 ### Reproducibility and release
 
 * The agent approval patch is now repository data (`acp/omp-patch.json`, exact snippet edits for Oh My Pi 18.4.5) applied by `bin/dwarfstar agent-patch --apply`, replacing a machine-only edit that imported a retired path. `generate` creates every root; `config/local.example.json` no longer pins roots; a second checkout can run beside production on its own ports.
@@ -35,7 +42,7 @@ The first tagged release: the Splash-m1 workstation as validated on an M1 Max (6
 
 ### Known limitations
 
-See docs/known-limitations.json (17 entries), including: Splash does not report router/expert/PLE activity; request history is segmented by decode pauses; pre-1.0 builds need `migrate --rollback`; the approval presets depend on the pinned agent version; Workspace Auto allows outbound network.
+See docs/known-limitations.json (18 entries), including: Splash does not report router/expert/PLE activity; request history is segmented by decode pauses; pre-1.0 builds need `migrate --rollback`; the approval presets depend on the pinned agent version; Workspace Auto allows outbound network.
 
 ### Not in this release
 

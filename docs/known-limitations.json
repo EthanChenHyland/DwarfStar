@@ -138,5 +138,14 @@
    "cyber"
   ],
   "text": "The setup guide and `doctor` only check and explain. Nothing is installed or downloaded for you: model files (about 70 GB per model), the runtime build, Bun, the agent and its browser are explicit steps in docs/REPRODUCIBILITY.md."
+ },
+ {
+  "id": "folder-depth",
+  "models": [
+   "scope",
+   "swift",
+   "cyber"
+  ],
+  "text": "Chat folders nest two levels deep (Projects / DwarfStar), and a folder cannot be moved under another one; rename it, or create the new one and move its chats. Folders are Workstation metadata, so Zed's agent panel lists conversations without them."
  }
 ]
