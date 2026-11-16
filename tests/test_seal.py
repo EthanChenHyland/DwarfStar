@@ -110,6 +110,20 @@ class SealTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertIn("newer DwarfStar", result["problems"][0])
 
+    def test_writing_a_seal_prints_its_summary(self):
+        import contextlib
+        import io
+
+        recorded, baseline = built(FILES)
+        recorded["repository"].update(tracked_files=len(FILES), product_files=4)
+        with mock.patch.object(seal, "build", return_value=(recorded, baseline)):
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(seal.main([]), 0)
+        summary = json.loads(output.getvalue())
+        self.assertEqual((summary["schema"], summary["revision"], summary["tree"]), (seal.SCHEMA, "commit-1", "tree-1"))
+        self.assertTrue(seal.SEAL.is_file() and seal.BASELINE.is_file())
+
     def test_a_changed_data_schema_fails(self):
         recorded, _ = built(FILES)
         recorded["schemas"] = {"seal": seal.SCHEMA, "data.chat": 1}
