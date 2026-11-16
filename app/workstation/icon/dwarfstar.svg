@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- DwarfStar app icon. A small, dense, white-hot stellar core with its corona on a deep-space tile; one inclined
+       orbit with a body on it; a fine ring of measurement ticks: the computation and the instrument observing it.
+       Canonical source; `python3 app/workstation/icon/build_icon.py` renders every size and the .icns. At 64 px
+       and below the group id="detail" is removed (the ticks would only add noise) and the orbit is drawn heavier.
+       Colors are explicit (no stroke-opacity) so every renderer draws the same thing. -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#19223f"/>
+      <stop offset="1" stop-color="#070a13"/>
+    </linearGradient>
+    <radialGradient id="nebula" cx="512" cy="512" r="420" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2b3f93"/>
+      <stop offset="0.5" stop-color="#16214a"/>
+      <stop offset="1" stop-color="#0c1226" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="corona" cx="512" cy="512" r="230" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.30" stop-color="#e4edff"/>
+      <stop offset="0.42" stop-color="#9fb9ff"/>
+      <stop offset="0.62" stop-color="#4d68d6" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#2c3f9c" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="core" cx="512" cy="512" r="66" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.8" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#dbe6ff"/>
+    </radialGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3a4670"/>
+      <stop offset="1" stop-color="#121729"/>
+    </linearGradient>
+    <clipPath id="body"><rect x="100" y="100" width="824" height="824" rx="186"/></clipPath>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#tile)"/>
+  <g clip-path="url(#body)">
+    <rect x="100" y="100" width="824" height="824" fill="url(#nebula)"/>
+    <g id="detail" fill="none" stroke-linecap="round">
+      <circle cx="512" cy="512" r="338" stroke="#26335f" stroke-width="3"/>
+      <path stroke="#5a70b8" stroke-width="6" d="M512 156v40M512 828v40M156 512h40M828 512h40M260 260l28 28M764 260l-28 28M260 764l28-28M764 764l-28-28"/>
+      <path stroke="#34447c" stroke-width="3.5" d="M604 167l-6 21M420 857l6-21M857 604l-21-6M167 420l21 6M693 207l-11 19M331 817l11-19M817 693l-19-11M207 331l19 11M420 167l6 21M604 857l-6-21M857 420l-21 6M167 604l21-6M331 207l11 19M693 817l-11-19M817 331l-19 11M207 693l19-11"/>
+    </g>
+    <!-- the orbit: its far half passes behind the star, its near half in front, carrying one body -->
+    <g transform="rotate(-22 512 512)" fill="none" stroke-linecap="round">
+      <path d="M168 512a344 136 0 0 1 688 0" stroke="#4a5fa8" stroke-width="11"/>
+    </g>
+    <circle cx="512" cy="512" r="230" fill="url(#corona)"/>
+    <circle cx="512" cy="512" r="66" fill="url(#core)"/>
+    <g transform="rotate(-22 512 512)" fill="none" stroke-linecap="round">
+      <path d="M856 512a344 136 0 0 1 -688 0" stroke="#aec3ff" stroke-width="11"/>
+      <circle cx="282" cy="612" r="24" fill="#f2f6ff" stroke="#0d1328" stroke-width="6"/>
+    </g>
+  </g>
+  <rect x="101.5" y="101.5" width="821" height="821" rx="184.5" fill="none" stroke="url(#rim)" stroke-width="3"/>
+</svg>

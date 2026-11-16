@@ -49,3 +49,6 @@ dwarfstar-data/
 .env
 *.pem
 *.key
+
+# Rendered app icon (regenerate with app/workstation/icon/build_icon.py)
+app/workstation/icon/build/

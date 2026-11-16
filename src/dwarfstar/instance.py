@@ -218,10 +218,13 @@ def expected(model_id: str) -> dict[str, str]:
 
 def link_agent_tool_data() -> None:
     """agent-tools keeps its mutable state in DATA and its browser cache in CACHE (machine-local, not in Git)."""
+    # A temporary instance (roots overridden by DWARFSTAR_DATA / DWARFSTAR_CACHE in the environment) never re-points an
+    # existing link: the checkout's links belong to its configured roots, or production's agents would follow a test.
+    temporary = any(os.environ.get(v) for v in ("DWARFSTAR_DATA", "DWARFSTAR_CACHE"))
     for name, target in (("state", STATE / "agent-tools"), ("cache", CACHE / "agent-tools")):
         target.mkdir(parents=True, exist_ok=True)
         link = CODE / "agent-tools" / name
-        if link.is_symlink() and Path(os.readlink(link)) != target:
+        if link.is_symlink() and Path(os.readlink(link)) != target and not temporary:
             link.unlink()  # roots moved: point the link at the current one
         if not link.exists() and not link.is_symlink():
             link.symlink_to(target)

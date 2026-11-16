@@ -12,7 +12,7 @@ In a backup (paths relative to the data root unless noted):
   chats/<id>/workspace/.omp-dwarfstar-*-agent/sessions/**
                                              the agent's session files: the canonical transcript of shared chats
   chats/<id>/workspace/<visible files>       files the agent wrote for you in the chat's workspace
-  config/approval.json, state/workstation.json
+  config/approval.json, state/workstation.json, chats/folders.json (folders merge by id on restore)
   code/config/local.json                     the checkout's optional local configuration
   catalog/                                   runtimes.json, runtime-policy.json, profiles.json and the model files'
                                              names, sizes and SHA-256 (provenance references, not the files)
@@ -42,6 +42,7 @@ from dwarfstar.paths import CODE
 FORMAT = 1
 NAME_PREFIX = "DwarfStar-Backup-"
 STATE_FILES = ("config/approval.json", "state/workstation.json")
+FOLDERS = "chats/folders.json"  # merged by folder id on restore, so folders made after the backup are kept
 SKIP_WORKSPACE_DIRS = ("node_modules",)
 
 
@@ -88,7 +89,7 @@ def collect(data: Path | None = None, include_trash: bool = False) -> list[tuple
         files.append((str(PurePosixPath(*record.relative_to(data).parts)), record))
         for path in _workspace_files(folder / "workspace"):
             files.append((str(PurePosixPath(*path.relative_to(data).parts)), path))
-    for name in STATE_FILES:
+    for name in STATE_FILES + (FOLDERS,):
         if (data / name).is_file():
             files.append((name, data / name))
     local = CODE / "config" / "local.json"
@@ -192,7 +193,7 @@ def _destination(name: str, data: Path) -> Path | None:
 def plan(backup: Path, data: Path | None = None) -> dict:
     data = data or paths.DATA
     manifest, files = read(backup)
-    changes = {"add": [], "replace": [], "same": [], "skip": []}
+    changes = {"add": [], "replace": [], "same": [], "skip": [], "merge": []}
     for name, blob in sorted(files.items()):
         target = _destination(name, data)
         if target is None:
@@ -201,6 +202,8 @@ def plan(backup: Path, data: Path | None = None) -> dict:
             changes["skip"].append(name)  # never overwrite this checkout's local configuration
         elif not target.exists():
             changes["add"].append(name)
+        elif name == FOLDERS and target.read_bytes() != blob:
+            changes["merge"].append(name)
         elif target.read_bytes() == blob:
             changes["same"].append(name)
         else:
@@ -241,6 +244,14 @@ def restore(backup: Path, data: Path | None = None, check_service: bool = True) 
             staged.write_bytes(files[name])
             if _sha(staged.read_bytes()) != _sha(files[name]):
                 raise ValueError(f"staging failed: {name}")
+            writes.append((staged, _destination(name, data)))
+        for name in steps["changes"]["merge"]:  # folders: the backup's folders, plus any made since, by id
+            current = json.loads(_destination(name, data).read_text()).get("folders", [])
+            restored = json.loads(files[name]).get("folders", [])
+            merged = restored + [f for f in current if f.get("id") not in {r.get("id") for r in restored}]
+            staged = staging / name
+            staged.parent.mkdir(parents=True, exist_ok=True)
+            staged.write_text(json.dumps({"schema": 1, "folders": merged}, indent=1, ensure_ascii=False) + "\n")
             writes.append((staged, _destination(name, data)))
         for staged, target in writes:  # each file replaced atomically; a failure leaves the safety backup to return to
             target.parent.mkdir(parents=True, exist_ok=True)

@@ -64,6 +64,12 @@ def _chat_1_to_2(record: dict) -> dict:
     return out
 
 
+def _chat_2_to_3(record: dict) -> dict:
+    """Schema 3 adds folders: a chat names its folder (None is Unfiled). Nothing else changes: id, agent session,
+    transcript, Zed links, compactions and timestamps are kept as they are."""
+    return {**record, "folder": record.get("folder"), "schema": 3}
+
+
 # ------------------------------------------------------- workstation state
 
 def _state_0_to_1(record: dict) -> dict:
@@ -82,18 +88,20 @@ def _permission_0_to_1(record: dict) -> dict:
 
 Migration = Callable[[dict], dict]
 MIGRATIONS: dict[str, list[Migration]] = {
-    "chat": [_chat_0_to_1, _chat_1_to_2],             # index N migrates version N to N+1
+    "chat": [_chat_0_to_1, _chat_1_to_2, _chat_2_to_3],  # index N migrates version N to N+1
     "workstation_state": [_state_0_to_1],
     "approval": [],
     "permission_runtime": [_permission_0_to_1],
+    "folders": [],
 }
 CURRENT = {kind: len(steps) for kind, steps in MIGRATIONS.items()}
 CURRENT["approval"] = 1  # born versioned
+CURRENT["folders"] = 1   # born versioned (1.0.0)
 
 
 # The versions the previous release (before 1.0.0's versioning) reads, where they differ from CURRENT. Its chat reader
-# accepts only schema 1. Chat schema 2 adds only defaults that reader already applied by omission, so going back is
-# the version number alone and loses nothing.
+# accepts only schema 1. Chat schemas 2 and 3 add only fields that reader ignores (defaults, the folder), so going back
+# is the version number alone and loses nothing: a later forward migration finds the folder still there.
 ROLLBACK = {"chat": 1}
 
 
@@ -101,7 +109,11 @@ def _chat_2_to_1(record: dict) -> dict:
     return {**record, "schema": 1}
 
 
-DOWNGRADES: dict[str, dict[int, Migration]] = {"chat": {2: _chat_2_to_1}}  # version N -> N-1
+def _chat_3_to_2(record: dict) -> dict:
+    return {**record, "schema": 2}
+
+
+DOWNGRADES: dict[str, dict[int, Migration]] = {"chat": {3: _chat_3_to_2, 2: _chat_2_to_1}}  # version N -> N-1
 
 
 class SchemaError(ValueError):
@@ -144,7 +156,8 @@ def stores(root: Path | None = None) -> list[tuple[str, Path]]:
     found = [("chat", path) for path in sorted((data / "chats").glob("c*/chat.json"))]
     for kind, path in (("workstation_state", data / "state" / "workstation.json"),
                        ("approval", data / "config" / "approval.json"),
-                       ("permission_runtime", data / "config" / "permission-runtime.json")):
+                       ("permission_runtime", data / "config" / "permission-runtime.json"),
+                       ("folders", data / "chats" / "folders.json")):
         if path.is_file():
             found.append((kind, path))
     return found

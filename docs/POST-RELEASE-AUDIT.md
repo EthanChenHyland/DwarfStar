@@ -1,5 +1,7 @@
 # Post-release audit (2026-11-15)
 
+> Follow-up: the release gap below was closed the same day (PR #3 merged, `v1.0.0` tagged). See `docs/FINAL-PRODUCT-AUDIT.md`.
+
 **Headline: there is no release yet.** This audit was asked for after release, but `main` is still `57627e0` (the ds1 convergence merge). The hardening work and ds2 are in **PR #3** (`release/hardening-v1`), which is open, has green CI and is not merged. No `v1.0.0` tag and no GitHub Release exist.
 
 The installed product runs from the PR branch. So the most important finding is a gap, not a defect: **GitHub's `main` lacks the Workspace Auto security fix that this Mac already runs.**

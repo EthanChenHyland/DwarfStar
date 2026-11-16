@@ -503,6 +503,7 @@ function renderLive() {
 }
 
 /* --------------------------------------------------------------- settings */
+const PRODUCT_MARK = `<svg viewBox="0 0 32 32" width="44" height="44" aria-hidden="true"><defs><radialGradient id="about-mark" cx="16" cy="16" r="9" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#fff"/><stop offset=".35" stop-color="#e4edff"/><stop offset=".55" stop-color="#9fb9ff"/><stop offset="1" stop-color="#4d68d6" stop-opacity="0"/></radialGradient></defs><path d="M4.5 16a11.5 4.6 0 0 1 23 0" transform="rotate(-22 16 16)" fill="none" stroke="#4a5fa8" stroke-width="1.4"/><circle cx="16" cy="16" r="9" fill="url(#about-mark)"/><circle cx="16" cy="16" r="2.6" fill="#fff"/><g transform="rotate(-22 16 16)"><path d="M27.5 16a11.5 4.6 0 0 1 -23 0" fill="none" stroke="#aec3ff" stroke-width="1.4" stroke-linecap="round"/><circle cx="8.6" cy="19.5" r="1.7" fill="#f2f6ff"/></g></svg>`;
 function renderSettings() {
   const root = $("#view-settings"); if (!S.state) return;
   const permissions = S.state.permissions || {};
@@ -524,9 +525,20 @@ function renderSettings() {
         <dt>Install or update</dt><dd class="mono">bin/dwarfstar zed --apply</dd>
         <dt>Shared conversations</dt><dd>Chats → Zed lists DwarfStar threads from Zed; a chat's menu has Open in Zed. One client writes to a conversation at a time.</dd></dl>
     </div>
+    <div class="panel section about"><h2>About</h2>
+      <div class="row about-row">${PRODUCT_MARK}
+        <div><b>DwarfStar Workstation</b> <span class="muted">${esc(S.version?.dwarfstar || "")}</span>
+          <div class="small muted">Local inference on Apple Silicon: three models on one Splash runtime (${esc(S.version?.runtime || "…")})${S.version?.revision ? `, build ${esc(S.version.revision)}` : ""}.</div>
+          <div class="small faint">MIT License · <a href="https://github.com/EthanChenHyland/DwarfStar" rel="noopener">github.com/EthanChenHyland/DwarfStar</a></div></div></div>
+    </div>
     <div class="panel section"><h2>Data</h2>
       ${roots ? `<dl class="kv">${roots.map(([k, v]) => `<dt>${esc(k)}</dt><dd class="mono small">${esc(v)}</dd>`).join("")}</dl>` : `<span class="muted">Loading…</span>`}
       <p class="faint small" style="margin:var(--sp-3) 0 0">Disk use and safe cleanup: <span class="mono">bin/dwarfstar storage</span> and <span class="mono">bin/dwarfstar cache clean</span> (dry run unless --apply).</p>
+    </div>
+    <div class="panel section"><h2>Deleted chats</h2>
+      <div class="row small" id="trash-row"><span class="muted">${S.trash ? (S.trash.chats ? `${S.trash.chats} deleted chat${S.trash.chats === 1 ? "" : "s"} (${(S.trash.bytes / 2 ** 20).toFixed(1)} MB), kept until you empty the trash. Nothing is removed on a timer.` : "The chat trash is empty.") : "Loading…"}</span>
+        <span class="spacer"></span>${S.trash?.chats ? `<button class="quiet small-button destructive" id="trash-empty">Empty trash…</button>` : ""}</div>
+      <div id="trash-confirm"></div>
     </div>`;
   root.querySelectorAll("[data-approval]").forEach((b) => b.onclick = () => {
     if (b.dataset.approval === permissions.approval_mode) return;
@@ -536,8 +548,23 @@ function renderSettings() {
   const yes = $("#full-auto-yes", root), no = $("#full-auto-no", root);
   if (yes) yes.onclick = () => setApproval("full_auto", "full_auto");
   if (no) no.onclick = () => { S.confirmFullAuto = false; renderSettings(); };
+  api("/api/chats-trash").then((t) => { const before = JSON.stringify(S.trash); S.trash = t.ok ? t : null; if (S.view === "settings" && JSON.stringify(S.trash) !== before) renderSettings(); });
+  const empty = $("#trash-empty", root);
+  if (empty) empty.onclick = () => {
+    const n = S.trash.chats;
+    $("#trash-confirm", root).innerHTML = `<div class="notice bad small" style="margin-top:8px">This permanently removes ${n} deleted chat${n === 1 ? "" : "s"} and their workspaces. It cannot be undone.
+      <div class="row" style="margin-top:6px"><input id="trash-phrase" placeholder='Type "empty trash"' aria-label="Confirmation"><button class="danger small-button" id="trash-yes" disabled>Empty trash</button></div></div>`;
+    const phrase = $("#trash-phrase", root), yes = $("#trash-yes", root);
+    phrase.oninput = () => { yes.disabled = phrase.value.trim() !== "empty trash"; };
+    yes.onclick = async () => {
+      const result = await api("/api/chats-trash/empty", { confirm: phrase.value.trim() });
+      toast(result.ok ? `Removed ${result.removed} deleted chat${result.removed === 1 ? "" : "s"}` : result.error);
+      S.trash = null; renderSettings();
+    };
+  };
   if (!roots) api("/api/diagnostics").then((d) => {
     const names = { code: "Code", assets: "Models and runtime", data: "Chats and settings", cache: "Cache", logs: "Logs" };
+    S.version = d.version || null;
     S.settingsRoots = Object.entries(d.locations || {}).filter(([k]) => names[k]).map(([k, v]) => [names[k], v.replace(/^\/Users\/[^/]+/, "~")]);
     if (S.view === "settings") renderSettings();
   });

@@ -8,7 +8,7 @@
   const D = window.DwarfStar, S = D.S, esc = D.esc;
   const C = { mounted: false, root: null, list: [], tags: [], filter: "recent", tag: null, query: "", current: null, chat: null, progress: null,
               poll: 0, renaming: false, tagging: false, confirmDelete: 0, searchTimer: 0, startedModel: null, selecting: false, selected: new Set(),
-              restored: false };
+              restored: false, folder: null, folders: [], unfiled: 0, collapsed: new Set(), folderEdit: null };
 
   const when = (t) => {
     const s = Date.now() / 1000 - t;
@@ -40,6 +40,7 @@
               <button class="chip" data-filter="archived" role="tab">Archived</button>
               <button class="chip" data-filter="zed" role="tab" title="DwarfStar threads in Zed's agent panel">Zed</button>
             </div>
+            <nav class="chat-folders" id="chat-folders" aria-label="Folders"></nav>
             <div class="chat-tags" id="chat-tags"></div>
             <div class="chat-bulk" id="chat-bulk" hidden></div>
             <ul class="chat-list" id="chat-list"></ul>
@@ -64,19 +65,113 @@
   function setFilter(filter, tag = null) {
     C.filter = filter; C.tag = tag; C.selected.clear();
     C.root.querySelectorAll("[data-filter]").forEach((x) => x.classList.toggle("selected", x.dataset.filter === filter && !tag));
-    loadList(); renderBulk();
+    loadList(); renderBulk(); renderFolders();
   }
 
   function unmount() { clearTimeout(C.poll); C.poll = 0; }
 
   async function loadList() {
     if (C.filter === "zed") return loadZed();
+    // A search looks in every folder (results name their folder); otherwise the selected folder scopes the list.
     const query = new URLSearchParams({ archived: C.filter === "archived" ? "1" : "0", ...(C.filter === "starred" ? { starred: "1" } : {}),
-                                        ...(C.tag ? { tag: C.tag } : {}), ...(C.query ? { q: C.query } : {}) });
+                                        ...(C.tag ? { tag: C.tag } : {}), ...(C.query ? { q: C.query } : C.folder ? { folder: C.folder } : {}) });
     const result = await D.api("/api/chats?" + query);
     C.list = result.ok ? result.chats : [];
     C.tags = result.ok ? result.tags : [];
-    renderList(); renderTags();
+    if (result.ok) { C.folders = result.folders; C.unfiled = result.unfiled; }
+    if (C.folder && C.folder !== "unfiled" && !C.folders.some((f) => f.id === C.folder)) C.folder = null;
+    renderList(); renderTags(); renderFolders();
+  }
+
+  /* Folders: organizational metadata only (a chat names its folder; its agent session is never touched). Two levels,
+   * a count per row, and the actions for the selected folder in one quiet line. */
+  const folderPath = (id) => (C.folders.find((f) => f.id === id) || {}).path || "";
+  function folderOptions(selected) {
+    return `<option value="">Unfiled</option>` + C.folders.map((f) => `<option value="${esc(f.id)}" ${f.id === selected ? "selected" : ""}>${esc(f.path)}</option>`).join("");
+  }
+  function renderFolders() {
+    const node = C.root.querySelector("#chat-folders");
+    if (!node) return;
+    if (C.filter === "zed") { node.innerHTML = ""; return; }
+    const children = (parent) => C.folders.filter((f) => (f.parent || null) === parent);
+    const row = (f, depth) => {
+      const kids = children(f.id), open = !C.collapsed.has(f.id);
+      return `<li><div class="folder-row ${C.folder === f.id ? "active" : ""}" data-folder="${esc(f.id)}" style="--depth:${depth}" title="${esc(f.path)}">
+          ${kids.length ? `<button class="folder-toggle" data-toggle="${esc(f.id)}" aria-label="${open ? "Collapse" : "Expand"} ${esc(f.name)}" aria-expanded="${open}">${open ? "▾" : "▸"}</button>` : '<span class="folder-toggle"></span>'}
+          <span class="folder-name">${esc(f.name)}</span><span class="folder-count">${f.total || ""}</span></div>
+        ${kids.length && open ? `<ul>${kids.map((k) => row(k, depth + 1)).join("")}</ul>` : ""}</li>`;
+    };
+    const selected = C.folders.find((f) => f.id === C.folder);
+    const edit = C.folderEdit;
+    node.innerHTML = `<div class="folder-head"><span>Folders</span><button class="quiet small-button" id="folder-new" title="New folder${selected && !selected.parent ? " inside “" + esc(selected.name) + "”" : ""}">+</button></div>
+      <ul class="folder-tree">
+        <li><div class="folder-row ${C.folder === null ? "active" : ""}" data-folder=""><span class="folder-toggle"></span><span class="folder-name">All chats</span></div></li>
+        ${children(null).map((f) => row(f, 0)).join("")}
+        <li><div class="folder-row ${C.folder === "unfiled" ? "active" : ""}" data-folder="unfiled"><span class="folder-toggle"></span><span class="folder-name">Unfiled</span><span class="folder-count">${C.unfiled || ""}</span></div></li>
+      </ul>
+      ${edit ? `<form class="folder-edit row" id="folder-form"><input id="folder-name" value="${esc(edit.name || "")}" maxlength="40" placeholder="${edit.mode === "rename" ? "Folder name" : edit.parent ? "Subfolder name" : "Folder name"}" aria-label="Folder name">
+          <button class="ghost small-button" type="submit">${edit.mode === "rename" ? "Rename" : "Create"}</button><button class="quiet small-button" type="button" id="folder-cancel">Cancel</button></form>`
+        : edit === null && selected ? `<div class="folder-actions small"><button class="quiet small-button" id="folder-rename">Rename</button>
+          ${!selected.parent ? `<button class="quiet small-button" id="folder-sub">New subfolder</button>` : ""}
+          <button class="quiet small-button destructive" id="folder-delete">Delete…</button></div>` : ""}
+      <div id="folder-confirm"></div>`;
+    node.querySelectorAll("[data-folder]").forEach((r) => {
+      r.onclick = (event) => {
+        if (event.target.closest("[data-toggle]")) return;
+        C.folder = r.dataset.folder || null; C.folderEdit = null; C.selected.clear();
+        if (C.query) { C.query = ""; C.root.querySelector("#chat-search").value = ""; }
+        loadList(); renderBulk();
+      };
+      // drag a chat onto a folder to move it (the menu's Move to folder… does the same)
+      r.ondragover = (event) => { if (event.dataTransfer.types.includes("text/x-dwarfstar-chat")) { event.preventDefault(); r.classList.add("drop"); } };
+      r.ondragleave = () => r.classList.remove("drop");
+      r.ondrop = (event) => {
+        event.preventDefault(); r.classList.remove("drop");
+        const id = event.dataTransfer.getData("text/x-dwarfstar-chat");
+        if (id) moveChats([id], r.dataset.folder === "unfiled" || !r.dataset.folder ? null : r.dataset.folder);
+      };
+    });
+    node.querySelectorAll("[data-toggle]").forEach((b) => b.onclick = () => {
+      if (C.collapsed.has(b.dataset.toggle)) C.collapsed.delete(b.dataset.toggle); else C.collapsed.add(b.dataset.toggle);
+      renderFolders();
+    });
+    node.querySelector("#folder-new").onclick = () => { C.folderEdit = { mode: "create", parent: selected && !selected.parent ? selected.id : null }; renderFolders(); node.querySelector("#folder-name")?.focus(); };
+    node.querySelector("#folder-rename")?.addEventListener("click", () => { C.folderEdit = { mode: "rename", id: selected.id, name: selected.name }; renderFolders(); node.querySelector("#folder-name")?.select(); });
+    node.querySelector("#folder-sub")?.addEventListener("click", () => { C.folderEdit = { mode: "create", parent: selected.id }; renderFolders(); node.querySelector("#folder-name")?.focus(); });
+    node.querySelector("#folder-cancel")?.addEventListener("click", () => { C.folderEdit = null; renderFolders(); });
+    node.querySelector("#folder-form")?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const name = node.querySelector("#folder-name").value.trim();
+      const result = edit.mode === "rename" ? await D.api(`/api/folders/${edit.id}/rename`, { name })
+        : await D.api("/api/folders", { name, ...(edit.parent ? { parent: edit.parent } : {}) });
+      if (!result.ok) return D.toast(result.error);
+      C.folderEdit = null;
+      if (edit.mode === "create") { C.folder = result.folder.id; if (edit.parent) C.collapsed.delete(edit.parent); }
+      loadList();
+    });
+    node.querySelector("#folder-delete")?.addEventListener("click", () => {
+      const subs = C.folders.filter((f) => f.parent === selected.id).length, chats = selected.total;
+      node.querySelector("#folder-confirm").innerHTML = `<div class="notice bad small">Delete “${esc(selected.name)}”${subs ? ` and its ${subs} subfolder${subs === 1 ? "" : "s"}` : ""}?
+          ${chats ? `Its ${chats} chat${chats === 1 ? "" : "s"} move${chats === 1 ? "s" : ""} to Unfiled; no chat is deleted.` : "No chats are in it."}
+          <div class="row" style="margin-top:6px"><button class="danger small-button" id="folder-delete-yes">Delete folder</button><button class="ghost small-button" id="folder-delete-no">Cancel</button></div></div>`;
+      node.querySelector("#folder-delete-no").onclick = () => renderFolders();
+      node.querySelector("#folder-delete-yes").onclick = async () => {
+        const result = await D.api(`/api/folders/${selected.id}/delete`, { subfolders: subs > 0 });
+        if (!result.ok) return D.toast(result.error);
+        D.toast(result.unfiled.length ? `Folder deleted; ${result.unfiled.length} chat${result.unfiled.length === 1 ? "" : "s"} now Unfiled` : "Folder deleted");
+        C.folder = null; loadList(); if (C.chat) openChat(C.chat.id);
+      };
+    });
+  }
+
+  async function moveChats(ids, folder) {
+    const result = ids.length === 1 ? await D.api(`/api/chats/${ids[0]}/folder`, { folder })
+      : await D.api("/api/chats-bulk", { ids, action: "move", folder });
+    if (!result.ok) return D.toast(result.error);
+    D.toast(`${ids.length === 1 ? "Chat" : ids.length + " chats"} moved to ${folder ? folderPath(folder) : "Unfiled"}`);
+    if (C.chat && ids.includes(C.chat.id)) C.chat.folder = folder;
+    C.selected.clear(); loadList(); renderBulk();
+    if (C.chat && ids.includes(C.chat.id)) renderMain(false);
   }
 
   function renderTags() {
@@ -96,10 +191,12 @@
     bar.innerHTML = `<div class="row small"><b>${n} selected</b><span class="spacer"></span>
         <button class="ghost small-button" id="bulk-all">${n === C.list.length && n ? "None" : "All"}</button>
         <button class="ghost small-button" id="bulk-archive" ${n ? "" : "disabled"}>${archived ? "Unarchive" : "Archive"}</button></div>
+      <div class="row small"><select id="bulk-folder" aria-label="Move selected chats to folder" ${n ? "" : "disabled"}><option value="-" selected>Move to folder…</option>${folderOptions("-")}</select></div>
       <div class="row small"><input id="bulk-confirm" placeholder='Type "${phrase}"' aria-label="Delete confirmation" ${n ? "" : "disabled"}>
         <button class="danger small-button" id="bulk-delete" disabled>Delete</button></div>`;
     bar.querySelector("#bulk-all").onclick = () => { if (C.selected.size === C.list.length) C.selected.clear(); else C.list.forEach((c) => C.selected.add(c.id)); renderList(); renderBulk(); };
     bar.querySelector("#bulk-archive").onclick = () => bulk(archived ? "unarchive" : "archive");
+    bar.querySelector("#bulk-folder").onchange = (event) => { if (event.target.value !== "-") moveChats([...C.selected], event.target.value || null); };
     const confirm = bar.querySelector("#bulk-confirm"), del = bar.querySelector("#bulk-delete");
     confirm.oninput = () => { del.disabled = confirm.value.trim() !== phrase; };
     del.onclick = () => bulk("delete", confirm.value.trim());
@@ -159,10 +256,11 @@
     }
     node.innerHTML = C.list.map((c) => `
       <li class="${C.selecting ? "selecting" : ""}">${C.selecting ? `<input type="checkbox" data-pick="${esc(c.id)}" ${C.selected.has(c.id) ? "checked" : ""} aria-label="Select ${esc(c.title)}">` : ""}
-        <button class="chat-item ${c.id === C.current ? "active" : ""}" data-id="${esc(c.id)}" style="--tone:${tone(c.model)}">
+        <button class="chat-item ${c.id === C.current ? "active" : ""}" data-id="${esc(c.id)}" style="--tone:${tone(c.model)}" draggable="${!C.selecting}">
         <span class="chat-item-title">${esc(c.title)}${c.pinned ? PIN : ""}${c.starred ? STAR : ""}</span>
-        <span class="chat-item-meta"><i></i>${esc(profileName(c.profile))} · ${when(c.updated)}${c.shared ? " · Zed" : ""}</span>
+        <span class="chat-item-meta"><i></i>${C.query && c.folder && folderPath(c.folder) ? esc(folderPath(c.folder)) : esc(profileName(c.profile))} · ${when(c.updated)}${c.shared ? " · Zed" : ""}</span>
       </button></li>`).join("");
+    node.querySelectorAll(".chat-item").forEach((b) => b.ondragstart = (event) => { event.dataTransfer.setData("text/x-dwarfstar-chat", b.dataset.id); event.dataTransfer.effectAllowed = "move"; });
     node.querySelectorAll(".chat-item").forEach((b) => b.onclick = () => {
       if (C.selecting) { const box = node.querySelector(`[data-pick="${b.dataset.id}"]`); box.checked = !box.checked; box.onchange(); return; }
       openChat(b.dataset.id, true);
@@ -254,6 +352,7 @@
           <details class="chat-menu"><summary aria-label="Chat actions">More</summary><div class="chat-menu-list panel tight">
             <button id="chat-pin">${chat.pinned ? "Unpin" : "Pin to top"}</button>
             <button id="chat-tag">Edit tags</button>
+            <button id="chat-move">Move to folder…</button>
             <button id="chat-zed" title="Open this chat's workspace in Zed; the matching DwarfStar agent lists this conversation in its history">Open in Zed</button>
             <hr>
             <button id="chat-fork" title="Copy this conversation into a new chat; the agent gets the transcript as context">Fork conversation</button>
@@ -273,6 +372,7 @@
           ${chat.compactions ? `<span title="The agent condensed older turns to stay within the window; the full transcript is kept">${chat.compactions} compaction${chat.compactions === 1 ? "" : "s"}</span>` : ""}
           ${chat.shared ? `<span title="This chat and Zed's “${esc(chat.shared.agent)}” agent use one agent session, whose file is the transcript. One client writes at a time.">Shared with Zed</span>` : ""}
           ${chat.forked_from ? `<span>Forked from “${esc(chat.forked_from.title)}”</span>` : ""}
+          ${chat.folder && folderPath(chat.folder) ? `<span title="Folder (organization only; the agent session is unchanged)">${esc(folderPath(chat.folder))}</span>` : ""}
           ${(chat.tags || []).length ? `<span>${chat.tags.map((t) => "#" + esc(t)).join(" ")}</span>` : ""}
         </div>
         <div class="chat-tag-edit" id="chat-tag-edit"></div>
@@ -296,6 +396,13 @@
     main.querySelector("#chat-star").onclick = () => organize({ starred: !chat.starred });
     main.querySelector("#chat-pin").onclick = () => organize({ pinned: !chat.pinned });
     main.querySelector("#chat-tag").onclick = () => { C.tagging = !C.tagging; renderTagEdit(); };
+    main.querySelector("#chat-move").onclick = () => {
+      const box = main.querySelector("#chat-confirm");
+      box.innerHTML = `<form class="row small chat-move" id="chat-move-form"><span>Move to</span><select id="chat-move-to" aria-label="Folder">${folderOptions(chat.folder || "")}</select>
+        <button class="ghost small-button" type="submit">Move</button><button class="quiet small-button" type="button" id="chat-move-cancel">Cancel</button></form>`;
+      box.querySelector("#chat-move-cancel").onclick = () => { box.innerHTML = ""; };
+      box.querySelector("#chat-move-form").onsubmit = (event) => { event.preventDefault(); const to = box.querySelector("#chat-move-to").value || null; box.innerHTML = ""; moveChats([chat.id], to); };
+    };
     main.querySelector("#chat-fork").onclick = () => fork();
     main.querySelector("#chat-same").onclick = () => fork(null, false);
     main.querySelector("#chat-zed").onclick = async () => {

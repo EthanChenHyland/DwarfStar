@@ -42,3 +42,49 @@ class MissingModelRemedyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AgentToolLinkTests(unittest.TestCase):
+    """A temporary instance must not re-point the checkout's agent-tools links at its own roots."""
+
+    def test_environment_roots_never_repoint_existing_links(self):
+        import os
+
+        from dwarfstar import instance
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            code, production, scratch = root / "code", root / "production", root / "scratch"
+            (code / "agent-tools").mkdir(parents=True)
+            (production / "state").mkdir(parents=True)
+            (code / "agent-tools" / "state").symlink_to(production / "state")
+            with mock.patch.object(instance, "CODE", code), mock.patch.object(instance, "STATE", scratch / "state"), \
+                    mock.patch.object(instance, "CACHE", scratch / "cache"), \
+                    mock.patch.dict(os.environ, {"DWARFSTAR_DATA": str(scratch)}), \
+                    mock.patch("dwarfstar.paths.omp_packages", return_value=root / "none"):
+                instance.link_agent_tool_data()
+            self.assertEqual(Path(os.readlink(code / "agent-tools" / "state")), production / "state")
+
+
+class AppStatusTests(unittest.TestCase):
+    def bundle(self, folder: Path, **info) -> Path:
+        import plistlib
+
+        app = folder / "DwarfStar Workstation.app"
+        (app / "Contents").mkdir(parents=True)
+        (app / "Contents" / "Info.plist").write_bytes(plistlib.dumps(info))
+        return app
+
+    def test_current_stale_and_missing(self):
+        from dwarfstar import __version__, paths, setup
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            self.assertFalse(setup.app_status(root / "absent.app")["installed"])
+            good = self.bundle(root / "a", CFBundleShortVersionString=__version__, DwarfStarHome=str(paths.CODE), CFBundleIconFile="DwarfStar")
+            self.assertTrue(setup.app_status(good)["current"])
+            old = self.bundle(root / "b", CFBundleShortVersionString="3.0", DwarfStarHome="/elsewhere")
+            status = setup.app_status(old)
+            self.assertFalse(status["current"])
+            for reason in ("version 3.0", "another checkout", "icon"):
+                self.assertIn(reason, status["why"])

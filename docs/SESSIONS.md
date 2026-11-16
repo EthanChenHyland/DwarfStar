@@ -35,3 +35,7 @@ The agent holds a single-writer lock on a workspace. If one client has a convers
 * **Zed's own metadata is not shared or written.** Zed's thread titles and folder grouping stay in Zed's database (read-only to the Workstation); the Workstation's tags, stars and pins stay in the chat record.
 * **Archived or deleted workspaces.** Threads whose temporary workspaces were removed in the 2026-11 storage consolidation cannot be continued; they read where the session file survives and otherwise show as missing.
 * **Reasoning is never shown in the Workstation.** The agent session file holds the model's thinking blocks as part of its own context, and Zed displays them when it reopens a thread; the Workstation reads only user text, visible reply text and tool-call names, and stores no reasoning of its own.
+
+## Folders and shared sessions
+
+A chat's folder, tags, pin, star and archive state are Workstation metadata in `chat.json`. None of them touches the agent session file, the workspace or the session id, so organizing a chat that is shared with Zed never forks it or changes what either client resumes.
