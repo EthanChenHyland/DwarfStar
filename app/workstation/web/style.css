@@ -347,3 +347,6 @@ td.bad { color: var(--bad); }
 .folder-edit input:focus { border-color: var(--accent); }
 .chat-bulk select, .chat-move select { background: var(--sunken); color: var(--text); border: 1px solid var(--line); border-radius: var(--r); padding: 3px 6px; font-size: 12.5px; }
 .chat-move { gap: 8px; margin-top: 8px; }
+.about-row { gap: 14px; align-items: center; flex-wrap: nowrap; }
+.about-row svg { flex: none; }
+.about a { color: var(--muted); }

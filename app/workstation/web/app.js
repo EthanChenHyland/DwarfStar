@@ -503,6 +503,7 @@ function renderLive() {
 }
 
 /* --------------------------------------------------------------- settings */
+const PRODUCT_MARK = `<svg viewBox="0 0 32 32" width="44" height="44" aria-hidden="true"><defs><radialGradient id="about-mark" cx="16" cy="16" r="9" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#fff"/><stop offset=".35" stop-color="#e4edff"/><stop offset=".55" stop-color="#9fb9ff"/><stop offset="1" stop-color="#4d68d6" stop-opacity="0"/></radialGradient></defs><path d="M4.5 16a11.5 4.6 0 0 1 23 0" transform="rotate(-22 16 16)" fill="none" stroke="#4a5fa8" stroke-width="1.4"/><circle cx="16" cy="16" r="9" fill="url(#about-mark)"/><circle cx="16" cy="16" r="2.6" fill="#fff"/><g transform="rotate(-22 16 16)"><path d="M27.5 16a11.5 4.6 0 0 1 -23 0" fill="none" stroke="#aec3ff" stroke-width="1.4" stroke-linecap="round"/><circle cx="8.6" cy="19.5" r="1.7" fill="#f2f6ff"/></g></svg>`;
 function renderSettings() {
   const root = $("#view-settings"); if (!S.state) return;
   const permissions = S.state.permissions || {};
@@ -523,6 +524,12 @@ function renderSettings() {
       <dl class="kv"><dt>Agent entries</dt><dd>${S.catalog.profiles.length} DwarfStar agents, one per model and reasoning level, launched with <span class="mono">bin/dwarfstar-acp</span></dd>
         <dt>Install or update</dt><dd class="mono">bin/dwarfstar zed --apply</dd>
         <dt>Shared conversations</dt><dd>Chats → Zed lists DwarfStar threads from Zed; a chat's menu has Open in Zed. One client writes to a conversation at a time.</dd></dl>
+    </div>
+    <div class="panel section about"><h2>About</h2>
+      <div class="row about-row">${PRODUCT_MARK}
+        <div><b>DwarfStar Workstation</b> <span class="muted">${esc(S.version?.dwarfstar || "")}</span>
+          <div class="small muted">Local inference on Apple Silicon: three models on one Splash runtime (${esc(S.version?.runtime || "…")})${S.version?.revision ? `, build ${esc(S.version.revision)}` : ""}.</div>
+          <div class="small faint">MIT License · <a href="https://github.com/EthanChenHyland/DwarfStar" rel="noopener">github.com/EthanChenHyland/DwarfStar</a></div></div></div>
     </div>
     <div class="panel section"><h2>Data</h2>
       ${roots ? `<dl class="kv">${roots.map(([k, v]) => `<dt>${esc(k)}</dt><dd class="mono small">${esc(v)}</dd>`).join("")}</dl>` : `<span class="muted">Loading…</span>`}
@@ -557,6 +564,7 @@ function renderSettings() {
   };
   if (!roots) api("/api/diagnostics").then((d) => {
     const names = { code: "Code", assets: "Models and runtime", data: "Chats and settings", cache: "Cache", logs: "Logs" };
+    S.version = d.version || null;
     S.settingsRoots = Object.entries(d.locations || {}).filter(([k]) => names[k]).map(([k, v]) => [names[k], v.replace(/^\/Users\/[^/]+/, "~")]);
     if (S.view === "settings") renderSettings();
   });

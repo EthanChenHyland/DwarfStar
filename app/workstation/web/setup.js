@@ -53,7 +53,7 @@
     const id = steps()[W.step], s = W.doc?.summary;
     if (!W.doc) return `<p class="lead">${W.loading ? "Checking this Mac…" : "The DwarfStar service did not answer the setup checks."}</p>`;
     if (id === "welcome") {
-      return `<p class="lead">This checks what DwarfStar needs on this Mac, one area at a time. It only reads: nothing is installed, changed or downloaded. Where something is missing, it says exactly what to run or where to put a file, then you check again.</p>
+      return `<div class="row about-row" style="margin-bottom:8px">${typeof PRODUCT_MARK === "undefined" ? "" : PRODUCT_MARK}<b>Set up DwarfStar</b></div><p class="lead">This checks what DwarfStar needs on this Mac, one area at a time. It only reads: nothing is installed, changed or downloaded. Where something is missing, it says exactly what to run or where to put a file, then you check again.</p>
         <div class="setup-summary"><span><span class="dot ready"></span>${s.ok} ready</span><span><span class="dot busy"></span>${s.warn} optional missing</span><span><span class="dot bad"></span>${s.error} need a fix</span></div>
         <p class="small muted">The same checks run in a terminal with <code>bin/dwarfstar doctor</code>, and stay available under Diagnostics.</p>`;
     }
