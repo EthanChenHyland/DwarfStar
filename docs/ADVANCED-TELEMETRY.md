@@ -24,6 +24,8 @@ The runtime declares what it can report; the Visualizer renders only these and l
 
 This was the primary target of the restoration experiment, and it was investigated at the source level and declined. In Splash, a decode step's `selectedExperts` buffer is scratch that every one of the 48 layers overwrites in turn, and it is GPU-private. By the time the engine's CPU-side completion handler runs, the buffer holds only the last layer's selection. Capturing all layers would require adding per-layer GPU→host copy commands to every decode step — work on the critical path, on a small GPU — which is what the retired native runtime did and what this experiment's hard rule forbids: telemetry must never slow inference. A sampled variant would need the same hot-path machinery, invoked occasionally. The honest outcome is that router/expert telemetry is not available on Splash within the zero-overhead constraint; the panel says so.
 
+**Follow-up (ds3 experiment).** The copy-out approach above stays declined. ds3 instead aggregates *inside* the MoE grouping kernel that already counts each step's routes per expert, into a small host-visible page the engine reads on a poll with no command and no wait — see [DS3-GPU-TELEMETRY.md](DS3-GPU-TELEMETRY.md). ds2 remains the production runtime unless ds3 is promoted.
+
 ## Measured overhead
 
 M1 Max, Scope, five runs each, Splash `/status` metric deltas around each request. The content-independent metric is **per-verify-cycle decode cost** (decode ms ÷ verify cycles); the run-to-run noise floor (ds1 vs ds1, fresh restart) is about ±0.7 %.

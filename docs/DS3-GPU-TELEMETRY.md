@@ -1,0 +1,202 @@
+# ds3 GPU telemetry (experiment)
+
+**Status: experiment, not production.** Production stays on `splash-m1-1.6.1-ds2-telemetry` (ds2) until ds3 passes the
+promotion gate below and the change is approved. ds3 is a separate runtime, `splash-m1-1.6.1-ds3-gpu-telemetry`, built
+from the same pinned Splash source (`1.6.1-m1`, commit `5312c54`) with the ds1 and ds2 patches plus
+`backends/splash-m1/patches/ds3/`. ds2's binaries, hashes, patches and manifests are untouched. The native backend is not
+restored: no ds4 runtime, backend selector, control socket, log parser, native server or F16 KV runtime. The old native
+code was read only as a reference for signal definitions and Visualizer semantics.
+
+Rollback: ds3 rejected → `config/runtime-policy.json` `model_defaults.runtime` stays (or goes back to)
+`splash-m1-1.6.1-ds2-telemetry` → restart the model → production unchanged.
+
+## 1. The old telemetry contract, and what Splash can recover
+
+The native runtime (`native/telemetry/ds4_telemetry.h`, `docs/VISUALIZER.md` at tag `rollback/native-default-20261113`)
+reported per verify cycle, at level 1 counters (tokens, MTP drafts, n-gram disk reads) and at level 2 also the router's
+selected experts with weights for up to 4 rows per layer, read back from the GPU each cycle. The hub folded row 0 into a
+session layer × 512 heat map. ds2 already restored the cycle counters (as DFlash2) and request timing; this table is the
+rest.
+
+| Old signal | Meaning | Native source | Splash equivalent | Exact recovery possible? | Aggregate possible? | Likely overhead | ds3 implementation |
+|---|---|---|---|---|---|---|---|
+| Router selections (`tick.r`, level 2) | The 10 of 512 experts each layer chose for the current token | `ds4_tm_cycle_end(selected, …)`: GPU read-back each cycle, rows 0–3 | `scratch.selectedExperts`: GPU-private, overwritten by every layer, read by the MoE grouping kernel | Yes, by copying row 0's ids in the grouping kernel each step (480 words/step) | — | Copy: 10 stores per layer per sampled step; host reads a ring | **Sampled** (1 decode step in N, default 8) and research **Exact** (every step) into a 64-slot ring in a Shared page; row 0 only, no weights |
+| Router weights | Each selection's gate weight (drawn as alpha) | same read-back, `weights[]` | separate weights buffer the combine reads | Possible, another 480 floats/step | — | as above | **Not implemented**: no ds3 view needs it; reported as unavailable |
+| Router rows 1–3 | Selections of the speculative rows of a verify cycle | `DS4_TM_ROWS 4` | the verify rows the grouping kernel counts | Yes, at 4× the copy | — | 4× the sample copy | Counted in the **aggregate** (every executed row); not sampled |
+| Routing heat map | Session counts per layer × expert | hub, from row 0 of observed ticks (only while a level-2 viewer was attached) | the grouping kernel's per-expert route count (threadgroup `counts[e]`) | — | **Yes, exactly**: every route executed, per phase | One conditional global add per owner thread with a non-zero count | **Aggregate**: `[phase][layer][expert]` uint32 histogram in the page; reader takes differences |
+| Expert utilisation / concentration | Hot experts, spread of routing | derived from heat | derived from the aggregate | — | Yes | none on the GPU | Workstation derives top-10 share and effective experts (exp of entropy) per layer |
+| PLE (n-gram table) reads | Rows read from the SSD per token | `ds4_tm_ple_read(bytes)` per read | the streamed row store's `SparseRowStats` (requested, unique, cache hits, SSD reads, bytes, evictions, prefetch, latency p50/p95) | Per stage only by instrumenting the store; not needed | **Yes**, the store's own counters | none added: reads existing counters | **PleAggregate** event, per-poll deltas (≥ 450 ms apart) |
+| Expert cache hit/miss, streamed expert reads | Experts loaded from the SSD | native kept experts resident | `ExpertStoreStats` when `--expert-memory` streams (loads, routed, read, prefetched, read bytes, resident, slots) | — | Yes, when streaming | none added | In **PleAggregate** as `experts{…}`; `expert_storage: resident` when every expert is in memory |
+| MTP drafts proposed/accepted per cycle | Speculative decode | `ds4_tm_cycle_drafts` | DFlash2 verify cycle | — (ds2) | — | — | ds2 `decode_cycle`, unchanged (MTP maps to DFlash2; no MTP panels are faked) |
+| Tokens per cycle | Committed tokens | cycle end | `decode_cycle.output` | ds2 | — | — | unchanged |
+| Context, KV checkpoints | Occupancy, disk cache | ticks, server log | `/status` context and prefix cache | ds2 | — | — | unchanged (`via_status`) |
+| Request rows | Start/finish per request | server log stream | none per request in Splash | — | — | — | ds2 request history (decode runs), unchanged |
+| Detail-level heartbeat | 0 nobody, 1 live, 2 visualizer; 3 s TTL | UDP control port | `/telemetry?level=` poll, 3 s TTL | — | — | — | Levels 2 Advanced (aggregates), 3 Sampled, 4 Exact (research, never proxied by the Workstation); each level now lapses on its own |
+| Calibration capture | Offline expert-input moments | `DS4_QWEN4_CALIB_DIR` | — | out of scope (not telemetry) | — | — | — |
+
+What is *not* recovered: router weights, per-token PLE reads, and per-token selections at full rate in the default
+modes. The Workstation labels every routing view as aggregate or sampled and never presents either as exact.
+
+## 2. Design: aggregate on the GPU, read a small page without waiting
+
+* **Hook.** Splash's MoE grouping kernel (`moe_group_routes*`, one threadgroup, thread *e* owns expert *e*) already
+  counts each step's routes per expert in threadgroup memory to build its tiles. ds3 binds one extra buffer, the
+  *telemetry page*, and one parameter word (`MoeGroupParams::telemetry`: 0 = no page, else 1 + layer, + 1<<16 for
+  prefill). Nothing about routing is recomputed, no logits or index tensors are copied, and the routing the kernel
+  produces is unchanged: the telemetry code only reads `counts[e]` and `selected[]` after the kernel has them.
+* **Page** (`runtime/ops/MoeTelemetry.hpp`, layout in `runtime/metal/abi/MoE.h`): one Shared-storage buffer, allocated
+  once at the first graph build, never resized. Header (magic `DS3T`, version, mode, sample period, layers, experts,
+  top-k, per-phase step counters, samples-written counter), a `[2 phases][64 layers][512 experts]` uint32 histogram, and
+  a 64-slot sample ring of `[step, layers written, period, 64 × 16 ids]`. **525,120 bytes.** Models past its bounds (more than
+  64 layers, 512 experts or top-16) get no page and run exactly as without ds3.
+* **Modes** are one host-visible word the kernels read: 0 off (each owner thread reads one word and stops), 1 aggregate,
+  2 sampled (also copy row 0 of one decode step in N), 3 exact (every step). A `/telemetry` poll sets it from the
+  highest level any consumer polled within the last 3 s; with no poll for 3 s the engine sets it back to 0. Setting a
+  mode is two plain stores into Shared memory — no command, no encoder, no wait.
+* **Reader** (`runtime/engine/Bootstrap.mm`): on a poll, `memcpy` of the page (no GPU command, no fence), differences
+  against the previous copy, emitted as compact numeric events into ds2's bounded ring. Counters only grow; a reader
+  racing the GPU sees a step half-counted and the next interval carries the rest, so totals stay exact. Sampled slots
+  are reported once whole; drops are counted from the kernel's samples-written counter, never inferred from gaps.
+* **Events** (schema 2, `GET /telemetry`): `router_aggregate {phase, steps, routes, cells, interval_ms, payload,
+  layers: [[expert, routes, …] per layer]}` at most every 180 ms (decode) / 900 ms (prefill); `router_sample {step, every,
+  top_k, layers: [[ids] per layer]}`; `ple_aggregate {interval_ms, table{…}, experts{…}}` at most every 450 ms; ds2's
+  `decode_cycle` unchanged. A batch carries `capabilities` (`routing: off|aggregate|sampled|exact|unavailable`,
+  `ple: aggregate`, `expert_storage: aggregate|resident`, `dflash: cycle`, `kv/prefix_cache/memory: via_status`) and a
+  `router` object (`mode` the kernels run now, `sample_every`, `samples_dropped`, `page_bytes`,
+  `counts: routes_executed`). Numbers and ids only: no prompt, reasoning or tool text.
+* **Semantics.** Aggregates count *routes executed*: every verified row of a decode step, including speculative rows
+  a later check rejects, and every prefill token. A sample is row 0 of one decode step, without weights.
+
+## 3. No synchronization
+
+The inference path never waits for telemetry, and telemetry adds no ordering the GPU did not already have:
+
+| Possible wait | ds3 | Why |
+|---|---|---|
+| Command-buffer wait (`waitUntilCompleted`/`waitUntilScheduled`) | none added | The reader is a `memcpy` of the page's `contents()`; it issues no Metal call at all. |
+| GPU → CPU barrier, fence, event or blit | none | No blit, no shared event; the page is `MTLResourceStorageModeShared`, which the CPU reads directly. |
+| CPU wait in the decode path | none | Mode changes are two stores into Shared memory, done on the engine thread while answering a `/telemetry` request (between steps), never inside a step. The graph-build hook (`MoeTelemetryPage::id`/`buffer`) takes no lock and does no store once the page exists. |
+| New dispatch, encoder or command buffer | none | The histogram and samples are written by the grouping kernel that already runs: one extra buffer binding and one parameter word per grouping. |
+| Dispatch serialization | none added | Splash's compute encoders are serial (`computeCommandEncoder`), so dispatches in an encoder already run in order; each grouping kernel already writes `expert_slots`/`tiles`, which already order consecutive groupings. The page is hazard-tracked like every Splash buffer and is only written by those same groupings, so it adds no dependency edge that was not there. |
+| Atomics contention | none | Thread *e* alone owns cell *e* of its layer, so the histogram add is a plain read-modify-write; the step counter and sample header are written by thread 0 only. |
+| UI back-pressure | none | Nothing in the engine depends on a poll arriving. A missing poll lets the capture window lapse (mode 0 after 3 s); a slow poll loses at most sample slots (counted in `samples_dropped`), never a counter. |
+
+Torn reads are expected and harmless: the host may copy the page while a step is half counted. Because every counter
+only grows and the reader works on differences, the next interval carries the remainder: after every checked run each
+layer's cumulative total was exactly equal to every other layer's.
+
+## 4. Semantic safety
+
+Telemetry does not change router selections, outputs, cache, DFlash decisions, scheduling or memory planning: the
+kernel's routing outputs (`tiles`, `tile_count`, `grouped_routes`, `route_rows`, `expert_slots`) are computed exactly as
+before; the telemetry code runs after `counts[e]` is final and only reads it and `selected[]`. The page (0.5 MB) is
+allocated once by the backend like any buffer (peak memory +0.001 GiB, measured). Failure handling: a page that cannot be allocated disables
+router telemetry for the process (`router.available: false`, `routing: unavailable`) and inference runs as without it;
+a malformed or failing `/telemetry` returns an API error to that poll only (the server stays up — seen when the first
+ds3 build met ds2's schema-1 check, fixed); model shapes past the page's bounds get telemetry id 0.
+
+## 5. Measured overhead (Scope, M1 Max 64 GB)
+
+Workload (`scripts/backends/telemetry_ab.py`): *short* (40-token question, 256 out), *prefill* (~8.8K-token document,
+32 out), *decode* (640 out); temperature 0, effort low, 3 runs per configuration, one server at a time, thermal state
+nominal throughout. Two sessions: **micro** (router counters forced on with no consumer, nothing exposed) and **polled**
+(a consumer polls `/telemetry` at 8 Hz, as the Workstation would; ds2 run at the start and the end).
+
+Per-cycle decode cost depends on how many draft rows each cycle verifies, which depends on what the model generates, so
+the comparison fits ds2's per-run cost against rows per cycle (`scripts/backends/ds3_overhead.py`: ms/cycle = 48.4 + 4.81 × rows short,
+50.0 + 4.74 × rows decode) and reports each run's residual. The two sessions differ by ~1.5 % for the *same* ds2
+binary, so the numbers that matter are against ds2 **in the same session**:
+
+| Configuration | short | decode | TTFT | prefill tok/s |
+|---|---|---|---|---|
+| ds2 (two sessions × two runs, the reference) | ±0.1 % within a session | ±0.1 % within a session | 0.514–0.558 s | 330.7–332.5 |
+| ds3, page disabled (`SPLASH_ROUTER_TELEMETRY=off`), micro | +0.14 % | +0.32 % | same | same (±0.3 %) |
+| ds3 **OFF** (page, mode 0, no consumer), micro / polled session | −0.14 / +0.51 % | +1.06 / +0.09 % | same | same |
+| ds3 aggregate, kernel only (micro) | −0.91 % | +0.65 % | same | same |
+| ds3 **AGGREGATE**, polled 8 Hz (level 2: router + PLE) | +0.51 % | +0.11 % | same | same |
+| ds3 page off, polled 8 Hz (PLE only) | −0.11 % | +0.29 % | same | same |
+| ds3 **SAMPLED** 1 in 16 / 8 / 4, polled | +0.26 / +0.41 / +0.17 % | +0.22 / +0.36 / +0.12 % | same | same |
+| ds3 EXACT, kernel only (micro) / polled (research) | −0.42 / +0.32 % | −0.08 / +0.56 % | same | same |
+
+Run-to-run spread within one configuration is about ±1 %. Every ds3 configuration is within that noise, there is no
+trend with how much work a mode does (exact is not dearer than aggregate), DFlash acceptance is unchanged (46–58 % in
+both builds, per test), peak memory is 40.724 GiB against 40.723 GiB, and no run left the nominal thermal state.
+Polling cost: `/telemetry` p50 1.1 ms at level 2 and 1.3 ms at level 4 (0.9 ms on ds2); 0 ring drops, 0 errors over
+~1,130 polls per configuration. Sampled at 1 in 4, 8 and 16 cost the same; **1 in 8** is the default: one sampled step
+every ~0.6 s at Scope's ~13 cycles/s, so the 64-slot ring rides out ~40 s without a poll (exact: ~5 s).
+
+## 6. Correctness checks (`scripts/backends/ds3_check.py`)
+
+One temperature-0 generation per level while a consumer polls, then exact cross-checks against the engine's own counters:
+router decode steps = DFlash decode cycles; decode routes = Σ(drafted + 1) × top-k × layers; prefill routes = uncached
+prompt tokens × top-k × layers; every layer's total equal; every sampled expert present in the aggregate; each sample
+whole, at a multiple of its own period, no drops; PLE read rows and bytes = the `/status` `streamed_table` deltas.
+
+| Model / profile | Levels | Result |
+|---|---|---|
+| Scope LOW | 2, 3, 4 | pass (44/43/43 cycles; 266/253/256 verify rows exactly) |
+| Swift LOW, MEDIUM | 2, 3 | pass |
+| Cyber LOW, XHIGH | 2, 3 | pass |
+
+All three models have 48 layers × 512 experts, top-10, routed experts resident (`expert_storage: resident`); nothing in
+the kernel, page or reader assumes those numbers (bounds are 64 × 512 × 16, read from the model's shape). Cyber's
+searched-Q2_0 experts and BF16 dense weights use the same grouping kernel and pass the same checks.
+
+**Outputs.** Where ds2 is deterministic, ds3 is identical in every session: the 32-token prefill test produced one hash
+per run position across all 4 ds2 and 11 ds3 sessions, and the short test's first run `272a91e2` in 3/4 and 10/11. Long
+decodes vary run to run *within* ds2 as much as between builds (Splash: "greedy and seeded outputs can differ from run
+to run" under `--verify-rows auto`).
+
+**Two consumers.** An interval's per-layer detail goes to the poll that read it; another consumer gets the interval's
+totals (`payload: false`). The Workstation counts such intervals and says so under the heatmap; the checker detects
+them and skips only the payload comparisons (found when the UI harness and the checker polled one server together).
+
+## 7. Memory
+
+| Where | Size | Bound |
+|---|---|---|
+| GPU page (Shared, unified memory) | 525,120 B | fixed; one per process |
+| Engine reader | page copy 525,120 B (histograms only, 262,208 B, below level 3) + previous histograms 262,144 B + one poll's payloads ≤ 197 KB | fixed |
+| Engine ring | unchanged from ds2 (4,096 records) | fixed |
+| Workstation, live | 2 × 96 KiB session histograms + 96 KiB decaying histogram + 64 samples (~123 KB) + 2 cached 512 × 48 images (96 KiB each) | fixed |
+| Workstation, history | per request: 96 KiB decode histogram (made when routing arrives) + ≤ 128 samples (~250 KB); 20 requests | ≤ ~7 MB |
+| Export (one request) | cells as `[layer, expert, routes]` (≤ 24,576) + ≤ 128 samples, `router_mode: aggregate|sampled` | per file |
+
+Nothing is persisted by the engine; the Workstation keeps history in memory only and writes a request only on Export.
+
+## 8. Workstation
+
+The Advanced Live view (Standard Live is unchanged) draws, when the runtime reports `routing`:
+**Overview** — each layer's routes over the last ~1.5 s, scaled to the layer's busiest expert, and with *Sampled
+selections* on, the latest sampled step's experts in white; **Layer focus** — a 512-cell grid of the layer's routes
+(log shade), the ten busiest experts with shares, the top-10 share, effective experts (exp of entropy) and experts used,
+the latest sample outlined; **Routing heatmap** — layers × experts for the session or a viewed request, decode or
+prefill, with the busiest experts across layers and the median effective experts. A badge reads AGGREGATE or SAMPLED 1
+IN N (with a tooltip that says what is counted). The storage card shows the PLE row store's read rate, cache-hit share,
+rows and bytes (latency and cache occupancy on hover); a streamed expert store is shown when a model has one. The proxy
+asks for level 2, or 3 with *Sampled selections*; it never asks for level 4. Export adds a `router` section.
+
+Cost (measured in a harness that loads the real `visualizer.js` against a live ds3 server): a frame takes 0.4–0.8 ms
+in every mode (2.4–4.8 % of one core at 60 fps while the view is visible; nothing while hidden); a data rebuild of the
+heat images and summary takes 3–7 ms at most five times a second. The heat images are 512 × 48 ImageData drawn scaled,
+so a frame never draws 24,576 cells.
+
+## 9. Promotion gate
+
+| Gate | Result |
+|---|---|
+| OFF ≈ ds2 (< 0.5 %) | within noise (−0.14 … +1.06 %, ±1 % run spread; the page-disabled build +0.14/+0.32 %) — the 0.5 % bound is below this rig's noise floor, so it is not demonstrated, only not contradicted |
+| AGGREGATE < 2 % | +0.11 … +0.51 % (noise) |
+| SAMPLED < 3 % | +0.12 … +0.41 % (noise) |
+| No TTFT/prefill/acceptance/memory regression | none |
+| No synchronization | none (§3) |
+| Trivial memory | 0.5 MB GPU, < 1 MB engine, < 7 MB Workstation |
+| All three models | Scope, Swift, Cyber pass |
+| Smooth UI | 0.4–0.8 ms/frame |
+| Truthful | aggregate/sampled labelled; samples carry their period; drops counted; payload splits reported |
+| Reproducible | `build_splash.sh --ds3` from a clean clone = the working build, byte for byte |
+| Rollback | ds2 untouched (hashes = pins); the policy pin selects either; tests verify both installations |
+
+Not covered: 120K-context runs (excluded by design), long agent sessions, and a live restart of the production service
+on ds3 (promotion is the owner's decision; until then `runtime-policy.json` keeps ds2).
+
