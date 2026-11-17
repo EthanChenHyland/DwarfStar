@@ -1,0 +1,50 @@
+diff --git a/server/backend.py b/server/backend.py
+index e986f8d..009b663 100644
+--- a/server/backend.py
++++ b/server/backend.py
+@@ -862,7 +862,7 @@ class NativeBackend:
+         ) as error:
+             raise self.refusal() or self._api_error(error) from None
+         batch = json_codec.loads(event.json)
+-        if not isinstance(batch, dict) or batch.get("schema") != 1:
++        if not isinstance(batch, dict) or batch.get("schema") not in (1, 2):
+             raise ValueError("native telemetry does not match the current schema")
+         return batch
+ 
+diff --git a/server/protocol.py b/server/protocol.py
+index 5844d99..7fea544 100644
+--- a/server/protocol.py
++++ b/server/protocol.py
+@@ -1046,7 +1046,7 @@ def _telemetry_request_frame(request: TelemetryRequestFrame) -> bytearray:
+         since = _u64(request.since_sequence, "telemetry since sequence")
+     except ValueError as error:
+         _fail_request(IssueCode.INTEGER_OVERFLOW, str(error))
+-    level = request.level if 0 <= request.level <= 2 else 0
++    level = request.level if 0 <= request.level <= 4 else 0
+     frame = _frame(FrameType.TELEMETRY_REQUEST, _TELEMETRY_REQUEST.size)
+     _TELEMETRY_REQUEST.pack_into(frame, FRAME_HEADER_BYTES, correlation_id, since, level)
+     return frame
+diff --git a/server/server.py b/server/server.py
+index a20711d..b9ebb84 100644
+--- a/server/server.py
++++ b/server/server.py
+@@ -548,7 +548,7 @@ class FrontendHandler(BaseHTTPRequestHandler):
+         self.send_json(200, self.server.status())
+ 
+     def _get_telemetry(self):
+-        # DwarfStar advanced telemetry: drain the engine's ring since `since` at `level` (0..2).
++        # DwarfStar advanced telemetry: drain the engine's ring since `since` at `level` (0..4).
+         # Non-critical: a bad parameter is a 400, an engine hiccup a normal error; serving is never
+         # affected. The Workstation polls this for the Advanced Live view.
+         query = parse_qs(urlsplit(self.path).query)
+@@ -557,8 +557,8 @@ class FrontendHandler(BaseHTTPRequestHandler):
+             level = int(query.get("level", ["2"])[0])
+         except (TypeError, ValueError):
+             raise APIError(400, "since and level must be integers", "invalid_request")
+-        if since < 0 or not 0 <= level <= 2:
+-            raise APIError(400, "since must be >= 0 and level in 0..2", "invalid_request")
++        if since < 0 or not 0 <= level <= 4:
++            raise APIError(400, "since must be >= 0 and level in 0..4", "invalid_request")
+         self.send_json(200, self.app.backend.telemetry(since, level))
+ 
+     def _get_metrics(self):

@@ -1,0 +1,557 @@
+diff --git a/runtime/engine/Bootstrap.mm b/runtime/engine/Bootstrap.mm
+index 35af250..b00fc07 100644
+--- a/runtime/engine/Bootstrap.mm
++++ b/runtime/engine/Bootstrap.mm
+@@ -1,10 +1,12 @@
+ #include "engine/Bootstrap.hpp"
+ #include "engine/Json.hpp"
++#include "ops/MoeTelemetry.hpp"
+ #include "StderrLine.hpp"
+ 
+ #include <algorithm>
+ #include <cmath>
+ #include <limits>
++#include <mutex>
+ #include <span>
+ #include <sstream>
+ #include <thread>
+@@ -239,44 +241,376 @@ RuntimeBootstrapReport reportForPlan(const EngineMemoryPlan &plan) {
+                            sample);
+ }
+ 
++// ds3 advanced telemetry reader. Everything here runs on a telemetry poll, never on the decode
++// path: it copies the router page (Shared memory, no GPU command), takes differences against the
++// last poll, and takes deltas of the row stores' own counters. Emission is rate-limited so a fast
++// poller gets a few aggregates a second however often it asks.
++namespace {
++
++struct AdvancedPayload final {
++  TelemetryKind kind = TelemetryKind::RouterAggregate;
++  uint32_t phase = 0, steps = 0, step = 0, every = 0, topK = 0;
++  uint64_t routes = 0;
++  double intervalMs = 0;
++  std::vector<std::vector<uint32_t>> layers;
++  // PleAggregate: the table's deltas and levels, then the expert store's.
++  bool table = false, experts = false;
++  uint64_t stages = 0, requestedRows = 0, uniqueRows = 0, hitRows = 0, readRows = 0, readBytes = 0, evictions = 0,
++           prefetchReadRows = 0, cachedRows = 0, cacheCapacityRows = 0, cacheBytes = 0, tableBytes = 0;
++  double readP50Ms = 0, readP95Ms = 0;
++  uint64_t expertLoads = 0, expertRouted = 0, expertRead = 0, expertPrefetched = 0, expertReadBytes = 0,
++           expertResident = 0, expertSlots = 0, expertCount = 0;
++};
++
++struct AdvancedReader final {
++  std::mutex mutex;
++  std::vector<uint32_t> page, previous;
++  double routerEmitMs[2] = {0, 0};
++  uint32_t routerSteps[2] = {0, 0};
++  uint32_t lastSampleStep = 0, pendingSampleStep = 0;
++  uint64_t samplesDropped = 0, samplesReported = 0;
++  uint32_t samplesBase = 0;
++  bool samplesBaseSet = false;
++  bool pleSeen = false;
++  double pleEmitMs = 0;
++  model::SparseRowStats lastTable;
++  model::ExpertStoreStats lastExperts;
++};
++
++AdvancedReader &advancedReader() {
++  static AdvancedReader *reader = new AdvancedReader;
++  return *reader;
++}
++
++constexpr double kRouterMinIntervalMs[2] = {180.0, 900.0}; // decode, prefill
++constexpr double kPleMinIntervalMs = 450.0;
++
++void readRouter(AdvancedReader &reader, int level, double nowMs, std::vector<AdvancedPayload> &out) {
++  const ops::MoeTelemetryPage &page = ops::MoeTelemetryPage::instance();
++  if (level < static_cast<int>(TelemetryLevel::Advanced) ||
++      !page.snapshot(reader.page, level >= static_cast<int>(TelemetryLevel::Sampled)))
++    return;
++  const std::vector<uint32_t> &now = reader.page;
++  const uint32_t layers = std::min(now[MOE_TM_LAYERS_WORD], uint32_t{MOE_TM_MAX_LAYERS});
++  const uint32_t experts = std::min(now[MOE_TM_EXPERTS_WORD], uint32_t{MOE_TM_SLOTS});
++  const uint32_t topK = std::min(now[MOE_TM_TOPK_WORD], uint32_t{MOE_TM_TOPK});
++  if (reader.previous.size() != MOE_TM_HIST_WORDS)
++    reader.previous.assign(MOE_TM_HIST_WORDS, 0);
++  for (uint32_t phase = 0; phase < 2; ++phase) {
++    if (nowMs - reader.routerEmitMs[phase] < kRouterMinIntervalMs[phase])
++      continue;
++    AdvancedPayload event;
++    event.kind = TelemetryKind::RouterAggregate;
++    event.phase = phase;
++    event.layers.resize(layers);
++    for (uint32_t layer = 0; layer < layers; ++layer) {
++      const uint32_t base = (phase * MOE_TM_MAX_LAYERS + layer) * MOE_TM_SLOTS;
++      for (uint32_t expert = 0; expert < experts; ++expert) {
++        const uint32_t delta = now[MOE_TM_HIST + base + expert] - reader.previous[base + expert]; // wraps
++        if (!delta)
++          continue;
++        event.layers[layer].push_back(expert);
++        event.layers[layer].push_back(delta);
++        event.routes += delta;
++      }
++    }
++    if (!event.routes)
++      continue;
++    const uint32_t plane = phase * MOE_TM_MAX_LAYERS * MOE_TM_SLOTS;
++    std::copy_n(now.begin() + MOE_TM_HIST + plane, MOE_TM_MAX_LAYERS * MOE_TM_SLOTS, reader.previous.begin() + plane);
++    event.steps = now[MOE_TM_STEPS + phase] - reader.routerSteps[phase];
++    reader.routerSteps[phase] = now[MOE_TM_STEPS + phase];
++    event.intervalMs = reader.routerEmitMs[phase] > 0 ? nowMs - reader.routerEmitMs[phase] : 0;
++    reader.routerEmitMs[phase] = nowMs;
++    out.push_back(std::move(event));
++  }
++  if (level < static_cast<int>(TelemetryLevel::Sampled) || !layers || !topK)
++    return;
++  // Sampled decode steps: a slot is whole once every layer wrote it, and safe to report once a
++  // later step began or the slot stood unchanged for a poll. Each slot records its own period.
++  const uint32_t stepsNow = now[MOE_TM_STEPS];
++  std::vector<std::pair<uint32_t, uint32_t>> ready; // step, slot
++  uint32_t pending = 0, inFlight = 0;
++  for (uint32_t slot = 0; slot < MOE_TM_SAMPLE_SLOTS; ++slot) {
++    const uint32_t base = MOE_TM_SAMPLES + slot * MOE_TM_SAMPLE_WORDS;
++    const uint32_t step = now[base];
++    if (step <= reader.lastSampleStep)
++      continue;
++    if (now[base + 1] == layers && (step < stepsNow || step == reader.pendingSampleStep)) {
++      ready.emplace_back(step, slot);
++    } else {
++      ++inFlight; // begun, not yet whole: a later poll reports it
++      if (now[base + 1] == layers)
++        pending = step;
++    }
++  }
++  reader.pendingSampleStep = pending;
++  std::sort(ready.begin(), ready.end());
++  // Drops are counted, not inferred from step gaps (a period change or an idle stretch leaves gaps
++  // nothing was ever written into): the kernel counts the slots it began, and a slot it began since
++  // this reader's first look that was neither reported nor is still in flight was overwritten before
++  // a poll saw it. The count only grows; a slot caught mid-write never inflates it.
++  const uint32_t written = now[MOE_TM_SAMPLES_WRITTEN];
++  if (!reader.samplesBaseSet) {
++    reader.samplesBase = written - inFlight - static_cast<uint32_t>(ready.size()); // wraps
++    reader.samplesBaseSet = true;
++  }
++  reader.samplesReported += ready.size();
++  const uint64_t began = static_cast<uint32_t>(written - reader.samplesBase);
++  if (began > reader.samplesReported + inFlight)
++    reader.samplesDropped = std::max(reader.samplesDropped, began - reader.samplesReported - inFlight);
++  for (const auto &[step, slot] : ready) {
++    reader.lastSampleStep = step;
++    AdvancedPayload event;
++    event.kind = TelemetryKind::RouterSample;
++    event.step = step;
++    event.every = std::max(now[MOE_TM_SAMPLES + slot * MOE_TM_SAMPLE_WORDS + 2], uint32_t{1}); // as taken
++    event.topK = topK;
++    event.layers.resize(layers);
++    const uint32_t base = MOE_TM_SAMPLES + slot * MOE_TM_SAMPLE_WORDS + MOE_TM_SAMPLE_HEADER;
++    for (uint32_t layer = 0; layer < layers; ++layer)
++      event.layers[layer].assign(now.begin() + base + layer * MOE_TM_TOPK,
++                                 now.begin() + base + layer * MOE_TM_TOPK + topK);
++    out.push_back(std::move(event));
++  }
++}
++
++void readStores(AdvancedReader &reader, int level, double nowMs, const std::optional<model::SparseRowStats> &table,
++                const std::optional<model::ExpertStoreStats> &experts, std::vector<AdvancedPayload> &out) {
++  if (level < static_cast<int>(TelemetryLevel::Advanced) || (!table && !experts))
++    return;
++  if (reader.pleSeen && nowMs - reader.pleEmitMs < kPleMinIntervalMs)
++    return;
++  AdvancedPayload event;
++  event.kind = TelemetryKind::PleAggregate;
++  if (table) {
++    event.table = true;
++    for (uint32_t use = 0; use < model::kSparseRowUses; ++use) {
++      const auto &current = table->uses[use];
++      const auto &before = reader.lastTable.uses[use];
++      event.stages += current.stages - before.stages;
++      event.requestedRows += current.requestedRows - before.requestedRows;
++      event.uniqueRows += current.uniqueRows - before.uniqueRows;
++      event.hitRows += current.hitRows - before.hitRows;
++      event.readRows += current.readRows - before.readRows;
++    }
++    event.readBytes = table->readBytes - reader.lastTable.readBytes;
++    event.evictions = table->evictions - reader.lastTable.evictions;
++    event.prefetchReadRows = table->prefetchReadRows - reader.lastTable.prefetchReadRows;
++    event.cachedRows = table->cachedRows;
++    event.cacheCapacityRows = table->cacheCapacityRows;
++    event.cacheBytes = table->cacheBytes;
++    event.tableBytes = table->tableBytes;
++    event.readP50Ms = table->read.p50Milliseconds;
++    event.readP95Ms = table->read.p95Milliseconds;
++  }
++  if (experts) {
++    event.experts = true;
++    for (uint32_t use = 0; use < 2; ++use) {
++      const auto &current = experts->uses[use];
++      const auto &before = reader.lastExperts.uses[use];
++      event.expertLoads += current.loads - before.loads;
++      event.expertRouted += current.routed - before.routed;
++      event.expertRead += current.read - before.read;
++      event.expertPrefetched += current.prefetched - before.prefetched;
++      event.expertReadBytes += current.readBytes - before.readBytes;
++    }
++    event.expertResident = experts->resident;
++    event.expertSlots = experts->slots;
++    event.expertCount = experts->experts;
++  }
++  const bool first = !reader.pleSeen;
++  const bool moved = event.stages || event.readRows || event.hitRows || event.expertLoads || event.expertRead;
++  event.intervalMs = first ? 0 : nowMs - reader.pleEmitMs;
++  if (table)
++    reader.lastTable = *table;
++  if (experts)
++    reader.lastExperts = *experts;
++  reader.pleSeen = true;
++  reader.pleEmitMs = nowMs;
++  if (first || moved)
++    out.push_back(std::move(event));
++}
++
++uint32_t saturate(uint64_t value) {
++  return value > std::numeric_limits<uint32_t>::max() ? std::numeric_limits<uint32_t>::max() : static_cast<uint32_t>(value);
++}
++
++} // namespace
++
+ // DwarfStar advanced telemetry. The ring's records since `sinceSequence`, with a dropped count and
+ // the sequence to continue from, plus capability metadata so a consumer renders only what the
+-// runtime reports. Fields per decode-cycle record: the batch width, output tokens, drafted and
+-// accepted draft tokens, and the step's wall and cycle milliseconds. PLE, KV, prefix cache and
+-// memory are not duplicated here: they are already in /status, from which a consumer takes deltas.
++// runtime reports. A decode-cycle record carries the batch width, output tokens, drafted and
++// accepted draft tokens, and the step's wall and cycle milliseconds. ds3 adds, at level 2 and up,
++// router aggregates (the routes each expert took per layer since the last aggregate), row-store
++// aggregates (the PLE table's and a streamed expert store's own counters, as deltas), and at
++// level 3 and up sampled decode steps (row 0's selected experts per layer).
+ std::string ServingRuntime::telemetryJson(uint64_t sinceSequence, int level) {
++  AdvancedReader &reader = advancedReader();
++  const std::lock_guard<std::mutex> lock(reader.mutex);
++  const double nowMs = nativeLoop_->monotonicMilliseconds();
++  std::vector<AdvancedPayload> payloads;
++  try {
++    readRouter(reader, level, nowMs, payloads);
++    if (level >= static_cast<int>(TelemetryLevel::Advanced))
++      readStores(reader, level, nowMs, resources_->streamedTableStats(), resources_->streamedExpertStats(), payloads);
++  } catch (...) {
++    payloads.clear(); // telemetry never fails a poll or the engine
++  }
++  TelemetryRing &ring = nativeLoop_->telemetryRing();
++  std::vector<std::pair<uint64_t, const AdvancedPayload *>> stamped;
++  for (const AdvancedPayload &payload : payloads) {
++    uint64_t sequence = 0;
++    if (payload.kind == TelemetryKind::RouterAggregate) {
++      uint32_t cells = 0;
++      for (const auto &layer : payload.layers)
++        cells += static_cast<uint32_t>(layer.size() / 2);
++      sequence = ring.record(payload.kind, nowMs, payload.phase, payload.steps, saturate(payload.routes), cells,
++                             payload.intervalMs, 0.0);
++    } else if (payload.kind == TelemetryKind::RouterSample) {
++      sequence = ring.record(payload.kind, nowMs, payload.step, payload.every,
++                             static_cast<uint32_t>(payload.layers.size()), payload.topK, 0.0, 0.0);
++    } else {
++      sequence = ring.record(payload.kind, nowMs, saturate(payload.uniqueRows), saturate(payload.hitRows),
++                             saturate(payload.readRows), saturate(payload.readBytes / 1024), payload.intervalMs, 0.0);
++    }
++    stamped.emplace_back(sequence, &payload);
++  }
+   std::vector<TelemetryRecord> records;
+-  const TelemetryRing::Drain drain = nativeLoop_->telemetryRing().drain(sinceSequence, records);
++  const TelemetryRing::Drain drain = ring.drain(sinceSequence, records);
++  const ops::MoeTelemetryPage &page = ops::MoeTelemetryPage::instance();
++  const bool router = page.available();
++  const auto payloadOf = [&](uint64_t sequence) -> const AdvancedPayload * {
++    for (const auto &[stampedSequence, payload] : stamped)
++      if (stampedSequence == sequence)
++        return payload;
++    return nullptr;
++  };
+   json::Writer w;
+   w.object([&] {
+-    w.field("schema", 1u);
++    w.field("schema", 2u);
+     w.field("level", level);
+     w.field("next", drain.next);
+     w.field("dropped", drain.dropped);
+     w.object("capabilities", [&] {
+       // What this runtime can report, and how. A consumer draws only these.
+-      w.field("dflash", "cycle");          // per verify-cycle proposals and acceptance (this ring)
+-      w.field("routing", "unavailable");   // Splash does not report per-token expert selections
+-      w.field("experts", "unavailable");
+-      w.field("ple", "aggregate_via_status");
++      w.field("dflash", "cycle"); // per verify-cycle proposals and acceptance (the ring)
++      // The router's selections: aggregate counts at level 2, sampled decode steps at 3, every
++      // decode step at 4. "routing" is what this poll's level delivers.
++      const char *delivered = !router ? "unavailable"
++                              : level >= static_cast<int>(TelemetryLevel::Exact) ? "exact"
++                              : level >= static_cast<int>(TelemetryLevel::Sampled) ? "sampled"
++                              : level >= static_cast<int>(TelemetryLevel::Advanced) ? "aggregate" : "off";
++      w.field("routing", delivered);
++      w.field("experts", delivered);
++      w.array("routing_levels", [&] {
++        if (router)
++          for (const char *name : {"aggregate", "sampled", "exact"})
++            w.value(name);
++      });
++      w.field("ple", "aggregate");
++      w.field("expert_storage", resources_->streamedExpertStats() ? "aggregate" : "resident");
+       w.field("kv", "via_status");
+       w.field("prefix_cache", "via_status");
+       w.field("memory", "via_status");
+     });
++    w.object("router", [&] {
++      w.field("available", router);
++      w.field("layers", page.layers());
++      w.field("experts", page.experts());
++      w.field("top_k", page.topK());
++      // What the kernels do now, which a higher-level consumer can hold above this poll's level for
++      // up to one capture window after it stops.
++      static constexpr const char *kModes[] = {"off", "aggregate", "sampled", "exact"};
++      w.field("mode", kModes[std::min(page.liveMode(), 3u)]);
++      w.field("sample_every", page.liveMode() >= 2 ? page.liveSampleEvery() : page.defaultSampleEvery());
++      w.field("default_sample_every", page.defaultSampleEvery());
++      w.field("sample_slots", uint32_t{MOE_TM_SAMPLE_SLOTS});
++      w.field("samples_dropped", reader.samplesDropped);
++      w.field("page_bytes", uint64_t{MOE_TM_WORDS} * sizeof(uint32_t));
++      // Aggregates count the routes of every row a step ran, speculative rows a verify later
++      // rejects included; a sample is row 0 of one decode step.
++      w.field("counts", "routes_executed");
++    });
+     w.array("events", [&] {
+       for (const TelemetryRecord &record : records) {
+-        if (record.kind != TelemetryKind::DecodeCycle)
++        if (record.kind == TelemetryKind::DecodeCycle) {
++          w.object([&] {
++            w.field("seq", record.sequence);
++            w.key("t").exact(record.monotonicMs);
++            w.field("kind", "decode_cycle");
++            w.field("width", record.a);
++            w.field("output", record.b);
++            w.field("drafted", record.c);
++            w.field("accepted", record.d);
++            w.key("wall_ms").exact(record.e);
++            w.key("cycle_ms").exact(record.f);
++          });
+           continue;
++        }
++        const AdvancedPayload *payload = payloadOf(record.sequence);
+         w.object([&] {
+           w.field("seq", record.sequence);
+           w.key("t").exact(record.monotonicMs);
+-          w.field("kind", "decode_cycle");
+-          w.field("width", record.a);
+-          w.field("output", record.b);
+-          w.field("drafted", record.c);
+-          w.field("accepted", record.d);
+-          w.key("wall_ms").exact(record.e);
+-          w.key("cycle_ms").exact(record.f);
++          if (record.kind == TelemetryKind::RouterAggregate) {
++            w.field("kind", "router_aggregate");
++            w.field("phase", record.a ? "prefill" : "decode");
++            w.field("steps", record.b);
++            w.field("routes", record.c);
++            w.field("cells", record.d);
++            w.key("interval_ms").exact(record.e);
++          } else if (record.kind == TelemetryKind::RouterSample) {
++            w.field("kind", "router_sample");
++            w.field("step", record.a);
++            w.field("every", record.b);
++            w.field("top_k", record.d);
++          } else {
++            w.field("kind", "ple_aggregate");
++            w.key("interval_ms").exact(record.e);
++          }
++          // An older poll's aggregate, drained again: its summary is in the ring, its payload is not.
++          w.field("payload", payload != nullptr);
++          if (!payload)
++            return;
++          if (record.kind == TelemetryKind::PleAggregate) {
++            if (payload->table)
++              w.object("table", [&] {
++                w.field("stages", payload->stages);
++                w.field("requested_rows", payload->requestedRows);
++                w.field("unique_rows", payload->uniqueRows);
++                w.field("hit_rows", payload->hitRows);
++                w.field("read_rows", payload->readRows);
++                w.field("read_bytes", payload->readBytes);
++                w.field("evictions", payload->evictions);
++                w.field("prefetch_read_rows", payload->prefetchReadRows);
++                w.field("cached_rows", payload->cachedRows);
++                w.field("cache_capacity_rows", payload->cacheCapacityRows);
++                w.field("cache_bytes", payload->cacheBytes);
++                w.field("table_bytes", payload->tableBytes);
++                w.field("read_ms_p50", payload->readP50Ms);
++                w.field("read_ms_p95", payload->readP95Ms);
++              });
++            if (payload->experts)
++              w.object("experts", [&] {
++                w.field("loads", payload->expertLoads);
++                w.field("routed", payload->expertRouted);
++                w.field("read", payload->expertRead);
++                w.field("prefetched", payload->expertPrefetched);
++                w.field("read_bytes", payload->expertReadBytes);
++                w.field("resident", payload->expertResident);
++                w.field("slots", payload->expertSlots);
++                w.field("experts", payload->expertCount);
++              });
++            return;
++          }
++          // Per layer: expert, routes pairs for an aggregate; the selected experts for a sample.
++          w.array("layers", [&] {
++            for (const std::vector<uint32_t> &layer : payload->layers)
++              w.array([&] {
++                for (const uint32_t value : layer)
++                  w.value(value);
++              });
++          });
+         });
+       }
+     });
+diff --git a/runtime/engine/NativeRuntime.cpp b/runtime/engine/NativeRuntime.cpp
+index 321720f..ca0983a 100644
+--- a/runtime/engine/NativeRuntime.cpp
++++ b/runtime/engine/NativeRuntime.cpp
+@@ -2,6 +2,7 @@
+ #include "AwakeClock.hpp"
+ #include "StderrLine.hpp"
+ #include "metal/MetalBackend.hpp"
++#include "ops/MoeTelemetry.hpp"
+ 
+ #include <algorithm>
+ #include <chrono>
+@@ -312,10 +313,24 @@ bool NativeRuntime::handleRelease(const protocol::ReleaseRequestFrame &release)
+ bool NativeRuntime::handleTelemetry(const protocol::TelemetryRequestFrame &request) {
+   if (!telemetryProvider_)
+     throw std::runtime_error("no telemetry source");
+-  const int level = request.level > static_cast<uint8_t>(TelemetryLevel::Advanced)
+-                        ? static_cast<int>(TelemetryLevel::Advanced)
++  const int level = request.level > static_cast<uint8_t>(TelemetryLevel::Exact)
++                        ? static_cast<int>(TelemetryLevel::Exact)
+                         : static_cast<int>(request.level);
+   advancedTelemetry_.refresh(static_cast<TelemetryLevel>(level), config_.monotonicMilliseconds());
++  // ds3: the router page counts while a poll keeps the window open, at the highest level asked
++  // for. Two plain stores into host-visible memory; the grouping kernels read them when they run.
++  {
++    const ops::MoeTelemetryPage &page = ops::MoeTelemetryPage::instance();
++    const int capture = advancedTelemetry_.captureLevel();
++    if (capture >= static_cast<int>(TelemetryLevel::Exact))
++      page.setMode(3, 1);
++    else if (capture >= static_cast<int>(TelemetryLevel::Sampled))
++      page.setMode(2, page.defaultSampleEvery());
++    else if (capture >= static_cast<int>(TelemetryLevel::Advanced))
++      page.setMode(1, page.defaultSampleEvery());
++    else
++      page.setMode(0, page.defaultSampleEvery());
++  }
+   std::string json = telemetryProvider_(request.sinceSequence, level);
+   if (json.empty())
+     throw std::runtime_error("empty telemetry document");
+@@ -420,13 +435,16 @@ void NativeRuntime::batchCompleted(WorkKind kind, uint32_t width,
+                                   wallMilliseconds, cycleMilliseconds);
+   // DwarfStar advanced telemetry: one decode-cycle record from values already in hand, only while
+   // a recent poll keeps the ring recording. Nobody watching: one relaxed atomic load and return.
+-  if (kind != WorkKind::Decode || advancedTelemetry_.captureLevel() == 0)
++  if (advancedTelemetry_.captureLevel() == 0)
+     return;
+   const double now = config_.monotonicMilliseconds();
+   if (advancedTelemetry_.expired(now)) {
+     advancedTelemetry_.stopCapture();
++    ops::MoeTelemetryPage::instance().setMode(0, ops::MoeTelemetryPage::instance().defaultSampleEvery());
+     return;
+   }
++  if (kind != WorkKind::Decode)
++    return;
+   advancedTelemetry_.record(TelemetryKind::DecodeCycle, now, width, outputTokens, draftedTokens,
+                             acceptedDraftTokens, wallMilliseconds, cycleMilliseconds);
+ }
+diff --git a/runtime/engine/Telemetry.hpp b/runtime/engine/Telemetry.hpp
+index 3bd2d87..aa41859 100644
+--- a/runtime/engine/Telemetry.hpp
++++ b/runtime/engine/Telemetry.hpp
+@@ -19,6 +19,12 @@ namespace splash::engine {
+ // a consumer can skip kinds it does not know and more can be added without a protocol change.
+ enum class TelemetryKind : uint8_t {
+   DecodeCycle = 1, // a target verify step: drafted/accepted tokens and the step's timing
++  // ds3. A poll makes these from the router telemetry page and the row stores' counters and stamps
++  // a summary into the ring, so they share its sequence and dropped count; the payload (the sparse
++  // histogram, the sampled experts) goes out with the poll that made it and is not kept.
++  RouterAggregate = 2, // a: phase, b: steps, c: routes, d: non-zero cells; e: interval ms
++  RouterSample = 3,    // a: decode step, b: sampling period, c: layers, d: experts per row
++  PleAggregate = 4,    // a: rows staged, b: cache hits, c: rows read, d: KiB read; e: interval ms
+ };
+ 
+ // A fixed-width record. Fields are generic so one struct serves every kind; the writer and the
+@@ -33,7 +39,10 @@ struct TelemetryRecord final {
+ 
+ // Three capture levels; a poll names the level it wants, and the ring records at the highest any
+ // recent poll asked for until the deadline passes.
+-enum class TelemetryLevel : int { Off = 0, Standard = 1, Advanced = 2 };
++// ds3 adds two router levels above Advanced, which now includes the aggregate router histogram and
++// the row-store aggregates: Sampled also copies one decode step in N's selected experts, Exact every
++// step's (a research level, bounded by the page's sample ring).
++enum class TelemetryLevel : int { Off = 0, Standard = 1, Advanced = 2, Sampled = 3, Exact = 4 };
+ 
+ class TelemetryRing final {
+ public:
+@@ -54,31 +63,36 @@ public:
+ 
+   void stopCapture() noexcept { level_.store(0, std::memory_order_relaxed); }
+ 
+-  // A poll at `level` refreshes the capture level and its deadline. Advanced outranks Standard for
+-  // the window: the ring records at the highest level any live poll asked for.
++  // A poll at `level` refreshes that level's deadline. The ring records at the highest level any
++  // poll asked for within its window (Advanced outranks Standard, so a lone Standard poll does not
++  // downgrade a live Advanced view), and ds3 lets a level lapse on its own: once nobody has asked
++  // for Sampled or Exact for a window, the next poll drops capture to the highest level still asked
++  // for, so a research view's router mode never outlives its consumer.
+   void refresh(TelemetryLevel level, double nowMs) noexcept {
+     if (level == TelemetryLevel::Off)
+       return;
++    const int asked = static_cast<int>(level);
++    levelDeadlineMs_[asked].store(nowMs + ttlMs_, std::memory_order_relaxed);
+     deadlineMs_.store(nowMs + ttlMs_, std::memory_order_relaxed);
+-    int wanted = static_cast<int>(level);
+-    int current = level_.load(std::memory_order_relaxed);
+-    // Keep the higher of the levels asked for within the window; a lone Standard poll after an
+-    // Advanced one does not downgrade until the window lapses and recording stops.
+-    while (wanted > current &&
+-           !level_.compare_exchange_weak(current, wanted, std::memory_order_relaxed))
+-      ;
+-    if (current == 0)
+-      level_.store(wanted, std::memory_order_relaxed);
++    int highest = asked;
++    for (int candidate = kLevels - 1; candidate > asked; --candidate)
++      if (levelDeadlineMs_[candidate].load(std::memory_order_relaxed) > nowMs) {
++        highest = candidate;
++        break;
++      }
++    level_.store(highest, std::memory_order_relaxed);
+   }
+ 
+   // Append one record. The caller has already checked captureLevel() and expiry, so this only
+   // takes a brief lock to copy a handful of integers into the ring; it allocates nothing.
+-  void record(TelemetryKind kind, double nowMs, uint32_t a, uint32_t b, uint32_t c, uint32_t d,
+-              double e, double f) {
++  // Returns the record's sequence.
++  uint64_t record(TelemetryKind kind, double nowMs, uint32_t a, uint32_t b, uint32_t c, uint32_t d,
++                  double e, double f) {
+     const std::lock_guard<std::mutex> lock(mutex_);
+     const uint64_t sequence = ++written_;
+     records_[(sequence - 1) % records_.size()] =
+         TelemetryRecord{sequence, nowMs, kind, a, b, c, d, e, f};
++    return sequence;
+   }
+ 
+   // Everything with a sequence greater than `since`, oldest first, into `out`. `dropped` counts
+@@ -110,7 +124,9 @@ private:
+   mutable std::mutex mutex_;
+   std::vector<TelemetryRecord> records_;
+   uint64_t written_ = 0;
++  static constexpr int kLevels = static_cast<int>(TelemetryLevel::Exact) + 1;
+   std::atomic<int> level_{0};
++  std::atomic<double> levelDeadlineMs_[kLevels] = {};
+   std::atomic<double> deadlineMs_{0.0};
+   const double ttlMs_;
+ };

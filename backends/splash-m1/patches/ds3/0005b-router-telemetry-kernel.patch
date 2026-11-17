@@ -1,0 +1,235 @@
+diff --git a/runtime/metal/abi/MoE.h b/runtime/metal/abi/MoE.h
+index d0f0d09..196da01 100644
+--- a/runtime/metal/abi/MoE.h
++++ b/runtime/metal/abi/MoE.h
+@@ -77,10 +77,42 @@ struct MoeGroupParams {
+   uint32_t down_columns;
+   uint32_t lane_rows;
+   uint32_t streamed;
++  // Router telemetry (ops::MoeTelemetryPage): 0 for none, else 1 + the block's
++  // layer, plus 1 << 16 for a prefill grouping.
++  uint32_t telemetry;
+ };
+ 
+-static_assert(sizeof(MoeGroupParams) == 32,
+-              "MoE grouping parameters are 32 bytes on both sides");
++static_assert(sizeof(MoeGroupParams) == 36,
++              "MoE grouping parameters are 36 bytes on both sides");
++
++// The router telemetry page, uint32 words (ops::MoeTelemetryPage). A header,
++// then a histogram of the routes each expert took, [phase][layer][expert]
++// with phase 0 decode and 1 prefill, then a ring of sampled decode steps:
++// each slot holds the step, the layers written so far, and row 0's selected
++// experts per layer. The grouping kernel writes it and the host only reads
++// it, but for the mode and the sampling period, which the host sets.
++#define MOE_TM_MAGIC 0x54335344u // "DS3T"
++#define MOE_TM_MAGIC_WORD 0u
++#define MOE_TM_VERSION_WORD 1u
++#define MOE_TM_MODE 2u         // 0 off, 1 aggregate, 2 sampled, 3 exact
++#define MOE_TM_SAMPLE_EVERY 3u // a sampled step every this many decode steps
++#define MOE_TM_LAYERS_WORD 4u
++#define MOE_TM_EXPERTS_WORD 5u
++#define MOE_TM_TOPK_WORD 6u
++#define MOE_TM_STEPS 8u // [phase]: groupings of layer 0, which the kernel counts
++#define MOE_TM_SAMPLES_WRITTEN 10u // sampled slots the kernel began, ever: a reader's drops are this less what it saw
++#define MOE_TM_HEADER_WORDS 16u
++#define MOE_TM_MAX_LAYERS 64u
++#define MOE_TM_SLOTS 512u // SPLASH_MOE_WIDE_EXPERT_SLOTS
++#define MOE_TM_TOPK 16u
++#define MOE_TM_SAMPLE_SLOTS 64u
++#define MOE_TM_HIST MOE_TM_HEADER_WORDS
++#define MOE_TM_HIST_WORDS (2u * MOE_TM_MAX_LAYERS * MOE_TM_SLOTS)
++#define MOE_TM_SAMPLES (MOE_TM_HIST + MOE_TM_HIST_WORDS)
++// A sample slot: [step, layers written, the period it was taken at, then MOE_TM_TOPK ids per layer].
++#define MOE_TM_SAMPLE_HEADER 3u
++#define MOE_TM_SAMPLE_WORDS (MOE_TM_SAMPLE_HEADER + MOE_TM_MAX_LAYERS * MOE_TM_TOPK)
++#define MOE_TM_WORDS (MOE_TM_SAMPLES + MOE_TM_SAMPLE_SLOTS * MOE_TM_SAMPLE_WORDS)
+ 
+ // What the grouping writes besides the tiles: their count, which every pass
+ // over them reads first, the tiles of experts resident before the step's
+diff --git a/runtime/metal/kernels/shared/moe.metal b/runtime/metal/kernels/shared/moe.metal
+index 3481934..734f3e9 100644
+--- a/runtime/metal/kernels/shared/moe.metal
++++ b/runtime/metal/kernels/shared/moe.metal
+@@ -186,10 +186,10 @@ template <uint Slots, uint Shared, bool Verified>
+ inline void moe_group_routes_phase(
+     device const uint *selected, device MoeTileDescriptor *tiles, device MoeTileCount *tile_count,
+     device uint *grouped_routes, device uint *route_rows, device const uint *slots, device uint *expert_slots,
+-    device const uint *verify_rows,
++    device const uint *verify_rows, device uint *telemetry,
+     constant MoeGroupParams &params, uint thread_index, uint simd_lane, uint simd_group,
+     threadgroup atomic_uint *counts, threadgroup atomic_uint *cursors, threadgroup uint *tile_offsets,
+-    threadgroup uint *simd_totals, threadgroup uint *simd_absent) {
++    threadgroup uint *simd_totals, threadgroup uint *simd_absent, threadgroup uint *telemetry_step) {
+   const uint routes_per_row = params.top_k + Shared;
+   const uint routes = params.rows * routes_per_row;
+   // A streamed grouping's slot, loaded before the counting: copied for the
+@@ -203,6 +203,23 @@ inline void moe_group_routes_phase(
+   tile_offsets[thread_index] = slot & MOE_SLOT_ABSENT;
+   atomic_store_explicit(&counts[thread_index], 0u, memory_order_relaxed);
+   atomic_store_explicit(&cursors[thread_index], 0u, memory_order_relaxed);
++  // Router telemetry (MoeGroupParams::telemetry): off unless the page's mode
++  // word is set. Thread 0 counts the step at the block of layer 0 and hands
++  // every thread the step, for the sampled modes.
++  const uint telemetry_id = params.telemetry;
++  uint telemetry_mode = 0u;
++  if (telemetry_id != 0u) {
++    telemetry_mode = telemetry[MOE_TM_MODE];
++    if (telemetry_mode != 0u && thread_index == 0u) {
++      const uint phase = (telemetry_id - 1u) >> 16;
++      uint step = telemetry[MOE_TM_STEPS + phase];
++      if (((telemetry_id - 1u) & 0xFFFFu) == 0u) {
++        step += 1u;
++        telemetry[MOE_TM_STEPS + phase] = step;
++      }
++      telemetry_step[0] = step;
++    }
++  }
+   threadgroup_barrier(mem_flags::mem_threadgroup);
+   for (uint route = thread_index; route < routes; route += Slots) {
+     if (moe_shared_slice(route % routes_per_row, params.top_k) >= Shared &&
+@@ -214,6 +231,28 @@ inline void moe_group_routes_phase(
+   threadgroup_barrier(mem_flags::mem_threadgroup);
+ 
+   uint count = atomic_load_explicit(&counts[thread_index], memory_order_relaxed);
++  if (telemetry_mode != 0u) {
++    // Thread e owns expert e's cell: the routes the step just counted for it.
++    const uint layer = (telemetry_id - 1u) & 0xFFFFu, phase = (telemetry_id - 1u) >> 16;
++    if (count != 0u && thread_index < params.experts)
++      telemetry[MOE_TM_HIST + (phase * MOE_TM_MAX_LAYERS + layer) * MOE_TM_SLOTS + thread_index] += count;
++    // A sampled decode step: thread r owns row 0's route r.
++    if (telemetry_mode >= 2u && phase == 0u && thread_index < params.top_k) {
++      const uint step = telemetry_step[0], every = max(telemetry[MOE_TM_SAMPLE_EVERY], 1u);
++      if (step % every == 0u) {
++        const uint base = MOE_TM_SAMPLES + ((step / every) % MOE_TM_SAMPLE_SLOTS) * MOE_TM_SAMPLE_WORDS;
++        telemetry[base + MOE_TM_SAMPLE_HEADER + layer * MOE_TM_TOPK + thread_index] = selected[thread_index];
++        if (thread_index == 0u) {
++          if (layer == 0u) {
++            telemetry[base] = step;
++            telemetry[base + 2u] = every;
++            telemetry[MOE_TM_SAMPLES_WRITTEN] += 1u;
++          }
++          telemetry[base + 1u] = layer + 1u;
++        }
++      }
++    }
++  }
+   uint expert_tiles = (count + params.tile_rows - 1) / params.tile_rows;
+   const bool absent = tile_offsets[thread_index];
+   uint prefix = simd_prefix_exclusive_sum(absent ? 0u : expert_tiles);
+@@ -306,10 +345,12 @@ inline void moe_group_routes_phase(
+     threadgroup uint tile_offsets[Slots];                                      \
+     threadgroup uint simd_totals[Slots / 32];                                  \
+     threadgroup uint simd_absent[Slots / 32];                                  \
++    threadgroup uint telemetry_step[1];                                        \
+     moe_group_routes_phase<Slots, Shared, Verified>(                           \
+         selected, tiles, tile_count, grouped_routes, route_rows, slots,        \
+-        expert_slots, verify_rows, params, thread_index, simd_lane,            \
+-        simd_group, counts, cursors, tile_offsets, simd_totals, simd_absent);
++        expert_slots, verify_rows, telemetry, params, thread_index, simd_lane, \
++        simd_group, counts, cursors, tile_offsets, simd_totals, simd_absent,   \
++        telemetry_step);
+ #define MOE_GROUP_ROUTES_ENTRY(Name, Slots, Shared)                            \
+   kernel void Name(                                                            \
+       device const uint *selected [[buffer(0)]],                               \
+@@ -319,7 +360,8 @@ inline void moe_group_routes_phase(
+       device uint *route_rows [[buffer(4)]],                                   \
+       device const uint *slots [[buffer(5)]],                                  \
+       device uint *expert_slots [[buffer(6)]],                                 \
+-      constant MoeGroupParams &params [[buffer(7)]],                           \
++      device uint *telemetry [[buffer(7)]],                                    \
++      constant MoeGroupParams &params [[buffer(8)]],                           \
+       uint thread_index [[thread_index_in_threadgroup]],                       \
+       uint simd_lane [[thread_index_in_simdgroup]],                            \
+       uint simd_group [[simdgroup_index_in_threadgroup]]) {                    \
+@@ -337,7 +379,8 @@ inline void moe_group_routes_phase(
+       device const uint *slots [[buffer(5)]],                                  \
+       device uint *expert_slots [[buffer(6)]],                                 \
+       device const uint *verify_rows [[buffer(7)]],                            \
+-      constant MoeGroupParams &params [[buffer(8)]],                           \
++      device uint *telemetry [[buffer(8)]],                                    \
++      constant MoeGroupParams &params [[buffer(9)]],                           \
+       uint thread_index [[thread_index_in_threadgroup]],                       \
+       uint simd_lane [[thread_index_in_simdgroup]],                            \
+       uint simd_group [[simdgroup_index_in_threadgroup]]) {                    \
+diff --git a/runtime/model/Qwen4ExpTarget.cpp b/runtime/model/Qwen4ExpTarget.cpp
+index f5341f3..1261a7a 100644
+--- a/runtime/model/Qwen4ExpTarget.cpp
++++ b/runtime/model/Qwen4ExpTarget.cpp
+@@ -1,4 +1,5 @@
+ #include "model/Qwen4ExpTarget.hpp"
++#include "ops/MoeTelemetry.hpp"
+ 
+ #include "metal/abi/BlockIndexer.h"
+ #include "model/Qwen4Exp.hpp"
+@@ -162,7 +163,9 @@ void Qwen4ExpTarget::addPrefillLayer(PrefillStep &step, uint32_t index) const {
+       layer.mixer);
+   ops::HyperConnection::addCombine(step.graph, h.streams, h.branch, h.weights, hyperShape(geometry_), rows);
+   addPrefillMix(step, layer.ffnHyper, b.normalized);
+-  ops::MoE::addRouting(step.graph, step.ffn, layer.ffn, *step.moe);
++  ops::MoeBuffers ffn = step.ffn;
++  ffn.telemetry = ops::MoeTelemetryPage::instance().id(backend_, step.moe->shape(), index, geometry_.layers, true);
++  ops::MoE::addRouting(step.graph, ffn, layer.ffn, *step.moe);
+ }
+ 
+ const ops::BlockMoeWeights *Qwen4ExpTarget::moe(uint32_t index) const { return &weights_.layers[index].ffn; }
+@@ -379,7 +382,9 @@ void Qwen4ExpTarget::addVerify(metal::CommandGraph &graph, QwenTargetVerifyBuffe
+         layer.mixer);
+     ops::HyperConnection::addCombine(step.graph, h.streams, h.branch, h.weights, hs, rows);
+     addVerifyMix(step, layer.ffnHyper, b.normalized);
+-    ops::MoE::add(step.graph, {b.normalized, h.zeros, h.branch, b.moe, b.verifyRows}, layer.ffn, *step.moe);
++    ops::MoeBuffers ffn{b.normalized, h.zeros, h.branch, b.moe, b.verifyRows};
++    ffn.telemetry = ops::MoeTelemetryPage::instance().id(backend_, step.moe->shape(), index, geometry_.layers, false);
++    ops::MoE::add(step.graph, ffn, layer.ffn, *step.moe);
+     ops::HyperConnection::addCombine(step.graph, h.streams, h.branch, h.weights, hs, rows);
+     if (const auto slot = geometry_.captureSlot(index))
+       addStreamCapture(step.graph, geometry_, *slot, h.streams, b.capturedTargetHidden, 0, rows);
+diff --git a/runtime/ops/MoE.cpp b/runtime/ops/MoE.cpp
+index ba6ec25..fd7aeae 100644
+--- a/runtime/ops/MoE.cpp
++++ b/runtime/ops/MoE.cpp
+@@ -1,4 +1,5 @@
+ #include "ops/MoE.hpp"
++#include "ops/MoeTelemetry.hpp"
+ 
+ #include "metal/abi/ExecutionGeometry.h"
+ #include "metal/abi/Gguf.h"
+@@ -181,7 +182,7 @@ MoeGroupParams groupParams(const MoePlan &plan, bool streamed) {
+   const MoeShape shape = plan.shape();
+   return {plan.rows(), shape.expertsPerToken, plan.tileRows(), shape.experts,
+           shape.expertIntermediateSize / GGUF_STAGED_COLUMNS, shape.hiddenSize / GGUF_TILE_COLUMNS,
+-          SPLASH_TARGET_VERIFY_ROWS, streamed};
++          SPLASH_TARGET_VERIFY_ROWS, streamed, 0u};
+ }
+ 
+ // MoE::addRouting, its grouping `streamed` (groupParams).
+@@ -217,9 +218,14 @@ void addStepRouting(metal::CommandGraph &graph, const MoeBuffers &buffers, const
+                  "MoE verify rows");
+     grouping.push_back(buffers.verifyRows);
+   }
++  // The telemetry page, or without one any bound buffer: a grouping of telemetry id 0 never reads it.
++  MoeGroupParams group = groupParams(plan, streamed);
++  metal::MetalBuffer telemetry = buffers.telemetry ? MoeTelemetryPage::instance().buffer() : metal::MetalBuffer{};
++  group.telemetry = telemetry ? buffers.telemetry : 0u;
++  grouping.push_back(telemetry ? std::move(telemetry) : scratch.expertSlots);
+   graph.add(routingKernel(buffers.verifyRows ? "moe_group_routes_verified" : "moe_group_routes", shape,
+                           &CompiledMoeRouting::slicesSuffix),
+-            std::move(grouping), groupParams(plan, streamed), {1, 1, 1}, {shape.routerWidth(), 1, 1});
++            std::move(grouping), group, {1, 1, 1}, {shape.routerWidth(), 1, 1});
+ }
+ 
+ void addGather(metal::CommandGraph &graph, const MoeBuffers &buffers, const MoePlan &plan) {
+diff --git a/runtime/ops/MoE.hpp b/runtime/ops/MoE.hpp
+index 8ade308..8e272aa 100644
+--- a/runtime/ops/MoE.hpp
++++ b/runtime/ops/MoE.hpp
+@@ -385,6 +385,9 @@ struct MoeBuffers final {
+   // rows alone (moe_group_routes_verified*), and a streamed load predicts the
+   // next block's experts from them. Empty, every row routes.
+   metal::MetalBuffer verifyRows;
++  // The block's router telemetry id (MoeGroupParams::telemetry,
++  // MoeTelemetryPage::id); 0 for none.
++  uint32_t telemetry = 0;
+ };
+ 
+ // Routes and executes grouped experts from immutable weight views.
