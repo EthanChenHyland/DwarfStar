@@ -559,15 +559,21 @@ class Service:
                         return self._json({**service.state(detail="detail" in query), "answering_chats": answering,
                                            "permissions": permission_status()})
                     if path == "/api/telemetry":
-                        # Proxy the running model server's /telemetry (ds2 advanced build). Non-critical: any failure
+                        # Proxy the running model server's /telemetry (ds2+ advanced build). Non-critical: any failure
                         # returns an empty batch and never affects serving. Resolves the running model's endpoint.
+                        # Level 2 (Advanced: decode cycles, router and PLE aggregates) unless the view asks for 3
+                        # (also sampled router selections); the engine's research level 4 is never proxied.
                         since = int(query.get("since", ["0"])[0] or 0)
+                        try:
+                            level = min(3, max(2, int(query.get("level", ["2"])[0] or 2)))
+                        except ValueError:
+                            level = 2
                         state = service.state()
                         running = (state.get("running_models") or [None])[0]
                         endpoint = (state["models"].get(running) or {}).get("endpoint") if running else None
                         telemetry = {}
                         if endpoint:
-                            url = endpoint.removesuffix("/v1") + f"/telemetry?since={since}&level=2"
+                            url = endpoint.removesuffix("/v1") + f"/telemetry?since={since}&level={level}"
                             try:
                                 with urllib.request.urlopen(url, timeout=2) as stream:
                                     telemetry = json.load(stream)
