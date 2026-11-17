@@ -66,10 +66,17 @@ def _backend(model: dict, runtimes: dict) -> dict:
     pin = runtimes["runtimes"][model["runtime"]]
     advanced = pin.get("advanced_telemetry") or {}
     dflash = advanced.get("dflash", "none")
+    # ds3: router aggregates (and, on request, sampled selections) from the MoE grouping kernel, and the PLE row
+    # store's aggregates. Distinct from "router"/"ple", which mean the earlier native runtime's per-token rows with
+    # weights and per-token PLE reads; a ds3 view labels what it draws as aggregate or sampled, never as exact.
+    routing = advanced.get("routing", "unavailable")
     return {"id": model["runtime"], "kind": pin["kind"], "release": pin.get("release"), "model_name": model["splash_model_name"],
             # requests/memory come from /status for every build; dflash per-cycle only on a telemetry build (ds2+).
             "telemetry": {"router": False, "ple": False, "mtp": False, "requests": True, "memory_plan": True,
-                          "dflash": dflash},
+                          "dflash": dflash,
+                          "routing": routing if routing in ("aggregate", "sampled") else "unavailable",
+                          "routing_levels": [level for level in advanced.get("routing_levels", []) if level in ("aggregate", "sampled")],
+                          "ple_rows": "aggregate" if advanced.get("ple") == "aggregate" else "none"},
             "speculative": "DFlash2 draft model, verified by the target"}
 
 

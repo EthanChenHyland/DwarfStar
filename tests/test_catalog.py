@@ -149,8 +149,10 @@ class RuntimeTests(unittest.TestCase):
             # ds2 reports per-verify-cycle speculative-decode detail; router/PLE stay unavailable.
             self.assertEqual(model["backend"]["telemetry"]["dflash"], "cycle")
             self.assertFalse(model["backend"]["telemetry"]["router"])
+        # ds3 (GPU router telemetry) is pinned as an experiment, never as the production runtime.
         self.assertEqual(set(catalog.load()["runtimes"]["runtimes"]),
-                         {"splash-m1-1.6.1-ds1", "splash-m1-1.6.1-ds2-telemetry"})
+                         {"splash-m1-1.6.1-ds1", "splash-m1-1.6.1-ds2-telemetry", "splash-m1-1.6.1-ds3-gpu-telemetry"})
+        self.assertEqual(catalog.policy()["model_defaults"]["runtime"], "splash-m1-1.6.1-ds2-telemetry")
 
     def test_assets_are_the_split_parts_draft_and_projector_under_the_assets_root(self):
         from dwarfstar import instance
