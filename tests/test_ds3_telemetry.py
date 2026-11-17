@@ -47,8 +47,9 @@ def _run():
 
 class CapabilityTests(unittest.TestCase):
     def test_ds2_reports_no_router_or_row_aggregates(self):
+        runtimes = catalog.load()["runtimes"]
         for model in catalog.models().values():
-            telemetry = model["backend"]["telemetry"]
+            telemetry = catalog._backend({**model, "runtime": "splash-m1-1.6.1-ds2-telemetry"}, runtimes)["telemetry"]
             self.assertEqual(telemetry["routing"], "unavailable")
             self.assertEqual(telemetry["routing_levels"], [])
             self.assertEqual(telemetry["ple_rows"], "none")

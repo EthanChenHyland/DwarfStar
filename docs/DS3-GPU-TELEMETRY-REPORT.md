@@ -46,7 +46,8 @@ PLE aggregates recovered within noise of ds2; ds2 stays in production until this
 17. No synchronization: no command-buffer wait, fence, event, blit, new dispatch or encoder; no lock or store on the
     graph-build path once the page exists; no atomics contention (one owner per cell); serial encoders already order the
     groupings (DS3-GPU-TELEMETRY.md §3).
-18. Memory: 0.5 MB GPU; < 1 MB engine reader; ring unchanged; Workstation < 7 MB with full history.
+18. Memory: 0.5 MB GPU; engine reader < 1 MB plus ≤ 4 MiB of recent detail shared by consumers; ring unchanged;
+    Workstation < 7 MB with full history.
 
 ## Router results
 
@@ -111,7 +112,7 @@ PLE aggregates recovered within noise of ds2; ds2 stays in production until this
 
 44. Success level: **FULL** for the requested signals (router activity, expert selection/utilisation, heatmaps, PLE),
     with documented limits: no router weights, samples are row 0 only, expert-cache activity only for streamed models.
-45. Promotion gate: every item passes (DS3-GPU-TELEMETRY.md §9).
+45. Promotion gate: every item passes (DS3-GPU-TELEMETRY.md §10).
 46. Not covered: 120K contexts (excluded), long agent sessions, the installed Workstation on ds3, the production service
     restarted on ds3.
 47. Recommendation: promote after review and one live session in the installed Workstation — set

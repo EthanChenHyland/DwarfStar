@@ -155,16 +155,22 @@ per run position across all 4 ds2 and 11 ds3 sessions, and the short test's firs
 decodes vary run to run *within* ds2 as much as between builds (Splash: "greedy and seeded outputs can differ from run
 to run" under `--verify-rows auto`).
 
-**Two consumers.** An interval's per-layer detail goes to the poll that read it; another consumer gets the interval's
-totals (`payload: false`). The Workstation counts such intervals and says so under the heatmap; the checker detects
-them and skips only the payload comparisons (found when the UI harness and the checker polled one server together).
+**Several consumers.** `/telemetry` is sequence-based and non-destructive: each consumer asks for events since its own
+sequence, and ds2's ring keeps 4,096 records for all of them. In the first ds3 build, though, an interval's *detail*
+(per-layer cells, sample ids, row-store fields) was attached only to the poll that produced it, so a second consumer got
+the totals without the detail. In production the only consumer is the Advanced Live view, polling while it is open
+(Standard Live, Diagnostics, Zed and the agent never call `/telemetry`), but the service also serves its UI to a browser
+on 127.0.0.1, so a browser tab beside the app makes two. The reader now keeps recent detail by sequence (4 MiB / 512
+events, oldest first) for every consumer, and sends samples only to consumers at level 3; verified live with a second
+consumer polling throughout — both received every event's detail. A consumer more than ~4 MiB of detail behind gets
+totals for what expired, and the Workstation says so under the heatmap.
 
 ## 7. Memory
 
 | Where | Size | Bound |
 |---|---|---|
 | GPU page (Shared, unified memory) | 525,120 B | fixed; one per process |
-| Engine reader | page copy 525,120 B (histograms only, 262,208 B, below level 3) + previous histograms 262,144 B + one poll's payloads ≤ 197 KB | fixed |
+| Engine reader | page copy 525,120 B (histograms only, 262,208 B, below level 3) + previous histograms 262,144 B + recent detail shared by consumers ≤ 4 MiB / 512 events | fixed |
 | Engine ring | unchanged from ds2 (4,096 records) | fixed |
 | Workstation, live | 2 × 96 KiB session histograms + 96 KiB decaying histogram + 64 samples (~123 KB) + 2 cached 512 × 48 images (96 KiB each) | fixed |
 | Workstation, history | per request: 96 KiB decode histogram (made when routing arrives) + ≤ 128 samples (~250 KB); 20 requests | ≤ ~7 MB |
@@ -189,7 +195,45 @@ in every mode (2.4–4.8 % of one core at 60 fps while the view is visible; noth
 heat images and summary takes 3–7 ms at most five times a second. The heat images are 512 × 48 ImageData drawn scaled,
 so a frame never draws 24,576 cells.
 
-## 9. Promotion gate
+## 9. Parity with the native-era Visualizer
+
+Panel by panel against the Advanced view as it was on the native runtime (`docs/VISUALIZER.md`,
+`app/workstation/web/visualizer.js` at `rollback/native-default-20261113`):
+
+| Old visual | Old signal | ds3 equivalent | Kind | Visual restored? | Meaningful loss? |
+|---|---|---|---|---|---|
+| Router activity (overview strips, layers lighting per token) | level-2 tick: row 0's 10 experts × 48 layers with weights, every cycle | per-layer routes over the last ~1.5 s, every route the GPU ran | aggregate | yes (a moving picture of where routing goes, at 5 Hz instead of per token) | the per-token flicker; the shape is the same |
+| Selected experts (white marks, layer-focus list with weight bars) | same tick | sampled step: row 0's experts per layer, 1 step in 8 | sampled | yes, without weight bars | gate weights |
+| Routing heatmap | hub heat: row 0 of observed ticks while a viewer was attached | every executed route, per phase, session or request | aggregate (exact counts) | yes, more complete than before | none |
+| Layer focus | tick row + session heat for one layer | the layer's route counts, busiest experts with shares, latest sample outlined | aggregate + sampled | yes | the current token's weights |
+| Expert utilisation | derived from heat | derived from the aggregate; experts used per layer | aggregate | yes | none |
+| Routing concentration | (not shown) | top-10 share and effective experts per layer | aggregate | new | — |
+| PLE activity (read pulses, KiB/s, row reads) | per-read event `ds4_tm_ple_read` | row-store deltas per poll: rows read, bytes, KiB/s; pulses per interval | aggregate | yes | per-token timing of reads |
+| Streamed expert activity | none (experts resident) | expert-store deltas when a model streams; "all routed experts resident" otherwise | aggregate | same as before (resident) | none |
+| Cache hit/miss | KV checkpoint stores/restores | PLE row-cache hit share, latency p50/p95, occupancy; prefix-cache reuse from `/status` | aggregate | yes (different caches, truthfully named) | native KV-checkpoint counts (that cache no longer exists) |
+| Speculative decoding (MTP lane) | per-cycle `dp`/`da` | DFlash2 per verify cycle: proposed, accepted, rejected, acceptance, this cycle | exact per cycle | yes, as DFlash2 | none |
+| KV / context | ticks + plan | context used / window, KV dtypes, reserved vs filled | exact (status) | yes | none |
+| Memory | plan + sampler | the same | exact | yes | none |
+| Request timeline | per-request start/finish rows from the native log stream | request history by decode run (cycles, drafts, tok/s, routes) + view/export; the Requests table stays empty for Splash | partial | partly | per-request prompt/reuse/prefill rows |
+| Tool timeline | agent tool events | unchanged | exact | yes | none |
+
+Counting a restored panel as 1, a partial one as ½: **12 of 14 fully, 2 partly — about 90 % of the useful native
+visualisation**, plus one new panel (concentration).
+
+Still unavailable, and why it matters little:
+* **Router gate weights** — native drew them as bar length and alpha. They say how strongly the top experts were mixed;
+  the selection and its frequency, which is what the panels are read for, are there.
+* **Selections of the other speculative rows** — native kept rows 0–3; ds3 samples row 0 only. Their routes are in every
+  aggregate; only "which experts did draft token 3 pick" is gone.
+* **Per-token PLE reads** — native pulsed each read; ds3 pulses per interval with exact totals. Same rate, same bytes,
+  coarser timing.
+* **Per-request prompt/prefill rows** — Splash reports no request ids; history is segmented by decode runs.
+* **Every-token selections at full rate** — available only at the research level 4, which the Workstation never asks for.
+
+None of these removes a question the Visualizer was used to answer (where does routing go, how concentrated is it, how
+well does drafting work, what does the PLE cost, how full are memory and context); they remove per-token resolution.
+
+## 10. Promotion gate
 
 | Gate | Result |
 |---|---|
@@ -198,7 +242,7 @@ so a frame never draws 24,576 cells.
 | SAMPLED < 3 % | +0.12 … +0.41 % (noise) |
 | No TTFT/prefill/acceptance/memory regression | none |
 | No synchronization | none (§3) |
-| Trivial memory | 0.5 MB GPU, < 1 MB engine, < 7 MB Workstation |
+| Trivial memory | 0.5 MB GPU, < 5 MB engine, < 7 MB Workstation |
 | All three models | Scope, Swift, Cyber pass |
 | Smooth UI | 0.4–0.8 ms/frame |
 | Truthful | aggregate/sampled labelled; samples carry their period; drops counted; payload splits reported |
