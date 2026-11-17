@@ -1,14 +1,14 @@
-# ds3 GPU telemetry (experiment)
+# ds3 GPU telemetry
 
-**Status: experiment, not production.** Production stays on `splash-m1-1.6.1-ds2-telemetry` (ds2) until ds3 passes the
-promotion gate below and the change is approved. ds3 is a separate runtime, `splash-m1-1.6.1-ds3-gpu-telemetry`, built
-from the same pinned Splash source (`1.6.1-m1`, commit `5312c54`) with the ds1 and ds2 patches plus
-`backends/splash-m1/patches/ds3/`. ds2's binaries, hashes, patches and manifests are untouched. The native backend is not
-restored: no ds4 runtime, backend selector, control socket, log parser, native server or F16 KV runtime. The old native
-code was read only as a reference for signal definitions and Visualizer semantics.
+**Status: production candidate.** `config/runtime-policy.json` names `splash-m1-1.6.1-ds3-gpu-telemetry` (ds3) on this
+branch; `main` still names ds2 until this merges. ds3 is built from the same pinned Splash source (`1.6.1-m1`, commit
+`5312c54`) with the ds1 and ds2 patches plus `backends/splash-m1/patches/ds3/`. ds2's binaries, hashes, patches and
+manifests are untouched and it stays pinned as the rollback. The native backend is not restored: no ds4 runtime,
+backend selector, control socket, log parser, native server or F16 KV runtime. The old native code was read only as a
+reference for signal definitions and Visualizer semantics.
 
-Rollback: ds3 rejected → `config/runtime-policy.json` `model_defaults.runtime` stays (or goes back to)
-`splash-m1-1.6.1-ds2-telemetry` → restart the model → production unchanged.
+Rollback: set `config/runtime-policy.json` `model_defaults.runtime` to `splash-m1-1.6.1-ds2-telemetry` →
+`dwarfstar generate` → restart the service and model. Exercised once through the installed app (§10).
 
 ## 1. The old telemetry contract, and what Splash can recover
 
@@ -190,10 +190,20 @@ IN N (with a tooltip that says what is counted). The storage card shows the PLE 
 rows and bytes (latency and cache occupancy on hover); a streamed expert store is shown when a model has one. The proxy
 asks for level 2, or 3 with *Sampled selections*; it never asks for level 4. Export adds a `router` section.
 
-Cost (measured in a harness that loads the real `visualizer.js` against a live ds3 server): a frame takes 0.4–0.8 ms
-in every mode (2.4–4.8 % of one core at 60 fps while the view is visible; nothing while hidden); a data rebuild of the
-heat images and summary takes 3–7 ms at most five times a second. The heat images are 512 × 48 ImageData drawn scaled,
-so a frame never draws 24,576 cells.
+The DFlash2 card shows a bar per recent verify cycle (drafts proposed, accepted part green, rejected red) in place of
+the native-era draft-token animation; the output stream shows the decode rate of the run being generated (or viewed),
+else the last run; the memory panel shows the latest request's context ("–" when no agent receipt exists).
+
+Cost in the installed app (WebKit, measured with `top` on its WebContent process): Advanced 17–18 % of one core while
+visible, generating or idle (ds2's Advanced: 16.7 % — the canvas is redrawn every frame); Standard 3.6 %; nothing when
+the view is hidden. A frame takes 0.4–0.8 ms of JavaScript in every mode, a data rebuild 3–7 ms at most five times a
+second; heat is drawn from cached 512 × 48 images. Memory levels off as history and histograms fill: 117 → 147 MB over
+two minutes of continuous decoding, then flat.
+
+| | |
+|---|---|
+| ![Advanced overview](assets/ds3/advanced-overview.png) Overview: routes per layer, AGGREGATE | ![Layer focus, sampled](assets/ds3/advanced-layer-focus-sampled.png) Layer focus, SAMPLED 1 IN 8: step 2400's experts outlined |
+| ![Routing heatmap](assets/ds3/advanced-heatmap.png) Routing heatmap: layers × experts, decode | ![Standard Live](assets/ds3/standard-live.png) Standard Live: unchanged apart from its footer |
 
 ## 9. Parity with the native-era Visualizer
 
@@ -233,7 +243,29 @@ Still unavailable, and why it matters little:
 None of these removes a question the Visualizer was used to answer (where does routing go, how concentrated is it, how
 well does drafting work, what does the PLE cost, how full are memory and context); they remove per-token resolution.
 
-## 10. Promotion gate
+## 10. Final integration review (installed app, production service)
+
+ds3 was installed through the production path: policy pin → `dwarfstar generate` → `doctor` (27 ready, 0 blocking;
+engine, shaders and adapter match the pins) → the installed Workstation started the service → Scope LOW from the Run
+page → a temporary chat. Swift MEDIUM and Cyber XHIGH were loaded with `dwarfstar switch`, generated, checked
+(`ds3_check.py`: steps = cycles, routes = verify rows exactly, PLE = `/status`) and stopped. Rollback: pin ds2 →
+generate → `doctor` → restart → the app showed router and PLE as "not reported" with DFlash2 working; then back to
+ds3, checked again.
+
+Defects found in the real app and fixed (UI only unless stated):
+
+| Defect | Cause | Fix |
+|---|---|---|
+| A second viewer (a browser tab on the service) got totals without per-layer detail | detail went only to the poll that produced it | engine keeps recent detail by sequence for every consumer (§6); poll path only |
+| Returning to Advanced after another view left telemetry polling stopped (also on ds2) | `mount()` returned early without restarting the poll `unmount()` had stopped | restart the poll on re-mount |
+| A slow first poll could be overtaken, replaying events out of order (negative decode time, empty rows) | 5 Hz `setInterval` without an in-flight guard | one poll at a time (abandoned after 6 s, its result discarded), events at or below the last sequence ignored, reset when the model restarts |
+| A request's exported routing missed its edges (−4 % rows, unequal layer totals) | intervals attributed by arrival time in the page | attributed by engine time to the overlapping run; exact for an isolated request (236,160 routes = 492 verify rows), labelled approximate at the edges |
+| Standard Live footer said router/PLE were not reported | static text | follows the runtime's capabilities |
+| "Trunk + MTP", a native-era message before the first poll, a truncated PLE line | labels | "Trunk + draft", ds3 wording, "· 47 % hit" |
+| Blank tok/s, "IDLE · 0 generated", Context 0 in Advanced | read the native hub feed, which Splash never fills | current / last decode run, latest request |
+| Decorative draft-token pills and PLE dots crossing the panels | native-era animation | a static bar per verify cycle; PLE shown on its card |
+
+## 11. Promotion gate
 
 | Gate | Result |
 |---|---|
@@ -249,6 +281,8 @@ well does drafting work, what does the PLE cost, how full are memory and context
 | Reproducible | `build_splash.sh --ds3` from a clean clone = the working build, byte for byte |
 | Rollback | ds2 untouched (hashes = pins); the policy pin selects either; tests verify both installations |
 
-Not covered: 120K-context runs (excluded by design), long agent sessions, and a live restart of the production service
-on ds3 (promotion is the owner's decision; until then `runtime-policy.json` keeps ds2).
+| Installed app, production service | pass (§10) |
+| Rollback through the real path | pass (§10) |
+
+Not covered: 120K-context runs (excluded by design) and long agent sessions.
 

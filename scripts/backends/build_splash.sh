@@ -9,7 +9,7 @@
 #                  and metadata adapter (install/gguf.py)
 # --telemetry      also build the ds2 advanced-telemetry variant: apply backends/splash-m1/patches/telemetry/*.patch
 #                  to the source and overlay the patched server/*.py. Engine-only otherwise; ds1 (no flag) is unchanged.
-# --ds3            the ds3 GPU-telemetry experiment: the ds2 telemetry patches, then backends/splash-m1/patches/ds3/*.patch
+# --ds3            the production ds3 GPU-telemetry build: the ds2 telemetry patches, then backends/splash-m1/patches/ds3/*.patch
 #                  (the MoE grouping kernel's router histogram page and its reader), with the same server overlay.
 #
 # Needs Xcode 26 with the Metal toolchain (xcodebuild -downloadComponent MetalToolchain). Prints the SHA-256 pins for

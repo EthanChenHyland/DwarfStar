@@ -13,7 +13,7 @@ DwarfStar is one product with three models. Everything that is not a model fact 
           dwarfstar runtime --model {scope|swift|cyber} │
                              │ start/stop/health/status │
                              ▼                          │
-   Splash-m1 (1.6.1-m1-ds1) ───────── port 8030 / 8031 / 8032 ──┘
+   Splash-m1 (1.6.1-m1-ds3) ───────── port 8030 / 8031 / 8032 ──┘
                              ▲
    Zed ── bin/dwarfstar-acp --profile <id> ── Oh My Pi ACP agent + DwarfStar tools
 ```
@@ -27,7 +27,7 @@ DwarfStar is one product with three models. Everything that is not a model fact 
 | Controller | `src/dwarfstar/runtime_control.py` | Starts, stops and health-checks one model's server. Refuses unpinned binaries or assets, enforces per-model memory admission and never loads a second model. |
 | Lifecycle | `src/dwarfstar/service.py` (`Lifecycle`) | Switches profiles: stops the other model, waits for its port, checks memory, starts, health-checks. Same-model effort changes do not restart. |
 | Agent | `src/dwarfstar/agent.py`, `acp/`, `agent-tools/` | One ACP launcher for every profile. Full Auto, workspace/shell/browser/KimiCU/vision tools, compaction and recovery are identical across profiles; only the provider file (model + effort) differs. |
-| Runtime | `backends/splash-m1/` → `<assets>/Runtimes/splash-m1-1.6.1-ds2-telemetry/` (rollback `splash-m1-1.6.1-ds1/`) | Splash-m1 1.6.1-m1 built from source with DwarfStar's patches (`scripts/backends/build_splash.sh --telemetry`), pinned by engine, shader and metadata-adapter hashes. It is the one runtime for every model. The retired native ds4 build is not installed; its source and behaviour are recoverable from git (`docs/BACKENDS.md`). |
+| Runtime | `backends/splash-m1/` → `<assets>/Runtimes/splash-m1-1.6.1-ds3-gpu-telemetry/` (rollback `splash-m1-1.6.1-ds2-telemetry/`, then `…-ds1/`) | Splash-m1 1.6.1-m1 built from source with DwarfStar's patches (`scripts/backends/build_splash.sh --ds3`), pinned by engine, shader and adapter hashes in `config/runtimes.json` |
 | Telemetry | `src/dwarfstar/telemetry/` | Fire-and-forget UDP events (port 8039) from runtime, controller and agent; the hub aggregates and streams them over SSE. Per-request Splash metrics are read from the server's `/status` on demand, and per-verify-cycle speculative-decode detail from the ds2 runtime's `/telemetry` ring (docs/ADVANCED-TELEMETRY.md). Reasoning text is never recorded. |
 | UI | `app/workstation/web/` | Chats, Run, Models, Live (with an Advanced view, the former Visualizer), Diagnostics and Settings. Benchmark data is engineering infrastructure (`research/`, `scripts/`), never a Workstation page. Plain JS, served only on loopback. |
 | Editor | `src/dwarfstar/zed.py` | Seven generated Zed entries, all `bin/dwarfstar-acp --profile <id>`. |
@@ -39,7 +39,7 @@ DwarfStar is one product with three models. Everything that is not a model fact 
 
 | Common to every model | Value |
 |---|---|
-| Runtime build | `splash-m1-1.6.1-ds2-telemetry` for every model (ds1 is the rollback) |
+| Runtime build | `splash-m1-1.6.1-ds3-gpu-telemetry` for every model (ds2 is the rollback, ds1 before it) |
 | Context / output ceiling | 131072 / 81920 tokens |
 | K / V cache | INT8 / INT8 (Splash-m1) |
 | Prefill chunk | 2048 tokens |

@@ -1,6 +1,6 @@
-# Advanced telemetry (the ds2 runtime)
+# Advanced telemetry (the ds2 runtime, and the base of ds3)
 
-DwarfStar's production runtime is **`splash-m1-1.6.1-ds2-telemetry`** (ds2): the ds1 build plus a bounded in-engine telemetry channel that restores a per-verify-cycle view of speculative decoding, without changing inference. This page documents what it reports, how it is built, and the overhead that was measured before it was promoted. The earlier ds1 build remains pinned as the rollback.
+**`splash-m1-1.6.1-ds2-telemetry`** (ds2) was DwarfStar's production runtime until ds3 ([DS3-GPU-TELEMETRY.md](DS3-GPU-TELEMETRY.md)), which keeps everything here and adds GPU router and PLE aggregates; ds2 is now the rollback. ds2 is the ds1 build plus a bounded in-engine telemetry channel that restores a per-verify-cycle view of speculative decoding, without changing inference. This page documents what it reports, how it is built, and the overhead that was measured before it was promoted. The earlier ds1 build remains pinned behind it.
 
 ## What it adds
 

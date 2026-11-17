@@ -20,7 +20,7 @@ Seven profiles, one per model × reasoning effort. Context is a model property; 
 * **One controller** that only ever runs one model, refuses unpinned binaries or model files, and checks each model's own memory plan before loading.
 * **Chats** in the Workstation: durable conversations with pins, stars, tags, forks and Markdown/JSON export that run through the same agent (tools, automatic compaction) and stay on your Mac.
 * **One agent launcher** for every profile: `bin/dwarfstar-acp --profile <id>` (ACP, workspace/shell/browser/computer-use/vision tools, compaction, recovery) with three approval presets: Ask, Workspace Auto and Full Auto.
-* **One runtime** for all three models: Splash-m1 1.6.1-m1 with DwarfStar's patches (`splash-m1-1.6.1-ds2-telemetry`: Swift's tokenizer profile, exact BF16 planes for Cyber, and a bounded per-cycle telemetry ring; `ds1`, without the ring, is kept as the rollback), with DFlash2 speculative decoding, an INT8 KV cache and a prefix cache. It is faster and leaner than the earlier native ds4 runtime on every model, with the same answers, so native is retired: its behaviour is recoverable from git for comparison, not installed as a second runtime ([docs/BACKENDS.md](docs/BACKENDS.md)).
+* **One runtime** for all three models: Splash-m1 1.6.1-m1 with DwarfStar's patches (`splash-m1-1.6.1-ds3-gpu-telemetry`: Swift's tokenizer profile, exact BF16 planes for Cyber, a bounded per-cycle telemetry ring, and GPU-side router and PLE aggregates; `ds2`, without the router page, is kept as the rollback, `ds1` before it).
 * **Real telemetry**: the runtime's own measurements — request counts, time to first token, inter-token latency, prefill and decode rates, draft acceptance, prefix-cache hits, context occupancy, memory and thermal state — plus the agent's tool actions, produced only while someone is watching. Splash does not expose per-token router, expert or PLE activity; the Live and Visualizer views label those regions "not reported" rather than estimate them.
 
 ![Visualizer](docs/assets/visualizer.png)
@@ -60,7 +60,8 @@ Chats, folders and settings are kept; the service migrates stored data when it n
 | [Benchmarks](docs/BENCHMARKS.md) | Results, how they were measured, the production validation |
 | [Backends](docs/BACKENDS.md) | Splash-m1, the one runtime; native and MLX as history; prefill chunk and prefix reuse |
 | [Draft models](docs/DRAFT-MODELS.md) | The shared DFlash2 draft, measured acceptance per model, whether a matched draft is worth building |
-| [Advanced telemetry](docs/ADVANCED-TELEMETRY.md) | The ds2 runtime's per-cycle DFlash channel: what it reports, overhead, build identity, rollback |
+| [Advanced telemetry](docs/ADVANCED-TELEMETRY.md) | The per-cycle DFlash channel (ds2 and later): what it reports, overhead, build identity, rollback |
+| [GPU telemetry (ds3)](docs/DS3-GPU-TELEMETRY.md) | Router aggregates, sampled selections and PLE aggregates from the GPU: design, overhead, parity with the native Visualizer, rollback |
 | [Native retirement](docs/NATIVE-RETIREMENT.md) | How native was retired and how to reconstruct it from Git |
 | [Cyber conversion](docs/CYBER-CONVERSION.md) | NVFP4 → DwarfStar, fidelity and limitations |
 | [Storage](docs/STORAGE.md) | The five roots, disk use, the 2026-11 consolidation, safe cleanup |

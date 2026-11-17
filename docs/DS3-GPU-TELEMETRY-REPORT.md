@@ -2,8 +2,8 @@
 
 Goal: recover the original rich telemetry (router activity, expert selection and utilisation, layer × expert heatmaps,
 PLE / expert-storage activity) on Splash, without the native backend and without slowing inference. Design and full
-measurements: [DS3-GPU-TELEMETRY.md](DS3-GPU-TELEMETRY.md). Outcome: **router aggregates, sampled selections, heatmaps and
-PLE aggregates recovered within noise of ds2; ds2 stays in production until this is reviewed.**
+measurements: [DS3-GPU-TELEMETRY.md](DS3-GPU-TELEMETRY.md). Outcome: **router aggregates, sampled selections, heatmaps and PLE aggregates recovered within noise of ds2, verified in the
+installed app and production service; ds3 is the production candidate on this branch, ds2 the rollback.**
 
 ## Baseline
 
@@ -86,8 +86,8 @@ PLE aggregates recovered within noise of ds2; ds2 stays in production until this
 34. Cost: 0.4–0.8 ms per frame in every mode; data rebuilds 3–7 ms at most 5 Hz; nothing while hidden.
 35. Export adds `router` (`router_mode: aggregate|sampled`, `[layer, expert, routes]` cells, samples).
 36. Proxy: level 2 by default, 3 with *Sampled selections*, clamped to 2–3.
-37. Tested in a harness loading the real `visualizer.js` against a live ds3 server; not yet in the installed app
-    (that needs the production service on ds3).
+37. Verified in the installed Workstation against the production service (DS3-GPU-TELEMETRY.md §10), after a harness
+    run; the defects that review found are fixed there.
 
 ## Safety
 
@@ -103,7 +103,7 @@ PLE aggregates recovered within noise of ds2; ds2 stays in production until this
 ## Reproducibility
 
 41. `scripts/backends/build_splash.sh SOURCE DIST OUT --ds3` from a clean clone reproduces the working build byte for
-    byte: engine `7689bd32…`, `splash.metallib` `1d9ae6f5…`, `host-step.metallib` `8e177c75…` (= ds2), adapter `9fe87539…`.
+    byte: engine `ae07f09a…`, `splash.metallib` `1d9ae6f5…`, `host-step.metallib` `8e177c75…` (= ds2), adapter `9fe87539…`.
 42. Patches `backends/splash-m1/patches/ds3/`: 0005a page, 0005b kernel, 0006 reader, 0007 server (999 lines).
 43. `config/runtimes.json` pins `splash-m1-1.6.1-ds3-gpu-telemetry`; tests: 181 pass, including installed-runtime hash
     checks for ds1, ds2 and ds3.
@@ -112,14 +112,12 @@ PLE aggregates recovered within noise of ds2; ds2 stays in production until this
 
 44. Success level: **FULL** for the requested signals (router activity, expert selection/utilisation, heatmaps, PLE),
     with documented limits: no router weights, samples are row 0 only, expert-cache activity only for streamed models.
-45. Promotion gate: every item passes (DS3-GPU-TELEMETRY.md §10).
-46. Not covered: 120K contexts (excluded), long agent sessions, the installed Workstation on ds3, the production service
-    restarted on ds3.
-47. Recommendation: promote after review and one live session in the installed Workstation — set
-    `config/runtime-policy.json` `model_defaults.runtime` to `splash-m1-1.6.1-ds3-gpu-telemetry`, `dwarfstar generate`,
-    restart the model.
-48. Rollback: set it back to `splash-m1-1.6.1-ds2-telemetry`, generate, restart; ds2's installation is byte-identical to
-    its pin.
-49. This branch does not change the production pin; merging it adds ds3 as an available runtime and the UI that uses
-    it when selected.
-50. Not merged: opened as a pull request for review.
+45. Promotion gate: every item passes (DS3-GPU-TELEMETRY.md §11).
+46. Not covered: 120K contexts (excluded), long agent sessions.
+47. Decision: **PROMOTE.** The installed app and the production service pass, the useful native visualisation is about
+    90 % restored, several viewers are served correctly, rollback works through the real path, and no regression was
+    found.
+48. Rollback: set `config/runtime-policy.json` back to `splash-m1-1.6.1-ds2-telemetry`, generate, restart; ds2's
+    installation is byte-identical to its pin.
+49. This branch sets the production pin to ds3; merging it promotes ds3, with ds2 and ds1 still pinned.
+50. Not merged: pull request for review.

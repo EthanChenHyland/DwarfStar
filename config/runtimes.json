@@ -71,7 +71,7 @@
         "install/gguf.py": "9fe875393cfb3e1b651db8f56dd2bef971f08535fda4fadfae1dd34229b7575e"
       },
       "source": "https://github.com/paperniuk/splash/tree/1.6.1-m1 + backends/splash-m1/patches/0001-qwen2-tokenizer-profile.patch, 0002-exact-bf16-planes.patch + backends/splash-m1/patches/telemetry/0003a-telemetry-ring-header.patch, 0003b-telemetry-engine.patch, 0004-telemetry-server.patch + backends/splash-m1/patches/ds3/0005a-router-telemetry-page.patch, 0005b-router-telemetry-kernel.patch, 0006-router-telemetry-reader.patch, 0007-router-telemetry-server.patch",
-      "description": "EXPERIMENT (not the production pin). ds2 plus GPU-side router telemetry: the MoE grouping kernel adds the routes it already counts per layer and expert into a 0.5 MB host-visible page, which the engine reads on a /telemetry poll with no GPU command and no wait; optional sampled selections (row 0 of one decode step in N); PLE row-store and expert-store aggregates. Built by scripts/backends/build_splash.sh --ds3. See docs/DS3-GPU-TELEMETRY.md. directory is relative to the assets root, home to the data root.",
+      "description": "Production since the ds3 review (ds2 is the rollback). ds2 plus GPU-side router telemetry: the MoE grouping kernel adds the routes it already counts per layer and expert into a 0.5 MB host-visible page, which the engine reads on a /telemetry poll with no GPU command and no wait; optional sampled selections (row 0 of one decode step in N); PLE row-store and expert-store aggregates. Built by scripts/backends/build_splash.sh --ds3. See docs/DS3-GPU-TELEMETRY.md. directory is relative to the assets root, home to the data root.",
       "advanced_telemetry": {
         "dflash": "cycle",
         "routing": "sampled",
