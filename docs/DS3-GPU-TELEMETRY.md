@@ -105,7 +105,8 @@ nominal throughout. Two sessions: **micro** (router counters forced on with no c
 Per-cycle decode cost depends on how many draft rows each cycle verifies, which depends on what the model generates, so
 the comparison fits ds2's per-run cost against rows per cycle (`scripts/backends/ds3_overhead.py`: ms/cycle = 48.4 + 4.81 × rows short,
 50.0 + 4.74 × rows decode) and reports each run's residual. The two sessions differ by ~1.5 % for the *same* ds2
-binary, so the numbers that matter are against ds2 **in the same session**:
+binary, so the numbers that matter are against ds2 **in the same session** (fitting one session's six ds2 runs alone instead
+gives a flatter slope and moves individual results by up to ~0.4 %, e.g. aggregate *short* +0.89 %):
 
 | Configuration | short | decode | TTFT | prefill tok/s |
 |---|---|---|---|---|
@@ -117,6 +118,13 @@ binary, so the numbers that matter are against ds2 **in the same session**:
 | ds3 page off, polled 8 Hz (PLE only) | −0.11 % | +0.29 % | same | same |
 | ds3 **SAMPLED** 1 in 16 / 8 / 4, polled | +0.26 / +0.41 / +0.17 % | +0.22 / +0.36 / +0.12 % | same | same |
 | ds3 EXACT, kernel only (micro) / polled (research) | −0.42 / +0.32 % | −0.08 / +0.56 % | same | same |
+
+**OFF, interleaved.** Because the gate for OFF (< 0.5 %) is below the session-to-session noise above, OFF was also
+measured as ds2, ds3, ds2, ds3, ds2, ds3 in one sitting (Scope, 3 runs each, no consumer), fitted on the three ds2
+legs: *short* ds3 −0.08 … +0.03 % against ds2 −0.12 … +0.13 % (difference −0.01 %); *decode* ds3 +0.18 … +0.46 % against
+ds2 −0.16 … +0.12 % (difference **+0.36 %**, ds3 slower in each of the three pairs). OFF therefore likely costs about
+0.25 ms of a 73 ms verify cycle, plausibly the extra writable buffer bound to each of the 48 groupings per step; TTFT
+(0.517 / 26.49 / 0.557 s), prefill (150.8 / 332.5 / 159.7 tok/s), acceptance and peak memory were the same.
 
 Run-to-run spread within one configuration is about ±1 %. Every ds3 configuration is within that noise, there is no
 trend with how much work a mode does (exact is not dearer than aggregate), DFlash acceptance is unchanged (46–58 % in
@@ -185,7 +193,7 @@ so a frame never draws 24,576 cells.
 
 | Gate | Result |
 |---|---|
-| OFF ≈ ds2 (< 0.5 %) | within noise (−0.14 … +1.06 %, ±1 % run spread; the page-disabled build +0.14/+0.32 %) — the 0.5 % bound is below this rig's noise floor, so it is not demonstrated, only not contradicted |
+| OFF ≈ ds2 (< 0.5 %) | pass: interleaved A/B −0.01 % short, +0.36 % decode (consistent, small, under the bound) |
 | AGGREGATE < 2 % | +0.11 … +0.51 % (noise) |
 | SAMPLED < 3 % | +0.12 … +0.41 % (noise) |
 | No TTFT/prefill/acceptance/memory regression | none |
