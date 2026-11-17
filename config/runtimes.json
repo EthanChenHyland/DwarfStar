@@ -62,7 +62,7 @@
       "directory": "Runtimes/splash-m1-1.6.1-ds3-gpu-telemetry",
       "home": "runtime/splash-home",
       "tarball_sha256": "fde8cc8fff55f7706d38078638e2d518bfa1a229cd8d4b12869ca2de39facbcd",
-      "binary_sha256": "7689bd32c2b638c2d125f099df398b3549da7b2fb39d7075c4b993a1dc709e68",
+      "binary_sha256": "ae07f09acdfc63c17a2be133cb885616ce01e3880e70d270ee561e6e24c0bf3c",
       "shader_sha256": {
         "host-step.metallib": "8e177c753e2051cd8a31c79bf031b3fae8daf04f5564ced9fc37db064bdfe51a",
         "splash.metallib": "1d9ae6f52c888a8bed4bb3ce90e0a6a2f84f3efc0e59a3035da6881bd1343631"

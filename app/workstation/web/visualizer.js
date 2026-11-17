@@ -179,7 +179,8 @@
     const slider = V.root && V.root.querySelector("#viz-layer");
     if (slider && +slider.max !== layers - 1) { slider.max = layers - 1; if (V.focusLayer > layers - 1) { V.focusLayer = layers - 1; slider.value = V.focusLayer; } }
   }
-  /* Payload-less events are another consumer's interval: counted, not drawn. Decode intervals also fold into the
+  /* An event without its detail (the engine keeps ~4 MiB of recent detail for every viewer) arrived after the detail
+   * expired: counted and said so, not drawn. Decode intervals also fold into the
    * decaying "recent" histogram and into the request being generated. */
   function routerAggregate(e, first) {
     const r = V.router; if (!r) return;
@@ -700,7 +701,7 @@
     const pct = (v) => (100 * v / sm.all).toFixed(1) + " %";
     label("Busiest experts across layers: " + sm.top.map(([e, v]) => "#" + e + " " + pct(v)).join(" · ") + (sm.median != null ? "  ·  effective experts per layer (median) " + sm.median.toFixed(0) + "/" + experts : ""),
       x + lx, hy + hh + 8, COLORS.muted, "10.5px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", hw);
-    label(sm.all.toLocaleString() + " routes · log scale · rejected draft rows included" + (r.summaries ? " · " + r.summaries + " intervals went to another viewer" : ""),
+    label(sm.all.toLocaleString() + " routes · log scale · rejected draft rows included" + (r.summaries ? " · " + r.summaries + " intervals' detail expired before this view read it" : ""),
       x + lx, hy + hh + 23, COLORS.faint, "10px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", hw);
   }
   function drawRouterLayer(x, y, w, h) {

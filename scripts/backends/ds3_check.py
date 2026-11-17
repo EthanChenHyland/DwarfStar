@@ -1,6 +1,6 @@
 """Check a ds3 runtime's GET /telemetry against its contract, live or on recorded batches.
 
-    ds3_check.py live PORT [--levels 2,3] [--tokens 160] [--effort low] [--out FILE]
+    ds3_check.py live PORT [--levels 2,3] [--tokens 160] [--effort low] [--second-consumer 1] [--out FILE]
         one temperature-0 generation per level on the Splash server at PORT while a consumer polls /telemetry at
         8 Hz, then check(): exits 1 when any invariant fails. The report (JSON) goes to stdout or FILE.
 
@@ -12,9 +12,10 @@ check(batches, status_before, status_after) verifies, for one generation that ra
     ran one lane; every layer's cumulative routes are equal (each row routes top_k experts in every layer);
     sampled experts appear in the aggregate; samples carry the period they were taken at; samples_dropped == 0
   * PLE: the summed per-poll table deltas equal the /status streamed_table deltas (read rows, read bytes)
-An event without its payload was produced by another consumer's poll (the engine gives an interval's detail to the poll
-that read it): its counts still add up, but the per-layer, sample and PLE comparisons need every payload, so they are
-skipped and the report names the other consumer instead of failing.
+An event without its payload is one whose detail the engine no longer held when this consumer read it (the engine keeps
+~4 MiB of recent detail, shared by every consumer): its counts still add up, but the per-layer, sample and PLE comparisons
+need every payload, so they are skipped and the report says so instead of failing. With --second-consumer, another
+consumer polls at level 2 throughout; both must get every event's detail.
 Exported so tests can drive it with synthetic batches.
 """
 from __future__ import annotations
@@ -51,7 +52,7 @@ def check(batches: list[dict], status_before: dict | None = None, status_after: 
     shared = sum(1 for e in events if e.get("kind") in ("router_aggregate", "router_sample", "ple_aggregate") and not e.get("payload", True))
     report: dict = {"events": len(events), "kinds": dict(kinds), "ring_dropped": dropped, "other_consumer_events": shared}
     if shared:
-        report["note"] = f"{shared} intervals went to another consumer's polls: per-layer, sample and PLE comparisons skipped"
+        report["note"] = f"{shared} intervals arrived without detail: per-layer, sample and PLE comparisons skipped"
 
     cycles = [e for e in events if e.get("kind") == "decode_cycle"]
     report["decode_cycles"] = len(cycles)
@@ -143,7 +144,7 @@ def _post(port: int, path: str, body: dict, timeout: float = 600) -> dict:
         return json.loads(response.read())
 
 
-def live(port: int, level: int, tokens: int, model: str, effort: str = "low") -> dict:
+def live(port: int, level: int, tokens: int, model: str, effort: str = "low", second: bool = False) -> dict:
     """One generation at `level` while a consumer polls at 8 Hz; returns check()'s report plus timings."""
     since = [_get(port, f"/telemetry?level={level}").get("next", 0)]
     time.sleep(3.2)  # let a higher level from an earlier consumer lapse
@@ -160,15 +161,36 @@ def live(port: int, level: int, tokens: int, model: str, effort: str = "low") ->
             since[0] = batch.get("next", since[0])
             stop.wait(0.125)
 
+    other_batches: list[dict] = []
+
+    def other():  # a second viewer at level 2, e.g. a browser tab beside the Workstation
+        cursor = since[0]
+        while not stop.is_set():
+            batch = _get(port, f"/telemetry?since={cursor}&level=2", 5)
+            other_batches.append(batch)
+            cursor = batch.get("next", cursor)
+            stop.wait(0.2)
+
     thread = threading.Thread(target=consume, daemon=True)
     thread.start()
+    second_thread = threading.Thread(target=other, daemon=True) if second else None
+    if second_thread:
+        second_thread.start()
     _post(port, "/v1/chat/completions", {"model": model, "max_tokens": tokens, "temperature": 0, "reasoning_effort": effort,
                                          "messages": [{"role": "user", "content": "Name five prime numbers and say briefly why each is prime."}]})
     time.sleep(1.2)  # the last interval's aggregate
     stop.set()
     thread.join()
+    if second_thread:
+        second_thread.join()
     after = _get(port, "/status")
     report = check(batches, before, after)
+    if second_thread:
+        other_report = check(other_batches, before, after)
+        report["second_consumer"] = {key: other_report.get(key) for key in ("ok", "problems", "other_consumer_events", "events")}
+        if not other_report["ok"] or other_report["other_consumer_events"] or report["other_consumer_events"]:
+            report["problems"].append("a consumer missed detail while another polled")
+            report["ok"] = False
     poll_ms.sort()
     report.update(level=level, effort=effort, polls=len(poll_ms), poll_ms_p50=round(poll_ms[len(poll_ms) // 2], 2) if poll_ms else None,
                   poll_ms_max=round(poll_ms[-1], 2) if poll_ms else None,
@@ -184,7 +206,7 @@ def main(argv: list[str]) -> int:
     options = dict(zip(argv[2::2], argv[3::2]))
     levels = [int(x) for x in options.get("--levels", "2,3").split(",")]
     reports = [live(port, level, int(options.get("--tokens", 160)), options.get("--model", "qwen3.8-flash-next"),
-                    options.get("--effort", "low")) for level in levels]
+                    options.get("--effort", "low"), options.get("--second-consumer") == "1") for level in levels]
     text = json.dumps(reports, indent=1)
     if "--out" in options:
         with open(options["--out"], "w") as handle:

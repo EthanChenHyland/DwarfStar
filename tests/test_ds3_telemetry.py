@@ -156,14 +156,14 @@ class CheckerTests(unittest.TestCase):
         self.assertEqual(report["problems"], [])
         self.assertEqual(report["other_consumer_events"], 1)
 
-    def test_a_second_consumer_skips_payload_checks_but_keeps_the_totals(self):
+    def test_expired_detail_skips_payload_checks_but_keeps_the_totals(self):
         batches, before, after = _run()
         sample = batches[1]["events"][2]
         sample.update(payload=False, layers=[])
-        batches[1]["events"][3]["table"]["read_bytes"] = 100  # the rest went to the other consumer
+        batches[1]["events"][3]["table"]["read_bytes"] = 100  # the rest arrived without detail
         report = ds3_check.check(batches, before, after)
         self.assertEqual(report["problems"], [])
-        self.assertIn("another consumer", report["note"])
+        self.assertIn("without detail", report["note"])
         batches[1]["events"][0]["steps"] = 5  # step and route totals are still checked
         self.assertTrue(ds3_check.check(batches, before, after)["problems"])
 
