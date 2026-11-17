@@ -79,7 +79,8 @@ installed app and production service; ds3 is the production candidate on this br
 ## Workstation
 
 31. Advanced Live view: Overview (per-layer routes over ~1.5 s, sampled step overlay), Layer focus (expert grid, busiest
-    experts, top-10 share, effective experts), Routing heatmap (session or request, decode or prefill).
+    experts, top-10 share, effective experts), Routing heatmap (session or request); all follow the live phase
+    (prefill while a prompt is processed, decode while generating), named in the badge.
 32. Labels: AGGREGATE / SAMPLED 1 IN N badge with a tooltip on what is counted; samples carry their own period; intervals
     taken by another consumer are counted and named; facts panel rewritten for ds3; nothing drawn as exact.
 33. Standard Live is unchanged; native session replays keep their own router rows (ds3 routing is off in replays).

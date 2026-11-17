@@ -184,9 +184,10 @@ The Advanced Live view (Standard Live is unchanged) draws, when the runtime repo
 **Overview** — each layer's routes over the last ~1.5 s, scaled to the layer's busiest expert, and with *Sampled
 selections* on, the latest sampled step's experts in white; **Layer focus** — a 512-cell grid of the layer's routes
 (log shade), the ten busiest experts with shares, the top-10 share, effective experts (exp of entropy) and experts used,
-the latest sample outlined; **Routing heatmap** — layers × experts for the session or a viewed request, decode or
-prefill, with the busiest experts across layers and the median effective experts. A badge reads AGGREGATE or SAMPLED 1
-IN N (with a tooltip that says what is counted). The storage card shows the PLE row store's read rate, cache-hit share,
+the latest sample outlined; **Routing heatmap** — layers × experts for the session or a viewed request, with the busiest
+experts across layers and the median effective experts. All three follow the phase the model is in — prefill while it
+processes a prompt, decode while it generates — on one display; a badge names the mode and the phase (AGGREGATE ·
+DECODE, SAMPLED 1 IN N · PREFILL), with a tooltip that says what is counted. The storage card shows the PLE row store's read rate, cache-hit share,
 rows and bytes (latency and cache occupancy on hover); a streamed expert store is shown when a model has one. The proxy
 asks for level 2, or 3 with *Sampled selections*; it never asks for level 4. Export adds a `router` section.
 

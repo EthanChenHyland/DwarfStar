@@ -9,7 +9,7 @@
 
 ### Workstation
 
-* **Advanced Live** draws router aggregates: per-layer recent routing, Layer focus (busiest experts, concentration), a layers × experts heatmap (session or request, decode or prefill), an AGGREGATE / SAMPLED 1 IN N badge and a *Sampled selections* switch; the PLE card shows read rate, cache hits and latency. Request export adds `router` with `router_mode`.
+* **Advanced Live** draws router aggregates: per-layer recent routing, Layer focus (busiest experts, concentration), a layers × experts heatmap (session or request); the views follow the phase the model is in (prefill, then decode), shown in the badge, an AGGREGATE / SAMPLED 1 IN N badge and a *Sampled selections* switch; the PLE card shows read rate, cache hits and latency. Request export adds `router` with `router_mode`.
 * The DFlash2 card's draft-token animation is replaced by a bar per recent verify cycle (accepted / rejected); the output stream shows the decode rate of the current or last run; the memory panel shows the latest request's context. MTP-era labels and the flying PLE dots are gone.
 * Fixed: returning to the Advanced view after another view no longer leaves its telemetry poll stopped; a slow poll can no longer be overtaken and replay events out of order; Standard Live's footer no longer says router and PLE activity are unreported on a runtime that reports them.
 

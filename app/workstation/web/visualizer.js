@@ -17,7 +17,7 @@
     pills: [], reads: [], lastTickAt: 0, replay: null, toolPulse: {}, activeTool: null,
     dflash: null, dflashSince: 0, dflashPoll: 0,
     history: [], open: null, viewing: null, historyDrawn: 0, requestSeq: 0,
-    router: null, ple: null, routerLevel: 2, routingPhase: 0,
+    router: null, ple: null, routerLevel: 2,
   };
   /* ds3 router telemetry. The runtime's MoE grouping kernel counts the routes each step executes per layer and
    * expert (speculative verify rows a later check rejects included) into a small page the engine reads when polled;
@@ -68,10 +68,6 @@
           <button class="chip" data-mode="layer">Layer focus</button>
           <button class="chip" data-mode="heatmap">Routing heatmap</button>
         </div>
-        <div class="seg" id="viz-phase" style="display:none" title="Which steps the routing views count: decode (verify cycles) or prefill (prompt chunks)">
-          <button class="chip selected" data-phase="0">Decode</button>
-          <button class="chip" data-phase="1">Prefill</button>
-        </div>
         <label class="small muted" id="viz-sampled-wrap" style="display:none" title="Also copy one decode step in N's selected experts from the GPU (row 0 of the step, no weights). Aggregates stay on either way."><input type="checkbox" id="viz-sampled" aria-label="Sampled selections" style="vertical-align:middle"> Sampled selections</label>
         <label class="small muted" id="viz-layer-wrap" style="display:none">Layer <input type="range" id="viz-layer" min="0" max="47" value="24" style="vertical-align:middle;width:160px"> <b id="viz-layer-n">24</b></label>
         <span class="spacer"></span>
@@ -99,10 +95,6 @@
     const layer = V.root.querySelector("#viz-layer");
     layer.oninput = () => { V.focusLayer = +layer.value; V.root.querySelector("#viz-layer-n").textContent = layer.value; };
     V.root.querySelector("#viz-pause").onclick = () => setPaused(!V.paused);
-    V.root.querySelectorAll("[data-phase]").forEach((b) => b.onclick = () => {
-      V.routingPhase = +b.dataset.phase;
-      V.root.querySelectorAll("[data-phase]").forEach((x) => x.classList.toggle("selected", x === b));
-    });
     V.root.querySelector("#viz-sampled").onchange = (e) => { V.routerLevel = e.target.checked ? 3 : 2; };
     const scrub = V.root.querySelector("#viz-scrub");
     scrub.oninput = () => { setPaused(true); V.playhead = +scrub.value; };
@@ -202,11 +194,12 @@
     r.steps[phase] += e.steps || 0; r.routes[phase] += e.routes || 0;
     if (!e.payload || !e.layers) { if (!first) r.summaries += 1; return; }
     const heat = r.heat[phase], E = r.experts, now = performance.now();
-    if (phase === 0) {
-      const decay = r.recentAt ? Math.exp(-(now - r.recentAt) / RECENT_MS) : 0;
-      for (let i = 0; i < r.recent.length; i++) r.recent[i] *= decay;
-      r.recentAt = now;
-    }
+    // One picture of what the model is doing now: prefill and decode both feed the decaying "recent" histogram, and
+    // the session views follow the phase the latest interval came from.
+    const decay = r.recentAt ? Math.exp(-(now - r.recentAt) / RECENT_MS) : 0;
+    for (let i = 0; i < r.recent.length; i++) r.recent[i] *= decay;
+    r.recentAt = now;
+    r.livePhase = phase;
     const open = phase === 0 ? requestAt(e.t - (e.interval_ms || 0), e.t) : null;
     if (open && !open.heat) { open.heat = new Uint32Array(r.layers * E); open.heatLayers = r.layers; open.heatExperts = E; open.routes = 0; open.samples = []; }
     const own = open && open.heatLayers === r.layers && open.heatExperts === E ? open : null;
@@ -216,7 +209,7 @@
         const at = l * E + row[i], count = row[i + 1];
         if (row[i] >= E) continue;
         heat[at] += count;
-        if (phase === 0) r.recent[at] += count;
+        r.recent[at] += count;
         if (own) own.heat[at] += count;
       }
     });
@@ -268,7 +261,7 @@
   function currentHeat() {
     const r = V.router; if (!r) return null;
     if (V.viewing) return V.viewing.heat && V.viewing.heatLayers === r.layers ? V.viewing.heat : null;
-    return r.heat[V.routingPhase];
+    return r.heat[livePhase()];
   }
   /* A layers x experts image of a histogram, log-scaled, made only when the data changed (at most at the poll rate)
    * and drawn scaled with smoothing off: the canvas never draws 24 576 cells itself. */
@@ -642,8 +635,8 @@
     label("expert 0", stripX, py + ph + 1, COLORS.faint, "9px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif");
     label("expert " + (experts - 1), stripX + stripW, py + ph + 1, COLORS.faint, "9px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "right");
     if (hasRouting()) {
-      label(recentLive ? "routes in the last ~1.5 s, each layer to its busiest expert" + (sample ? " · white: sampled step " + sample.step : "") : "", stripX + stripW / 2, py + ph + 1, COLORS.faint, "9px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "center", stripW - 140);
-      if (!recentLive) label(D.runningModel() ? (V.viewing ? "Viewing a request: its routing is in the Routing heatmap and Layer focus views." : "Waiting for decode steps. Routing appears while the model generates.") : "Start a model to see routing.", stripX + 10, py + ph / 2 - 6, COLORS.muted, "12px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", stripW - 20);
+      label(recentLive ? phaseName() + " · routes in the last ~1.5 s, each layer to its busiest expert" + (sample ? " · white: sampled step " + sample.step : "") : "", stripX + stripW / 2, py + ph + 1, COLORS.faint, "9px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "center", stripW - 140);
+      if (!recentLive) label(D.runningModel() ? (V.viewing ? "Viewing a request: its routing is in the Routing heatmap and Layer focus views." : "Waiting for the model to run. Routing appears while it processes a prompt or generates.") : "Start a model to see routing.", stripX + 10, py + ph / 2 - 6, COLORS.muted, "12px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", stripW - 20);
     } else if (!caps().router && !hasRouting()) notReported(stripX - 62, py, stripW + 62, ph, "Router selections are");
     else if (!rows) label(D.runningModel() ? "Waiting for the next token. Router selections appear while the model generates." : "Start a model to see routing.", stripX + 10, py + ph / 2 - 6, COLORS.muted, "12px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif");
     // token pill travelling down the stack
@@ -691,7 +684,7 @@
   }
   /* What the routing views are drawn from, top right of the processor card. */
   function routingBadge(right, y) {
-    const g = V.g, text = (routerModeLabel() + (V.viewing ? " · request" : "")).toUpperCase();
+    const g = V.g, text = (routerModeLabel() + (V.viewing ? " · request" : V.router && V.router.recentAt ? " · " + phaseName() : "")).toUpperCase();
     g.font = "600 9.5px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif";
     const w = g.measureText(text).width + 14, x = right - w;
     g.fillStyle = COLORS.panel; g.fillRect(x - 8, y - 2, w + 8, 18);
@@ -701,10 +694,13 @@
       ? "Aggregate: every route the GPU executed, counted per layer and expert by the grouping kernel. Speculative rows a later check rejects are included. Not a per-token record."
       : "Sampled: the aggregate, plus the selected experts of one decode step in " + ((V.router && V.router.every) || "N") + " (row 0 of that step, without weights)." + (V.router && V.router.samplesDropped ? " " + V.router.samplesDropped + " samples were overwritten before a poll read them." : ""));
   }
-  function phaseName() { return V.routingPhase ? "prefill" : "decode"; }
+  /* The phase the routing views show: a viewed request's decode, else whatever the model did last (prefill while a
+   * prompt is processed, decode while it generates). */
+  function livePhase() { return V.viewing || !V.router ? 0 : V.router.livePhase || 0; }
+  function phaseName() { return livePhase() ? "prefill" : "decode"; }
   let summaryFor = null, summary = null;
   function heatSummary(values, layers, experts, version) {
-    const key = version + "/" + layers + "/" + V.routingPhase + "/" + (V.viewing ? V.viewing.id : "");
+    const key = version + "/" + layers + "/" + livePhase() + "/" + (V.viewing ? V.viewing.id : "");
     if (summaryFor === key) return summary;
     const totals = new Float64Array(experts), effective = [];
     let all = 0;
@@ -848,6 +844,8 @@
       const seconds = decodeSeconds(run);
       return [seconds > 0 ? run.output / seconds : null, (V.viewing ? "viewing a request · " : "decoding · ") + n(run.output) + " tokens · " + n(run.n + run.truncated) + " cycles"];
     }
+    const scheduler = (S.state?.models?.[D.runningModel()] || {}).splash?.scheduler || {};
+    if (scheduler.prefilling) return [null, "prefilling a prompt"];
     const last = V.history[V.history.length - 1];
     if (last) { const seconds = decodeSeconds(last); return [seconds > 0 ? last.output / seconds : null, "idle · last run " + n(last.output) + " tokens · " + n(last.n + last.truncated) + " cycles"]; }
     const receipt = (S.state?.models?.[D.runningModel()] || {}).last_request || {};
@@ -881,7 +879,6 @@
     const key = m.id + (D.runningModel() || "") + routing() + (V.replay ? "r" : ""); if (factsFor === key) return; factsFor = key;
     const sampled = hasRouting() && (caps().routing_levels || []).includes("sampled");
     V.root.querySelector("#viz-sampled-wrap").style.display = sampled ? "" : "none";
-    V.root.querySelector("#viz-phase").style.display = hasRouting() ? "" : "none";
     if (hasRouting()) {
       V.root.querySelector("#viz-facts").innerHTML = `
       <p><b>Storage.</b> Only the PLE n-gram table (${D.esc(m.quantization.ple.split(",")[0])}, ${(S.catalog.details[m.id].assets.ple.bytes / 2 ** 30).toFixed(1)} GiB) is read from disk while the model runs, a few rows per token; the row store reports its requests, cache hits and SSD reads, shown here per poll. The model, the draft model and the vision projector stay resident in unified memory.</p>
