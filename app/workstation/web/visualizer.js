@@ -4,7 +4,7 @@
  * verify cycles, draft acceptance, n-gram (PLE) disk reads, context use and
  * tool calls. No token text, reasoning or tool arguments are ever shown.
  * The memory and storage regions follow what the runtime really does:
- * experts, trunk, MTP block and projector are resident in unified memory;
+ * experts, trunk, draft model (MTP block on the native runtime) and projector are resident in unified memory;
  * only the PLE table is read from disk during inference. */
 "use strict";
 (function () {
@@ -14,7 +14,7 @@
     mounted: false, root: null, canvas: null, g: null, frame: 0, width: 0, height: 0,
     mode: "overview", focusLayer: 24, paused: false, playhead: -1,
     hits: [], ticks: [], tools: [], requests: [], heat: null, heatLayers: 48, heatMax: 1,
-    pills: [], drafts: [], reads: [], lastTickAt: 0, replay: null, toolPulse: {}, activeTool: null,
+    pills: [], reads: [], lastTickAt: 0, replay: null, toolPulse: {}, activeTool: null,
     dflash: null, dflashSince: 0, dflashPoll: 0,
     history: [], open: null, viewing: null, historyDrawn: 0, requestSeq: 0,
     router: null, ple: null, routerLevel: 2, routingPhase: 0,
@@ -57,7 +57,8 @@
   }
 
   function mount() {
-    if (V.mounted) { V.root.querySelector("#viz-status").innerHTML = D.runningLine(); resize(); return; }
+    // Back from another view: unmount() stopped the poll, so start it again (it resumes from its cursor).
+    if (V.mounted) { V.root.querySelector("#viz-status").innerHTML = D.runningLine(); resize(); if (!V.dflashPoll) startDflashPoll(); return; }
     V.root = document.querySelector("#view-visualizer");
     V.root.innerHTML = `
       <div class="page-head"><h1>Live</h1>${D.liveModeSwitch("visualizer")}<span class="spacer"></span><span id="viz-status"></span></div>
@@ -136,16 +137,31 @@
     clearInterval(V.dflashPoll);
     V.dflashPoll = setInterval(async () => {
       if (V.replay || (caps().dflash !== "cycle" && !hasRouting()) || !D.runningModel()) return;
+      // One poll at a time: a slow one (the first drain returns the engine's whole ring) must not be overtaken by the
+      // next, which would replay the same events out of order.
+      // A poll that never settles (a stalled connection) must not stop polling: past 6 s it is abandoned.
+      if (V.polling && performance.now() - V.polling < 6000) return;
+      const started = V.polling = performance.now();
+      try { await pollOnce(started); } finally { if (V.polling === started) V.polling = 0; }
+    }, 200);
+  }
+  async function pollOnce(started) {
+    {
       const level = hasRouting() && (caps().routing_levels || []).includes("sampled") ? V.routerLevel : 2;
-      const r = await D.api("/api/telemetry?since=" + V.dflashSince + "&level=" + level).catch(() => null);
+      const r = await fetch("/api/telemetry?since=" + V.dflashSince + "&level=" + level, { signal: AbortSignal.timeout(4000) })
+        .then((response) => response.json()).catch(() => null);
       const batch = r && r.ok && r.telemetry;
-      if (!batch || !batch.events) return;
-      const first = !V.dflashSince;  // the first drain also returns what the ring held before this view opened
+      if (!batch || !batch.events || V.polling !== started) return;  // abandoned while it waited: a newer poll owns the cursor
+      const first = !V.dflashSince;
+      if ((batch.next || 0) < (V.lastSeq || 0)) V.lastSeq = 0;  // the model restarted: its sequence starts over
+      const seen = V.lastSeq || 0;  // the first drain also returns what the ring held before this view opened
       if (batch.dropped && V.dflash) V.dflash.dropped = (V.dflash.dropped || 0) + batch.dropped;
       if (batch.dropped && V.open) V.open.dropped += batch.dropped;
       V.dflashSince = batch.next || V.dflashSince;
       if (batch.router && batch.router.available) routerHeader(batch.router);
       for (const e of batch.events) {
+        if (e.seq <= seen) continue;  // already handled
+        V.lastSeq = Math.max(V.lastSeq || 0, e.seq);
         if (e.kind === "router_aggregate") { routerAggregate(e, first); continue; }
         if (e.kind === "router_sample") { routerSample(e); continue; }
         if (e.kind === "ple_aggregate") { pleAggregate(e); continue; }
@@ -159,11 +175,9 @@
         // Synthetic tick for the pill/"this cycle" animation the native path already draws.
         V.ticks.push({ dflash: true, n: e.output, dp: e.drafted, da: e.accepted, ms: e.cycle_ms, seq: e.seq, t: Date.now() / 1000, pos: e.seq });
         if (V.ticks.length > 1500) V.ticks.shift();
-        for (let i = 0; i < e.drafted; i++) V.drafts.push({ t0: performance.now() + i * 20, ok: i < e.accepted });
-        if (V.drafts.length > 240) V.drafts.splice(0, V.drafts.length - 240);
       }
       if (V.open && performance.now() - V.historyDrawn > 1000) renderHistory();
-    }, 200);
+    }
   }
   function routerHeader(h) {
     const layers = Math.min(64, h.layers || 0), experts = Math.min(EXPERTS, h.experts || 0);
@@ -193,7 +207,7 @@
       for (let i = 0; i < r.recent.length; i++) r.recent[i] *= decay;
       r.recentAt = now;
     }
-    const open = phase === 0 && V.open && now - (V.open.arrived || 0) < 1000 ? V.open : null;
+    const open = phase === 0 ? requestAt(e.t - (e.interval_ms || 0), e.t) : null;
     if (open && !open.heat) { open.heat = new Uint32Array(r.layers * E); open.heatLayers = r.layers; open.heatExperts = E; open.routes = 0; open.samples = []; }
     const own = open && open.heatLayers === r.layers && open.heatExperts === E ? open : null;
     e.layers.forEach((row, l) => {
@@ -209,12 +223,25 @@
     if (own) { own.routes += e.routes || 0; own.routerMode = routerModeLabel(); }
     r.version += 1;
   }
+  /* The recorded request a router interval belongs to, by engine time (the clock decode cycles carry): the newest whose
+   * decode run overlaps the interval (from, to]. An interval that straddles two runs goes to the later one, so a
+   * request's routing is exact in its middle and approximate at its edges (one interval, ~180 ms). */
+  function requestAt(from, to) {
+    for (let i = V.history.length - 1; i >= 0; i--) {
+      const r = V.history[i];
+      if (r.model !== D.runningModel()) continue;
+      if (to >= r.t0 && from <= r.lastT + Math.max(GAP_MS, 4 * (r.n ? r.buf[4] : 0))) return r;
+      if (to < r.t0) continue;
+      return null;
+    }
+    return null;
+  }
   function routerSample(e) {
     const r = V.router; if (!r || !e.layers) return;
     const sample = { step: e.step, every: e.every, layers: e.layers.map((row) => Array.from(row)) };
     r.sample = sample; r.sampleAt = performance.now();
     r.samples.push(sample); if (r.samples.length > SAMPLES_KEPT) r.samples.shift();
-    const open = V.open && performance.now() - (V.open.arrived || 0) < 1000 ? V.open : null;
+    const open = requestAt(e.t, e.t);
     if (open && open.samples && open.samples.length < REQUEST_SAMPLES) open.samples.push(sample);
   }
   function pleAggregate(e) {
@@ -364,6 +391,7 @@
       for (let i = 0; i < r.heat.length; i++) if (r.heat[i]) cells.push([Math.floor(i / r.heatExperts), i % r.heatExperts, r.heat[i]]);
       document_.router = { router_mode: r.samples && r.samples.length ? "sampled" : "aggregate", mode_detail: r.routerMode || "aggregate",
         counts: "routes_executed: every verified row of a decode step, speculative rows a later check rejected included",
+        attribution: "router intervals (~180 ms) assigned by engine time to the decode run they overlap: exact inside the run, approximate at its first and last interval",
         phase: "decode", layers: r.heatLayers, experts: r.heatExperts, routes: r.routes || 0, fields: ["layer", "expert", "routes"], cells,
         samples: (r.samples || []).map((x) => ({ step: x.step, every: x.every, layers: x.layers })), samples_kept_max: REQUEST_SAMPLES };
     }
@@ -382,7 +410,7 @@
     if (!paused) { V.playhead = -1; if (V.replay) { V.replay = null; V.root.querySelector("#viz-session").value = ""; resetBuffers(); } }
     V.root.querySelector("#viz-pause").textContent = paused ? (V.viewing ? "Back to live" : "Resume live") : "Pause";
   }
-  function resetBuffers() { V.ticks = []; V.tools = []; V.requests = []; V.heat = null; V.heatMax = 1; V.pills = []; V.drafts = []; V.dflash = null; V.dflashSince = 0; V.router = null; V.ple = null; }
+  function resetBuffers() { V.ticks = []; V.tools = []; V.requests = []; V.heat = null; V.heatMax = 1; V.pills = []; V.dflash = null; V.dflashSince = 0; V.lastSeq = 0; V.router = null; V.ple = null; }
   async function refreshSessions() {
     const r = await D.api("/api/sessions"); if (!r.ok) return;
     const select = V.root.querySelector("#viz-session");
@@ -424,9 +452,8 @@
     const now = performance.now();
     V.lastTickAt = now;
     V.pills.push({ t0: now, n: tick.n });
-    for (let i = 0; i < tick.dp; i++) V.drafts.push({ t0: now + i * 40, ok: i < tick.da });
     if (tick.ple && tick.ple[1] > 0) V.reads.push({ t0: now, bytes: tick.ple[1] });
-    V.pills = V.pills.filter((p) => now - p.t0 < 1400); V.drafts = V.drafts.filter((d) => now - d.t0 < 1500); V.reads = V.reads.filter((r) => now - r.t0 < 900);
+    V.pills = V.pills.filter((p) => now - p.t0 < 1400); V.reads = V.reads.filter((r) => now - r.t0 < 900);
   }
   function resize() {
     if (!V.canvas) return;
@@ -487,10 +514,7 @@
     drawMemory(colM, top, wM, mainH, m, live);
     drawProcessor(colR, top, wR, mainH, m, tick, active, now);
     drawBottom(colL, top + mainH + 12, W - 28, bottomH, m, live, tick, now);
-    // disk -> memory read pulses (PLE rows)
-    const y = top + 92;
-    V.reads.forEach((r) => { const p = (now - r.t0) / 900; g.globalAlpha = 1 - p; g.fillStyle = COLORS.ple; g.beginPath(); g.arc(colL + wL + p * (colR - colL - wL + 20), y + Math.sin(p * 6) * 3, 2.5, 0, 6.3); g.fill(); });
-    g.globalAlpha = 1;
+    // PLE reads light the storage card's table (drawStorage); no particles cross the other panels.
     renderFacts(m, live);
   }
   function drawStorage(x, y, w, h, m, live, now) {
@@ -508,7 +532,7 @@
     // ds3: the row store's own counters (requests, cache hits, SSD reads), aggregated per poll interval.
     const pleRows = caps().ple_rows === "aggregate" && !V.replay, ple = pleRows ? (V.ple || {}) : (live.ple || {});
     if (!caps().ple && !pleRows) label("read rate: not reported", x + 18, pleY + 60, COLORS.muted, "10.5px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", inner);
-    else label(((ple.bytes_per_s || 0) / 1024).toFixed(0) + " KiB/s" + (pleRows && ple.hit_pct != null ? "  ·  " + ple.hit_pct.toFixed(0) + " % cached" : ""), x + 18, pleY + 60, COLORS.text, "600 14px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", inner);
+    else label(((ple.bytes_per_s || 0) / 1024).toFixed(0) + " KiB/s" + (pleRows && ple.hit_pct != null ? " · " + ple.hit_pct.toFixed(0) + " % hit" : ""), x + 18, pleY + 60, COLORS.text, "600 14px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", inner);
     if (caps().ple || pleRows) label(((pleRows ? ple.rows : ple.reads) || 0).toLocaleString() + " row reads · " + ((ple.bytes || 0) / 2 ** 20).toFixed(1) + " MiB", x + 18, pleY + 78, COLORS.faint, "10.5px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", inner);
     if (pleRows && V.ple) hint(x + 10, pleY + 56, w - 20, pleH - 56, `This session: ${(ple.requested || 0).toLocaleString()} rows requested, ${(ple.hits || 0).toLocaleString()} served from the row cache, ${(ple.rows || 0).toLocaleString()} read from the SSD (${((ple.bytes || 0) / 2 ** 20).toFixed(2)} MiB). Read latency p50 ${ple.p50 != null ? ple.p50 + " ms" : "–"}, p95 ${ple.p95 != null ? ple.p95 + " ms" : "–"}. Row cache ${(ple.cached_rows || 0).toLocaleString()} of ${(ple.capacity_rows || 0).toLocaleString()} rows.`);
     let fy = pleY + pleH + 14;
@@ -539,9 +563,10 @@
     box(x, y, w, h, "Unified memory", "64 GiB");
     const bx = x + 14, by = y + 34, bw = 46, bh = h - 50;
     g.fillStyle = "#0c1017"; g.strokeStyle = COLORS.line; g.beginPath(); g.roundRect(bx, by, bw, bh, 5); g.fill(); g.stroke();
-    const used = (live.context && live.context.used) || 0, kvFilled = Math.min(mem.kv_gib, used * m.cache.kv_bytes_per_token / 2 ** 30);
+    const receipt = (S.state?.models?.[D.runningModel()] || {}).last_request || {};
+    const used = (live.context && live.context.used) || ((receipt.input_tokens || 0) + (receipt.output_tokens || 0)), kvFilled = Math.min(mem.kv_gib, used * m.cache.kv_bytes_per_token / 2 ** 30);
     const expertsGib = mem.routed_experts_gib, trunk = Math.max(0, mem.resident_model_gib - expertsGib);
-    const parts = [["Routed experts", expertsGib, tone()], ["Trunk + MTP", trunk, "#3f6fa0"], ["Vision projector", mem.projector_gib || 0, "#e58f8f"], ["KV cache (filled)", kvFilled, COLORS.good], ["KV cache (reserved)", mem.kv_gib - kvFilled, "#1f4a37"], ["Graph buffers", mem.buffers_gib, COLORS.warn]];
+    const parts = [["Routed experts", expertsGib, tone()], [caps().mtp ? "Trunk + MTP" : "Trunk + draft", trunk, "#3f6fa0"], ["Vision projector", mem.projector_gib || 0, "#e58f8f"], ["KV cache (filled)", kvFilled, COLORS.good], ["KV cache (reserved)", mem.kv_gib - kvFilled, "#1f4a37"], ["Graph buffers", mem.buffers_gib, COLORS.warn]];
     let cy = by + bh, ly = by;
     parts.forEach(([name, gibs, color]) => {
       const ph = gibs / total * bh; cy -= ph;
@@ -572,7 +597,8 @@
       label("Wired now", lx + 13, ly, COLORS.text, "600 11px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", legendW - 13);
       label((wired / 2 ** 30).toFixed(1) + " GiB, whole machine", lx + 13, ly + 14, COLORS.muted, "10.5px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", legendW - 13);
     }
-    label("Context " + used.toLocaleString() + " / " + m.context_label + " · KV " + m.cache.k_cache_dtype + "/" + m.cache.v_cache_dtype, x + 12, y + h - 16, COLORS.muted, "10px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", w - 24);
+    hint(x, y + h - 20, w, 20, live.context && live.context.used ? "Context in use now" : "Context of the latest request (prompt + output, from the agent's receipt)");
+    label("Context " + (used ? used.toLocaleString() : "–") + " / " + m.context_label + " · KV " + m.cache.k_cache_dtype + "/" + m.cache.v_cache_dtype, x + 12, y + h - 16, COLORS.muted, "10px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", w - 24);
   }
   function drawProcessor(x, y, w, h, m, tick, active, now) {
     const g = V.g, ds3 = hasRouting() ? V.router : null, layers = ds3 ? ds3.layers : 48;
@@ -615,7 +641,7 @@
     label("router", px + 30, py + ph + 1, COLORS.faint, "9px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif");
     label("expert 0", stripX, py + ph + 1, COLORS.faint, "9px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif");
     label("expert " + (experts - 1), stripX + stripW, py + ph + 1, COLORS.faint, "9px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "right");
-    if (ds3) {
+    if (hasRouting()) {
       label(recentLive ? "routes in the last ~1.5 s, each layer to its busiest expert" + (sample ? " · white: sampled step " + sample.step : "") : "", stripX + stripW / 2, py + ph + 1, COLORS.faint, "9px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "center", stripW - 140);
       if (!recentLive) label(D.runningModel() ? (V.viewing ? "Viewing a request: its routing is in the Routing heatmap and Layer focus views." : "Waiting for decode steps. Routing appears while the model generates.") : "Start a model to see routing.", stripX + 10, py + ph / 2 - 6, COLORS.muted, "12px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", stripW - 20);
     } else if (!caps().router && !hasRouting()) notReported(stripX - 62, py, stripW + 62, ph, "Router selections are");
@@ -643,17 +669,24 @@
     label((mtp.rejected || 0) + " rejected", mx + 10, py + 120, COLORS.faint, "10px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif");
     const cardBottom = py + ph - 4, inset = 10, mtw = mw - 2 * inset;
     if (tick && cardBottom - (py + 177) > 24) { label("this cycle", mx + inset, py + 148, COLORS.muted, "10px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", mtw); label(tick.n + " token" + (tick.n === 1 ? "" : "s") + " · " + tick.da + "/" + tick.dp + " drafts", mx + inset, py + 162, COLORS.text, "11px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", mtw); label(tick.ms.toFixed(0) + " ms", mx + inset, py + 177, COLORS.faint, "10px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", mtw); }
-    // Draft pills move only inside the card: every pill keeps an inset from all four edges.
-    const pillW = 18, pillH = 7, laneTop = py + 200, laneBottom = cardBottom - inset - pillH;
-    if (laneBottom > laneTop) {
-      const lanes = Math.max(1, Math.min(6, Math.floor((laneBottom - laneTop) / 14) + 1));
-      V.drafts.forEach((d, i) => {
-        const t = (now - d.t0) / 900; if (t < 0 || t > 1) return;
-        const dy = laneTop + (i % lanes) * Math.min(14, (laneBottom - laneTop) / lanes);
-        const px0 = mx + inset, travel = mw - 2 * inset - pillW;
-        g.globalAlpha = d.ok ? 1 : 1 - t; g.fillStyle = d.ok ? COLORS.mtp : COLORS.bad; g.beginPath();
-        g.roundRect(px0 + (d.ok ? t * travel : Math.min(20, travel) * t), d.ok ? dy + t * (laneBottom - dy) : dy, pillW, pillH, 3.5); g.fill(); g.globalAlpha = 1;
+    // The last verify cycles, newest at the right (follows the timeline when paused): a bar's height is the drafts
+    // proposed in that cycle, green the accepted part, red the rejected. Static data, not an animation.
+    const chartTop = py + 214, chartBottom = cardBottom - inset - 16;
+    if (chartBottom - chartTop > 30) {
+      const all = ticks(), end = V.paused && V.playhead >= 0 ? V.playhead + 1 : all.length;
+      const barW = 4, step = 6, fits = Math.max(1, Math.floor(mtw / step));
+      const recent = all.slice(Math.max(0, end - fits), end).filter((t) => t.dp != null);
+      label(recent.length ? "last " + recent.length + " cycles" : "no cycles yet", mx + inset, chartTop - 16, COLORS.muted, "10px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", mtw);
+      const top = Math.max(1, ...recent.map((t) => t.dp)), span = chartBottom - chartTop;
+      recent.forEach((t, i) => {
+        const bx = mx + inset + i * step, drafted = span * t.dp / top, accepted = span * Math.min(t.da, t.dp) / top;
+        g.fillStyle = COLORS.bad; g.globalAlpha = 0.7; g.fillRect(bx, chartBottom - drafted, barW, drafted - accepted);
+        g.fillStyle = COLORS.mtp; g.globalAlpha = 1; g.fillRect(bx, chartBottom - accepted, barW, accepted);
       });
+      g.globalAlpha = 1;
+      g.strokeStyle = COLORS.line; g.beginPath(); g.moveTo(mx + inset, chartBottom + 0.5); g.lineTo(mx + mw - inset, chartBottom + 0.5); g.stroke();
+      label("green accepted · red rejected", mx + inset, chartBottom + 4, COLORS.faint, "9px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", mtw);
+      hint(mx, chartTop - 16, mw, chartBottom - chartTop + 32, "Each bar is one verify cycle: the draft model proposed the bar's height in tokens (tallest here: " + top + "); the target accepted the green part and rejected the red.");
     }
   }
   /* What the routing views are drawn from, top right of the processor card. */
@@ -687,7 +720,7 @@
   }
   function drawRouterHeat(x, y, w, h) {
     const r = V.router, values = currentHeat(), layers = r ? r.layers : 48, experts = r ? r.experts : EXPERTS;
-    const what = V.viewing ? "this request (decode)" : "this session · " + phaseName();
+    const what = V.viewing ? "this request (decode; approximate at its edges)" : "this session · " + phaseName();
     label("Routes executed per layer (rows, 0 at top) and expert (columns, 0 to " + (experts - 1) + "), " + what + ". Click a row to focus that layer.", x + 4, y, COLORS.muted, "11px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", w - 8);
     const lx = 26, hy = y + 22, hh = h - 58, hw = w - lx, rowH = hh / layers;
     V.g.fillStyle = "#0c1017"; V.g.fillRect(x + lx, hy, hw, hh);
@@ -699,9 +732,9 @@
     const sm = heatSummary(values, layers, experts, version);
     if (!sm.all) { label("No " + phaseName() + " routes yet.", x + lx + 10, hy + 10, COLORS.faint); return; }
     const pct = (v) => (100 * v / sm.all).toFixed(1) + " %";
-    label("Busiest experts across layers: " + sm.top.map(([e, v]) => "#" + e + " " + pct(v)).join(" · ") + (sm.median != null ? "  ·  effective experts per layer (median) " + sm.median.toFixed(0) + "/" + experts : ""),
+    label("Busiest experts across layers: " + sm.top.map(([e, v]) => "#" + e + " " + pct(v)).join(" · ") + "",
       x + lx, hy + hh + 8, COLORS.muted, "10.5px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", hw);
-    label(sm.all.toLocaleString() + " routes · log scale · rejected draft rows included" + (r.summaries ? " · " + r.summaries + " intervals' detail expired before this view read it" : ""),
+    label(sm.all.toLocaleString() + " routes" + (sm.median != null ? " · median " + sm.median.toFixed(0) + " effective experts per layer" : "") + " · log scale · rejected draft rows included" + (r.summaries ? " · " + r.summaries + " intervals' detail expired before this view read it" : ""),
       x + lx, hy + hh + 23, COLORS.faint, "10px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", hw);
   }
   function drawRouterLayer(x, y, w, h) {
@@ -782,9 +815,9 @@
     recent.forEach((t) => { for (let i = 0; i < t.n; i++) { g.fillStyle = i === 0 ? COLORS.text : COLORS.mtp; g.globalAlpha = 0.9; g.beginPath(); g.roundRect(px, py + (i ? 12 : 0), 6, 9, 2); g.fill(); } px += 8; if (t.dp > t.da) { g.fillStyle = COLORS.bad; g.fillRect(px - 8, py + 26, 6, 2); } });
     g.globalAlpha = 1;
     label(caps().mtp || caps().dflash === "cycle" ? "green: accepted draft token · red mark: rejected draft" : "token counts only · draft acceptance is reported as a total in the Standard view", x + 12, y + 70, COLORS.faint, "10px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", outW - 24);
-    const rates = live.rates || {}, request = live.request || {};
-    label((rates.live_tps != null ? rates.live_tps.toFixed(1) : rates.decode_tps != null ? rates.decode_tps.toFixed(1) : "–") + " tok/s", x + 12, y + 88, COLORS.text, "600 15px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif");
-    label((request.phase || "IDLE").replace("_", " ") + " · " + (request.generated || 0) + " generated · prompt " + (request.prompt_tokens || 0).toLocaleString(), x + 110, y + 92, COLORS.muted, "10.5px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", outW - 122);
+    const [rate, status] = outputRate(live);
+    label((rate != null && isFinite(rate) ? rate.toFixed(1) : "–") + " tok/s", x + 12, y + 88, COLORS.text, "600 15px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif");
+    label(status, x + 110, y + 92, COLORS.muted, "10.5px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif", "left", outW - 122);
     const tx = x + outW + 12, tw = w - outW - 12;
     box(tx, y, tw, h, "Agent actions", "tool calls leave the model and return a result");
     const nodeW = (tw - 24) / TOOL_NODES.length;
@@ -801,6 +834,25 @@
       if (running) label("running…", nx + 9, y + 88, color, "10.5px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif");
       else if (last) label((last.ok === false ? "✗ " : "✓ ") + (last.ms != null ? last.ms + " ms" : ""), nx + 9, y + 88, last.ok === false ? COLORS.bad : COLORS.good, "10.5px -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif");
     });
+  }
+  /* The decode rate and status under the output stream. The native runtime's hub reported them; on Splash they come
+   * from the decode run being recorded (or viewed), else the last recorded run, else the agent's latest request. */
+  function outputRate(live) {
+    if (caps().mtp || V.replay) {
+      const rates = live.rates || {}, request = live.request || {};
+      return [rates.live_tps ?? rates.decode_tps, (request.phase || "idle").replace("_", " ").toLowerCase() + " · " + (request.generated || 0) + " generated · prompt " + (request.prompt_tokens || 0).toLocaleString()];
+    }
+    const n = (v) => Number(v).toLocaleString();
+    const run = V.viewing || (V.open && isOpen(V.open) ? V.open : null);
+    if (run) {
+      const seconds = decodeSeconds(run);
+      return [seconds > 0 ? run.output / seconds : null, (V.viewing ? "viewing a request · " : "decoding · ") + n(run.output) + " tokens · " + n(run.n + run.truncated) + " cycles"];
+    }
+    const last = V.history[V.history.length - 1];
+    if (last) { const seconds = decodeSeconds(last); return [seconds > 0 ? last.output / seconds : null, "idle · last run " + n(last.output) + " tokens · " + n(last.n + last.truncated) + " cycles"]; }
+    const receipt = (S.state?.models?.[D.runningModel()] || {}).last_request || {};
+    if (receipt.output_tokens != null) return [receipt.provider_decode_tps, "idle · latest request " + n(receipt.output_tokens) + " tokens"];
+    return [null, D.runningModel() ? "idle · no request yet" : "no model running"];
   }
   function renderActions() {
     const node = V.root && V.root.querySelector("#viz-actions"); if (!node) return;
