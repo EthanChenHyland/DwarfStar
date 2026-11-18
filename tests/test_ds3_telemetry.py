@@ -52,15 +52,22 @@ class CapabilityTests(unittest.TestCase):
             telemetry = catalog._backend({**model, "runtime": "splash-m1-1.6.1-ds2-telemetry"}, runtimes)["telemetry"]
             self.assertEqual(telemetry["routing"], "unavailable")
             self.assertEqual(telemetry["routing_levels"], [])
-            self.assertEqual(telemetry["ple_rows"], "none")
-            self.assertFalse(telemetry["router"])  # the native per-token rows stay unavailable everywhere
+            self.assertEqual(telemetry["ple"], "none")
+            self.assertEqual(telemetry["dflash"], "cycle")
+
+    def test_capabilities_are_exactly_the_reported_semantics(self):
+        # No native-era flags (router/ple/mtp rows) and no constants (requests/memory_plan): only what /telemetry reports.
+        for model in catalog.models().values():
+            self.assertEqual(set(model["backend"]["telemetry"]), {"dflash", "routing", "routing_levels", "ple"})
+        ds1 = catalog._backend({"runtime": "splash-m1-1.6.1-ds1", "splash_model_name": "x"}, catalog.load()["runtimes"])["telemetry"]
+        self.assertEqual((ds1["dflash"], ds1["routing"], ds1["ple"]), ("none", "unavailable", "none"))
 
     def test_ds3_maps_router_levels_and_never_offers_exact(self):
         model = {"runtime": "ds3", "splash_model_name": "x"}
         runtimes = {"runtimes": {"ds3": {"kind": "splash", "advanced_telemetry": {
             "dflash": "cycle", "routing": "sampled", "routing_levels": ["aggregate", "sampled", "exact"], "ple": "aggregate"}}}}
         telemetry = catalog._backend(model, runtimes)["telemetry"]
-        self.assertEqual((telemetry["routing"], telemetry["routing_levels"], telemetry["ple_rows"]),
+        self.assertEqual((telemetry["routing"], telemetry["routing_levels"], telemetry["ple"]),
                          ("sampled", ["aggregate", "sampled"], "aggregate"))
         runtimes["runtimes"]["ds3"]["advanced_telemetry"]["routing"] = "exact"
         self.assertEqual(catalog._backend(model, runtimes)["telemetry"]["routing"], "unavailable")
@@ -75,8 +82,8 @@ class PinTests(unittest.TestCase):
         model = {"splash_model_name": "x"}
         ds2 = catalog._backend({**model, "runtime": "splash-m1-1.6.1-ds2-telemetry"}, runtimes)["telemetry"]
         ds3 = catalog._backend({**model, "runtime": "splash-m1-1.6.1-ds3-gpu-telemetry"}, runtimes)["telemetry"]
-        self.assertEqual((ds2["dflash"], ds2["routing"], ds2["ple_rows"]), ("cycle", "unavailable", "none"))
-        self.assertEqual((ds3["dflash"], ds3["routing"], ds3["routing_levels"], ds3["ple_rows"]),
+        self.assertEqual((ds2["dflash"], ds2["routing"], ds2["ple"]), ("cycle", "unavailable", "none"))
+        self.assertEqual((ds3["dflash"], ds3["routing"], ds3["routing_levels"], ds3["ple"]),
                          ("cycle", "sampled", ["aggregate", "sampled"], "aggregate"))
 
     def test_installed_runtimes_match_their_pins(self):
