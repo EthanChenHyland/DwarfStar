@@ -150,6 +150,7 @@
       const seen = V.lastSeq || 0;  // the first drain also returns what the ring held before this view opened
       if (batch.dropped && V.open) V.open.dropped += batch.dropped;
       V.dflashSince = batch.next || V.dflashSince;
+      V.telemetrySchema = batch.schema;
       if (batch.router && batch.router.available) routerHeader(batch.router);
       for (const e of batch.events) {
         if (e.seq <= seen) continue;  // already handled
@@ -237,6 +238,12 @@
     const seconds = (e.interval_ms || 0) / 1000;
     if (e.table) {
       const t = e.table;
+      // The decode run this interval overlaps gets its rows too (by engine time, like routing).
+      const open = requestAt(e.t - (e.interval_ms || 0), e.t);
+      if (open) {
+        const own = open.ple || (open.ple = { requested_rows: 0, hit_rows: 0, read_rows: 0, read_bytes: 0 });
+        own.requested_rows += t.requested_rows || 0; own.hit_rows += t.hit_rows || 0; own.read_rows += t.read_rows || 0; own.read_bytes += t.read_bytes || 0;
+      }
       p.requested += t.requested_rows || 0; p.hits += t.hit_rows || 0; p.rows += t.read_rows || 0; p.bytes += t.read_bytes || 0;
       p.bytes_per_s = seconds > 0 ? (t.read_bytes || 0) / seconds : p.bytes_per_s;
       p.hit_pct = p.requested ? 100 * p.hits / p.requested : null;
@@ -362,10 +369,13 @@
     return { proposed, accepted, rejected: proposed - accepted, cycles: i + 1, acceptance_pct: proposed ? 100 * accepted / proposed : null };
   }
   function exportRequest(r) {
+    // Format 2 (DwarfStar 1.1+): telemetry schema and capabilities named; cycles exact per verify cycle (DFlash2);
+    // router routes aggregate (optionally with sampled selections); PLE rows aggregate. Format 1 had no router or PLE.
     const document_ = {
-      kind: "DwarfStar request telemetry", format: 1, name: r.label, model: r.model, profile: r.profile || null,
-      started: new Date(r.wall).toISOString(), capabilities: caps(),
+      kind: "DwarfStar request telemetry", format: 2, name: r.label, model: r.model, profile: r.profile || null,
+      started: new Date(r.wall).toISOString(), telemetry_schema: V.telemetrySchema ?? null, capabilities: caps(),
       segmentation: `one uninterrupted decode run; a new request starts after ${GAP_MS} ms without a decode cycle (the runtime reports cycles, not request ids)`,
+      cycles_semantics: "DFlash2 verify cycles, exact: output tokens, drafted and accepted per cycle",
       totals: { cycles: r.n + r.truncated, output_tokens: r.output, drafted: r.drafted, accepted: r.accepted, decode_s: +decodeSeconds(r).toFixed(3),
         max_batch_width: r.width, cycles_missed_by_reader: r.dropped },
       cycles_kept: r.n, cycles_not_kept: r.truncated, fields: CYCLE_FIELDS, cycles: cycleRows(r),
@@ -380,6 +390,9 @@
         attribution: "router intervals (~180 ms) assigned by engine time to the decode run they overlap: exact inside the run, approximate at its first and last interval",
         phase: "decode", layers: r.heatLayers, experts: r.heatExperts, routes: r.routes || 0, fields: ["layer", "expert", "routes"], cells,
         samples: (r.samples || []).map((x) => ({ step: x.step, every: x.every, layers: x.layers })), samples_kept_max: REQUEST_SAMPLES };
+    }
+    if (r.ple) {
+      document_.ple = { ...r.ple, semantics: "PLE row-store aggregates over the poll intervals this decode run overlaps (by engine time): rows requested, served from the row cache, read from the SSD" };
     }
     const blob = new Blob([JSON.stringify(document_, null, 1)], { type: "application/json" });
     const link = document.createElement("a"), at = new Date(r.wall), two = (v) => String(v).padStart(2, "0");
