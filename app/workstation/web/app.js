@@ -5,8 +5,8 @@
 const S = {
   catalog: null, state: null, live: null, system: null, diagnostics: null,
   model: null, effort: null, view: "run", modelTab: null, busy: false,
-  series: { tps: [], prefill: [], gpu: [], wired: [], ple: [], accept: [] },  // tps/ple/accept: replayed native sessions only
-  events: [], ticks: [], tools: [], source: null, sourceLevel: 0, connected: false,
+  series: { gpu: [] },
+  source: null, connected: false,
   listeners: [],
 };
 const TONE = { scope: "var(--scope)", swift: "var(--swift)", cyber: "var(--cyber)" };
@@ -36,11 +36,11 @@ function toast(text) {
 }
 
 /* ------------------------------------------------------------ live events */
-function connect(level) {
-  if (S.source && S.sourceLevel === level) return;
-  if (S.source) S.source.close();
-  S.sourceLevel = level;
-  const source = S.source = new EventSource(`/api/events?level=${level}`);
+/* One event stream for the whole app (runtime, lifecycle, agent, tool and host-sample events); it reconnects by itself.
+ * Inference telemetry is not on it: the Advanced view polls the model server's /telemetry while it is open. */
+function connect() {
+  if (S.source) return;
+  const source = S.source = new EventSource("/api/events");
   source.onopen = () => { S.connected = true; renderNav(); };
   source.onerror = () => { S.connected = false; renderNav(); };  // EventSource reconnects by itself
   source.onmessage = (message) => {
@@ -55,36 +55,11 @@ function handleEvent(event) {
   if (event.kind === "system") {
     S.system = event;
     push(S.series.gpu, event.gpu?.utilization_pct ?? null);
-    push(S.series.wired, event.memory?.wired_bytes ? event.memory.wired_bytes / 2 ** 30 : null);
     scheduleLive();
     return;
   }
-  if (event.kind === "tick") {
-    S.ticks.push(event); if (S.ticks.length > 600) S.ticks.shift();
-    const live = S.live || (S.live = {});
-    live.mtp = live.mtp || { cycles: 0, proposed: 0, accepted: 0, rejected: 0, tokens: 0 };
-    live.mtp.cycles += 1; live.mtp.proposed += event.dp; live.mtp.accepted += event.da;
-    live.mtp.rejected += Math.max(0, event.dp - event.da); live.mtp.tokens += event.n;
-    live.mtp.acceptance_pct = live.mtp.proposed ? 100 * live.mtp.accepted / live.mtp.proposed : null;
-    if (event.ms > 0) {
-      const instant = event.n / event.ms * 1000;
-      live.rates = live.rates || {};
-      live.rates.live_tps = live.rates.live_tps == null ? instant : 0.85 * live.rates.live_tps + 0.15 * instant;
-      push(S.series.tps, live.rates.live_tps);
-      live.ple = live.ple || { reads: 0, bytes: 0, bytes_per_s: 0 };
-      live.ple.reads += event.ple[0]; live.ple.bytes += event.ple[1];
-      live.ple.bytes_per_s = 0.8 * (live.ple.bytes_per_s || 0) + 0.2 * (event.ple[1] / event.ms * 1000);
-      push(S.series.ple, live.ple.bytes_per_s / 1024);
-      push(S.series.accept, live.mtp.acceptance_pct);
-    }
-    if (live.context) live.context.used = Math.max(live.context.used || 0, event.pos + event.n);
-  } else {
-    S.events.push(event); if (S.events.length > 400) S.events.shift();
-    if (event.kind === "tool" && event.phase === "end") { S.tools.push(event); if (S.tools.length > 200) S.tools.shift(); }
-    if (event.kind === "request" || event.kind === "runtime" || event.kind === "kv" || event.kind === "tool" || event.kind === "vision") refreshLiveSoon();
-    if (event.kind === "runtime" || event.kind === "lifecycle") refreshStateSoon();
-    if (event.kind === "request" && event.phase === "prefill") push(S.series.prefill, event.avg_tps);
-  }
+  if (event.kind === "runtime" || event.kind === "tool") refreshLiveSoon();
+  if (event.kind === "runtime" || event.kind === "lifecycle") refreshStateSoon();
   for (const listener of S.listeners) listener(event);
   scheduleLive();
 }
@@ -120,15 +95,13 @@ function renderNav() {
   const state = running ? S.state.models[running] : null;
   dot.className = "dot " + (busy ? "busy" : running ? (state.healthy ? "ready" : "bad") : "");
   $("#nav-model").textContent = running ? (profileLabel(S.state.active_profile) || modelOf(running).display_name.replace("DwarfStar ", "")) : "No model running";
-  const phase = S.live?.request?.active ? S.live.request.phase : null;
-  $("#nav-phase").textContent = busy ? "Switching…" : running ? (phase ? phase.replace("_", " ").toLowerCase() : state.healthy ? "Ready" : "Not healthy") : (S.connected ? "Offline" : "Connecting…");
+  $("#nav-phase").textContent = busy ? "Switching…" : running ? (state.healthy ? "Ready" : "Not healthy") : (S.connected ? "Offline" : "Connecting…");
 }
 function show(view) {
   S.view = view;
   if (location.hash.slice(1) !== view) history.replaceState(null, "", "#" + view);
   document.querySelectorAll("#nav button[data-view]").forEach((b) => b.classList.toggle("active", b.dataset.view === view || b.dataset.also === view));
   document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === "view-" + view));
-  connect(view === "visualizer" ? 2 : 1);
   if (view !== "chats") window.Chats?.unmount();
   ({ run: renderRun, chats: () => window.Chats?.mount(), models: renderModels, live: renderLive, visualizer: () => window.Visualizer?.mount(),
      diagnostics: () => window.Diagnostics?.mount(), settings: renderSettings, setup: () => window.Setup?.mount() })[view]?.();
@@ -425,7 +398,7 @@ function liveModeSwitch(current) {
 function bindLiveModes(root) { root.querySelectorAll("[data-live-mode]").forEach((b) => b.onclick = () => show(b.dataset.liveMode)); }
 function renderLive() {
   const root = $("#view-live"); if (!S.catalog) return;
-  const running = runningModel(), live = S.live || {}, request = live.request || {}, rates = live.rates || {};
+  const running = runningModel(), live = S.live || {};
   const model = running ? modelOf(running) : null, system = S.system || {}, memory = system.memory || {}, gpu = system.gpu || {}, process = system.process || {};
   const splash = running ? (S.state?.models?.[running]?.splash || {}) : {};
   if (!root.dataset.built) {
@@ -462,11 +435,10 @@ function renderLive() {
   const ms = (v) => v == null ? NA : v >= 1000 ? (v / 1000).toFixed(2) + "<small>s</small>" : Math.round(v) + "<small>ms</small>";
   const sched = splash.scheduler || {};
   const last = S.state?.models?.[running]?.last_request || {};
-  const now = sched.decoding ? "decoding" : sched.prefilling ? "prefilling" : sched.queued ? "queued" : request.active ? String(request.phase || "").replace("_", " ").toLowerCase() : "idle";
+  const now = sched.decoding ? "decoding" : sched.prefilling ? "prefilling" : sched.queued ? "queued" : "idle";
   $("#live-phase").textContent = "· " + (now === "idle" && last.started_at ? "idle · latest at " + new Date(last.started_at * 1000).toLocaleTimeString() : now);
-  // The latest request as the agent recorded it (its own receipt: API usage and stream timing), else the telemetry hub's.
-  const prompt = last.input_tokens ?? request.prompt_tokens, reused = last.reused_tokens ?? request.reused_tokens;
-  const output = last.output_tokens ?? request.generated, decode = last.provider_decode_tps ?? rates.live_tps ?? rates.decode_tps;
+  // The latest request as the agent recorded it (its own receipt: API usage and stream timing).
+  const prompt = last.input_tokens, reused = last.reused_tokens, output = last.output_tokens, decode = last.provider_decode_tps;
   $("#live-request").innerHTML = [
     metric("Prompt", prompt != null ? prompt.toLocaleString() + "<small>tokens</small>" : "–", reused ? reused.toLocaleString() + " reused from the prefix cache" : ""),
     metric("New prefill", last.new_prefill_tokens != null ? last.new_prefill_tokens.toLocaleString() + "<small>tokens</small>" : "–", ""),
@@ -581,7 +553,7 @@ async function boot() {
   catch { setTimeout(boot, 1500); return; }
   const selected = S.catalog.profiles.find((p) => p.id === S.state.selected_profile) || S.catalog.profiles.find((p) => p.default);
   S.model = selected.model; S.effort = selected.reasoning_effort;
-  connect(1);
+  connect();
   const initial = location.hash.slice(1);
   show(["run", "chats", "models", "live", "visualizer", "diagnostics", "settings", "setup"].includes(initial) ? initial : (S.state.running_models || []).length ? "chats" : "run");
   window.addEventListener("hashchange", () => { const v = location.hash.slice(1); if (v && v !== S.view && document.querySelector("#view-" + v)) show(v); });

@@ -16,7 +16,7 @@ class TelemetryRecoveryTests(unittest.TestCase):
     def test_sessions_left_open_by_a_crash_are_finalized_once(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "20261113-000000-scope.jsonl").write_text(json.dumps({"kind": "tick"}) + "\n")
+            (root / "20261113-000000-scope.jsonl").write_text(json.dumps({"kind": "tool"}) + "\n")
             (root / "20261113-000100-cyber.jsonl").write_text(json.dumps({"kind": "session_end", "reason": "model stopped"}) + "\n")
             self.assertEqual(hub.finalize_open_sessions(root), ["20261113-000000-scope"])
             last = json.loads((root / "20261113-000000-scope.jsonl").read_text().splitlines()[-1])

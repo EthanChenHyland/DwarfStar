@@ -473,7 +473,7 @@ class Service:
     def _system_loop(self) -> None:
         """Sample host counters once a second, but only while somebody is watching."""
         while not self.stop_flag.is_set():
-            if self.hub.wanted_level() > 0:
+            if self.hub.watched():
                 pid = None
                 try:
                     running = [s for s in self.state()["models"].values() if s.get("running")]
@@ -548,7 +548,7 @@ class Service:
                 path = url.path
                 try:
                     if path == "/api/events":
-                        return self._events(int(query.get("level", ["1"])[0]))
+                        return self._events()
                     if path == "/api/catalog":
                         return self._json(service.catalog_document())
                     if path == "/api/state":
@@ -582,8 +582,6 @@ class Service:
                         return self._json({"ok": True, "telemetry": telemetry})
                     if path == "/api/live":
                         return self._json({"ok": True, "live": service.hub.snapshot(), "system": service.system_cache})
-                    if path == "/api/heat":
-                        return self._json({"ok": True, **service.hub.heat(query.get("model", [None])[0])})
                     if path == "/api/recent":
                         return self._json({"ok": True, "events": service.hub.recent(int(query.get("after", ["0"])[0]))})
                     if path == "/api/sessions":
@@ -763,8 +761,8 @@ class Service:
                 except Exception as error:
                     return self._json({"ok": False, "error": str(error)}, 500)
 
-            def _events(self, level: int) -> None:
-                subscriber = service.hub.subscribe(level)
+            def _events(self) -> None:
+                subscriber = service.hub.subscribe()
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
                 self.send_header("Cache-Control", "no-store")

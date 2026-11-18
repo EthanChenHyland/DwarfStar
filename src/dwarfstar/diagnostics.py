@@ -276,7 +276,7 @@ def document(state: dict, live: dict, system: dict, hub: dict, turns=None) -> di
         "runtime": runtime_section(state, live, system),
         "chats": chat_section(turns),
         "permissions": permission_status(),
-        "telemetry": {"session": hub.get("session"), "subscribers": hub.get("subscribers"), "detail_level": hub.get("detail_level"),
+        "telemetry": {"session": hub.get("session"), "subscribers": hub.get("subscribers"),
                       "events": hub.get("events")},
         "lifecycle": state.get("lifecycle"),
         "checks": rows, "summary": summary(rows),
