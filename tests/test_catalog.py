@@ -147,10 +147,10 @@ class RuntimeTests(unittest.TestCase):
         for model in catalog.models().values():
             self.assertEqual((model["backend"]["kind"], model["backend"]["id"]), ("splash", "splash-m1-1.6.1-ds3-gpu-telemetry"))
             # ds3 reports per-verify-cycle speculative decoding, router aggregates (sampled on request) and PLE
-            # aggregates; the native per-token router rows stay unavailable.
+            # aggregates.
             self.assertEqual(model["backend"]["telemetry"]["dflash"], "cycle")
             self.assertEqual(model["backend"]["telemetry"]["routing"], "sampled")
-            self.assertFalse(model["backend"]["telemetry"]["router"])
+            self.assertEqual(model["backend"]["telemetry"]["ple"], "aggregate")
         self.assertEqual(set(catalog.load()["runtimes"]["runtimes"]),
                          {"splash-m1-1.6.1-ds1", "splash-m1-1.6.1-ds2-telemetry", "splash-m1-1.6.1-ds3-gpu-telemetry"})
 

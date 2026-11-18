@@ -27,16 +27,14 @@ Never shown: prompt text, reasoning, tool arguments, file contents or credential
 On the advanced-telemetry runtime the view keeps the **last 20 requests** in the page's memory, under **Recent requests**, named by profile and time (for example "Swift 1.5 MEDIUM · 14:32"; never by content). Each row shows tokens generated, verify cycles, drafts accepted, decode time and rate.
 
 * **View** draws that request on the canvas: the scrubber walks its cycles, the draft panel shows acceptance up to the cycle under the playhead and the output stream the tokens committed so far. Live recording continues meanwhile; **Back to live** returns. **Pause** and the scrubber work on the live stream as before.
-* **Export JSON** saves one request's cycles to a file chosen in a Save panel (a format-1 document: totals, capabilities, and per cycle `t_ms, output, drafted, accepted, cycle_ms, width`). On ds3 it adds `router`: `router_mode` (`aggregate` or `sampled`), the decode routes as `[layer, expert, routes]` cells and up to 128 sampled steps; router intervals (~180 ms) are assigned to the run they overlap by engine time, so a request's routing is exact in its middle and approximate at its first and last interval. Nothing is exported otherwise, and never any text.
+* **Export JSON** saves one request to a file chosen in a Save panel: a format-2 document with the engine's telemetry schema, the runtime's capabilities, totals, and per cycle `t_ms, output, drafted, accepted, cycle_ms, width` (DFlash2 verify cycles, exact). On ds3 it adds `router` (`router_mode` `aggregate` or `sampled`, the decode routes as `[layer, expert, routes]` cells, up to 128 sampled steps) and `ple` (rows requested, cached and read). Router and PLE intervals are assigned to the run they overlap by engine time, so they are exact in the run's middle and approximate at its first and last interval. Nothing is exported otherwise, and never any text.
 * **What a request is.** The runtime reports decode cycles, not request ids, so an entry is one uninterrupted decode run: a new entry starts after 400 ms with no cycle. Between agent turns there is always tool time and a prefill, which produce no cycles, so turns separate; two clients decoding at once would share one entry (the `width` field shows batching).
 * **Bounds.** Each request keeps its first 4,096 cycles in one fixed 96 KiB buffer (under 2 MiB for all 20); totals keep counting past the cap and the row says how many were kept. Cycles the engine ring overwrote before they were read are counted as missed. History holds numbers only, lives in the window, and is gone on reload; nothing is written to disk. Measured with 30 synthetic requests including one of 10,000 cycles: 20 rows kept, the long one capped at 4,096 with exact totals, page heap 4.6 MiB.
 
-## Detail levels
+## Polling and the event stream
 
-The hub records at two levels, chosen by whether the Advanced view is open:
-
-* **1 — Standard / Live**: request receipts, system samples and tool events.
-* **2 — Advanced**: the same, kept with any router rows a replayed native session carries.
+* **One event stream** (`/api/events`) for the whole app: runtime, lifecycle, agent and tool events and host samples. It carries no inference telemetry.
+* **One telemetry poll**, owned by this view: `/api/telemetry` at 5 Hz, one request at a time, only while the Advanced view is open and a model that reports something runs. Level 2 (decode cycles, router and PLE aggregates), 3 while *Sampled selections* is on. Leaving the view stops the poll and the drawing loop; the engine drops back to aggregate, then off, 3 s after the last poll at a level. Standard Live never polls it.
 
 ## Overhead
 
@@ -44,4 +42,5 @@ Inference: the view's polling and the ds3 router counters are within run-to-run 
 
 ## Recorded sessions
 
-Each session's events are written to `<data>/telemetry/sessions/`, and the view can replay one from the session picker. Live Splash sessions carry requests, rates and actions; native sessions recorded earlier also carry router and draft detail.
+Each model session's events are written to `<data>/telemetry/sessions/` (the last 30), and the view can replay one from the session picker. A recording carries the agent's tool actions and runtime events, not inference telemetry: replaying one draws the action timeline and agent actions, and the processor, PLE and draft regions say "not in this recording". Recordings from the retired native runtime (per-token router rows) are no longer kept or drawn.
+

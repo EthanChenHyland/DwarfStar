@@ -1,4 +1,4 @@
-"""Telemetry hub reducers: runtime sessions, recorded verify cycles and tool events."""
+"""Telemetry hub reducers: runtime sessions, tool events and who is watching."""
 import unittest
 
 from dwarfstar.telemetry.hub import Hub
@@ -7,7 +7,7 @@ from dwarfstar.telemetry.hub import Hub
 class HubTests(unittest.TestCase):
     def setUp(self):
         self.hub = Hub(record=False)
-        self.subscriber = self.hub.subscribe(2)
+        self.subscriber = self.hub.subscribe()
 
     def tearDown(self):
         self.hub.stop()
@@ -35,31 +35,11 @@ class HubTests(unittest.TestCase):
         self.assertIn("cyber", hub.stopped_models)
         hub.stop()
 
-    def test_ticks_accumulate_mtp_ple_and_router_heat(self):
-        row = [3, 128, 7, 64]
-        for index in range(4):
-            self.hub.ingest({"kind": "tick", "src": "native", "model": "cyber", "t": 2.0 + index, "seq": index, "pos": 100 + 2 * index,
-                             "n": 2, "dp": 1, "da": 1 if index < 3 else 0, "ms": 50.0, "ple": [10, 900], "k": 2, "r": [row, row]})
-        live = self.hub.snapshot()
-        self.assertEqual(live["mtp"]["cycles"], 4)
-        self.assertEqual(live["mtp"]["proposed"], 4)
-        self.assertEqual(live["mtp"]["accepted"], 3)
-        self.assertEqual(live["mtp"]["rejected"], 1)
-        self.assertEqual(live["mtp"]["acceptance_pct"], 75.0)
-        self.assertEqual(live["ple"]["reads"], 40)
-        self.assertEqual(live["ple"]["bytes"], 3600)
-        heat = self.hub.heat("cyber")["layers"]
-        self.assertEqual(heat[0][3], 4)
-        self.assertEqual(heat[1][7], 4)
-        self.assertEqual(sum(heat[0]), 8)
-
-    def test_router_rows_only_reach_detail_subscribers(self):
-        basic = self.hub.subscribe(1)
-        self.hub.ingest({"kind": "tick", "src": "native", "model": "cyber", "t": 5.0, "seq": 0, "pos": 1, "n": 1, "dp": 0, "da": 0,
-                         "ms": 30.0, "ple": [1, 90], "k": 1, "r": [[5, 255]]})
-        self.hub._flush_tick(force=True)
-        self.assertIn("r", self.subscriber.queue.get_nowait())
-        self.assertNotIn("r", basic.queue.get_nowait())
+    def test_the_snapshot_carries_only_what_live_producers_send(self):
+        # Inference telemetry comes from the model server's /telemetry, not the hub; the native runtime's per-token
+        # counters (mtp, ple, kv, rates, context, request) are retired.
+        self.assertEqual(set(self.hub.snapshot()) - {"hub"}, {"model", "runtime", "tools", "agent"})
+        self.assertNotIn("detail_level", self.hub.snapshot()["hub"])
 
     def test_tool_timeline(self):
         self.hub.ingest({"kind": "tool", "src": "agent", "t": 1.0, "phase": "start", "name": "bash", "category": "shell", "call": "abc"})
@@ -70,15 +50,20 @@ class HubTests(unittest.TestCase):
         self.assertEqual(tools["count"], 1)
         self.assertEqual(tools["timeline"][0]["ms"], 812)
 
-    def test_subscribers_set_the_detail_level(self):
+    def test_the_hub_is_watched_while_anyone_subscribes(self):
         hub = Hub(record=False)
-        self.assertEqual(hub.wanted_level(), 0)
-        subscriber = hub.subscribe(2)
-        self.assertEqual(hub.wanted_level(), 2)
+        self.assertFalse(hub.watched())
+        subscriber = hub.subscribe()
+        self.assertTrue(hub.watched())
         hub.unsubscribe(subscriber)
-        self.assertEqual(hub.wanted_level(), 0)
+        self.assertFalse(hub.watched())
         hub.stop()
 
+    def test_every_subscriber_gets_every_event(self):
+        other = self.hub.subscribe()
+        self.hub.ingest({"kind": "tool", "src": "agent", "t": 1.0, "phase": "start", "name": "read", "category": "workspace", "call": "x"})
+        self.assertEqual(self.drain()[0]["name"], "read")
+        self.assertEqual(other.queue.get_nowait()["name"], "read")
 
 if __name__ == "__main__":
     unittest.main()
