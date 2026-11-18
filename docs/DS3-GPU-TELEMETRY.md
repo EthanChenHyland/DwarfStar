@@ -1,11 +1,11 @@
 # ds3 GPU telemetry
 
-**Status: production candidate.** `config/runtime-policy.json` names `splash-m1-1.6.1-ds3-gpu-telemetry` (ds3) on this
-branch; `main` still names ds2 until this merges. ds3 is built from the same pinned Splash source (`1.6.1-m1`, commit
-`5312c54`) with the ds1 and ds2 patches plus `backends/splash-m1/patches/ds3/`. ds2's binaries, hashes, patches and
-manifests are untouched and it stays pinned as the rollback. The native backend is not restored: no ds4 runtime,
-backend selector, control socket, log parser, native server or F16 KV runtime. The old native code was read only as a
-reference for signal definitions and Visualizer semantics.
+**Status: production since DwarfStar 1.1.0.** `config/runtime-policy.json` names `splash-m1-1.6.1-ds3-gpu-telemetry`
+(ds3) for every model. ds3 is built from the same pinned Splash source (`1.6.1-m1`, commit `5312c54`) with the ds1 and
+ds2 patches plus `backends/splash-m1/patches/ds3/`. ds2's binaries, hashes, patches and manifests are untouched and it
+stays pinned as the rollback. The native backend is not restored: no ds4 runtime, backend selector, control socket, log
+parser, native server or F16 KV runtime. The old native code was read only as a reference for signal definitions and
+Visualizer semantics.
 
 Rollback: set `config/runtime-policy.json` `model_defaults.runtime` to `splash-m1-1.6.1-ds2-telemetry` →
 `dwarfstar generate` → restart the service and model. Exercised once through the installed app (§10).

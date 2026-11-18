@@ -44,9 +44,9 @@ Same machine, same GGUF, same prompts, temperature 0, reasoning LOW, one request
 | Answers | correct (needle at 8K and 32K) | same answers | equal |
 | Tool calls with DwarfStar's provider request | yes | yes (OpenAI `tool_calls`, separate `reasoning_content`) | equal |
 | Vision | Q8_0 projector | BF16 projector | equal (correct description of the test image) |
-| Telemetry | router, MTP, PLE, KV events | `/status` memory plan, request metrics; no router or PLE events | less detail |
+| Telemetry | router, MTP, PLE, KV events | `/status` memory plan, request metrics; since ds2 per-cycle DFlash2, since ds3 router and PLE aggregates (no per-token router rows or weights) | less per-token detail |
 
-Splash clears the 15 % bar on effective generation and end-to-end time and saves 4 GiB, with the same answers. It costs ~9 s more load and the visualizer's router/PLE/MTP detail.
+Splash clears the 15 % bar on effective generation and end-to-end time and saves 4 GiB, with the same answers. It cost ~9 s more load and, until ds3, the visualizer's router and PLE detail; ds3 restores them as GPU-side aggregates and sampled selections (docs/DS3-GPU-TELEMETRY.md), while per-token router rows and weights stay native-only.
 
 ## Decision (2026-11-13): one runtime, Splash-m1, for every model
 
