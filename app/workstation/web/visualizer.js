@@ -784,8 +784,11 @@
       const seconds = decodeSeconds(run);
       return [seconds > 0 ? run.output / seconds : null, (V.viewing ? "viewing a request · " : "decoding · ") + n(run.output) + " tokens · " + n(run.n + run.truncated) + " cycles"];
     }
+    // Fresh prefill routing from /telemetry is the live signal while this view polls; the scheduler snapshot is the
+    // fallback for runtimes without routing (it is only as fresh as the last state refresh).
+    const prefillLive = V.router && V.router.livePhase === 1 && performance.now() - V.router.recentAt < 2000;
     const scheduler = (S.state?.models?.[D.runningModel()] || {}).splash?.scheduler || {};
-    if (scheduler.prefilling) return [null, "prefilling a prompt"];
+    if (prefillLive || scheduler.prefilling) return [null, "prefilling a prompt"];
     const last = V.history[V.history.length - 1];
     if (last) { const seconds = decodeSeconds(last); return [seconds > 0 ? last.output / seconds : null, "idle · last run " + n(last.output) + " tokens · " + n(last.n + last.truncated) + " cycles"]; }
     const receipt = (S.state?.models?.[D.runningModel()] || {}).last_request || {};
