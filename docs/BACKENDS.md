@@ -1,16 +1,16 @@
 # Inference backends
 
-DwarfStar is the product: Workstation, catalog, lifecycle, chats, compaction, ACP tools, memory admission, telemetry and diagnostics. The inference backend under each model is an implementation detail. **One runtime is in production for every model: Splash-m1 (`splash-m1-1.6.1-ds2-telemetry`), the advanced-telemetry build; `splash-m1-1.6.1-ds1` is kept as the rollback.** This page records which backends were evaluated on the reference machine (M1 Max, 24-core GPU, 64 GiB, macOS 26.5.2), why Splash won, and how the retired native behaviour is recovered.
+DwarfStar is the product: Workstation, catalog, lifecycle, chats, compaction, ACP tools, memory admission, telemetry and diagnostics. The inference backend under each model is an implementation detail. **One runtime is in production for every model: Splash-m1 (`splash-m1-1.6.1-ds3-gpu-telemetry`), the GPU-telemetry build; `splash-m1-1.6.1-ds2-telemetry` is kept as the rollback, and `splash-m1-1.6.1-ds1` before it.** This page records which backends were evaluated on the reference machine (M1 Max, 24-core GPU, 64 GiB, macOS 26.5.2), why Splash won, and how the retired native behaviour is recovered.
 
 ## Candidates
 
 | Backend | What it is | Status on this Mac |
 |---|---|---|
-| **Splash-m1** 1.6.1-m1 (`ds2-telemetry` in production, `ds1` as rollback) | [paperniuk/splash](https://github.com/paperniuk/splash), the M1/M2 port of [incoai/splash](https://github.com/incoai/splash): Apple7 Metal kernels, DFlash2 speculative decoding, INT8 KV, prefix cache, PLE row streaming. Built from source with DwarfStar's two patches. Needs macOS 26.4+ | **Production, every model.** Installed at `<assets>/Runtimes/splash-m1-1.6.1-ds1/` |
+| **Splash-m1** 1.6.1-m1 (`ds3-gpu-telemetry` in production, `ds2-telemetry` as rollback, then `ds1`) | [paperniuk/splash](https://github.com/paperniuk/splash), the M1/M2 port of [incoai/splash](https://github.com/incoai/splash): Apple7 Metal kernels, DFlash2 speculative decoding, INT8 KV, prefix cache, PLE row streaming. Built from source with DwarfStar's two patches. Needs macOS 26.4+ | **Production, every model.** Installed at `<assets>/Runtimes/splash-m1-1.6.1-ds1/` |
 | **Native** (`ds4-unified`) | The pinned Paperniuk ds4 Metal runtime with DwarfStar's tokenizer adapter and telemetry hooks | **Retired.** Not installed; was production until 2026-11-13. Its source and behaviour are recoverable from git (below) |
 | **Native oMLX / MLX** | [jundot/omlx](https://github.com/jundot/omlx) on MLX | Not installed: not practical for these models (below) |
 
-The production build ds2 adds a bounded per-verify-cycle speculative-decode telemetry channel at no measurable inference cost; ds1 is byte-identical except for that engine change (docs/ADVANCED-TELEMETRY.md).
+ds2 adds a bounded per-verify-cycle speculative-decode telemetry channel at no measurable inference cost (docs/ADVANCED-TELEMETRY.md); the production build ds3 adds GPU-side router aggregates, optional sampled selections and PLE aggregates, read without a GPU command or wait, within noise of ds2 (docs/DS3-GPU-TELEMETRY.md).
 
 ## Compatibility per model
 
@@ -56,7 +56,7 @@ Splash clears the 15 % bar on effective generation and end-to-end time and saves
 | Swift 1.5 | works | faster, leaner, equal answers (tokenizer patch) | not practical | **Splash-m1** |
 | Cyber | works at 128K | faster, 4.5 GiB leaner, equal answers (exact-BF16 patch) | not practical | **Splash-m1** |
 
-`config/runtime-policy.json` made `splash-m1-1.6.1-ds1` the runtime of every model on 2026-11-13; the advanced-telemetry build `splash-m1-1.6.1-ds2-telemetry` has since replaced it, with ds1 kept as the rollback (docs/ADVANCED-TELEMETRY.md). Validation on the promoted ds1 default: lifecycle matrix 14/14, same-family 14/14, cross-family 9/9, regression 4/4; 120K needle passed on Swift (428.8 s) and Cyber (431.6 s vs native's 453.8 s; decode 37.8 vs 20.0 tok/s; peak 49.4 vs 52.9 GiB); vision on all three; agent shell-tool turns through the Workstation on Swift MEDIUM and Cyber XHIGH. The earlier "not yet run" caveats below (128K depth, vision, Cyber effort levels, lifecycle integration) were all cleared in this validation and the storage-migration cold-start runs.
+`config/runtime-policy.json` made `splash-m1-1.6.1-ds1` the runtime of every model on 2026-11-13; the advanced-telemetry build `splash-m1-1.6.1-ds2-telemetry` replaced it, and the GPU-telemetry build `splash-m1-1.6.1-ds3-gpu-telemetry` replaced that, with ds2 kept as the rollback (docs/DS3-GPU-TELEMETRY.md). Validation on the promoted ds1 default: lifecycle matrix 14/14, same-family 14/14, cross-family 9/9, regression 4/4; 120K needle passed on Swift (428.8 s) and Cyber (431.6 s vs native's 453.8 s; decode 37.8 vs 20.0 tok/s; peak 49.4 vs 52.9 GiB); vision on all three; agent shell-tool turns through the Workstation on Swift MEDIUM and Cyber XHIGH. The earlier "not yet run" caveats below (128K depth, vision, Cyber effort levels, lifecycle integration) were all cleared in this validation and the storage-migration cold-start runs.
 
 **Native retirement and recovery.** The native ds4 runtime is retired and no longer installed: the product carries one runtime, with no backend selection. Native behaviour is preserved in git for comparison, not as a second active runtime — see `docs/NATIVE-RETIREMENT.md` for how to rebuild it from the tagged source. The whole-product rollback point is the tag `rollback/native-default-20261113` (native was the default there) and the Splash checkpoint is `checkpoint/splash-default-20261113`; both were proved by starting native and Splash on the same model and getting the same answer.
 

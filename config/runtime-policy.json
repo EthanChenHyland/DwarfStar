@@ -3,7 +3,7 @@
   "version": "2026.11.5",
   "description": "The one runtime policy every DwarfStar model uses. A model file in config/models may override a model_defaults key only with a reason in its override_reasons; repeating a default is rejected.",
   "model_defaults": {
-    "runtime": "splash-m1-1.6.1-ds2-telemetry",
+    "runtime": "splash-m1-1.6.1-ds3-gpu-telemetry",
     "context": 131072,
     "max_output": 81920,
     "sampling": {
@@ -46,7 +46,7 @@
   },
   "runtime": {
     "binding": "127.0.0.1 only; one port per model",
-    "engine": "Splash-m1 1.6.1-m1 with DwarfStar's patches (splash-m1-1.6.1-ds1): Apple7 Metal kernels, exact BF16 planes",
+    "engine": "Splash-m1 1.6.1-m1 with DwarfStar's patches (splash-m1-1.6.1-ds3-gpu-telemetry): Apple7 Metal kernels, exact BF16 planes, advanced telemetry with GPU router aggregates",
     "weights": "the split GGUF prepared at start into Metal images; routed experts resident; the PLE table streamed from the SSD",
     "gpu_offload": "full: every layer, the draft model and the vision projector run on the Metal GPU",
     "speculative": "DFlash2 draft model; every drafted token is verified by the target model",

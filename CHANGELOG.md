@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased — ds3 GPU telemetry
+
+### Runtime
+
+* **ds3 is the production runtime** (`splash-m1-1.6.1-ds3-gpu-telemetry`, engine `ae07f09a…`, shaders `1d9ae6f5…`): ds2 plus GPU-side router telemetry. The MoE grouping kernel adds the routes it already counts per layer and expert into a 0.5 MB host-visible page that the engine reads on a `/telemetry` poll with no GPU command and no wait; optional sampled selections (row 0 of one decode step in N); PLE row-store and expert-store aggregates. Overhead within noise of ds2 (OFF +0.36 % decode in an interleaved A/B). ds2 is the rollback (`config/runtime-policy.json`). `build_splash.sh --ds3` reproduces it byte for byte.
+* `/telemetry` schema 2: every consumer gets every event's detail (kept by sequence, 4 MiB); each telemetry level lapses on its own 3 s after its last poll.
+
+### Workstation
+
+* **Advanced Live** draws router aggregates: per-layer recent routing, Layer focus (busiest experts, concentration), a layers × experts heatmap (session or request); the views follow the phase the model is in (prefill, then decode), shown in the badge, an AGGREGATE / SAMPLED 1 IN N badge and a *Sampled selections* switch; the PLE card shows read rate, cache hits and latency. Request export adds `router` with `router_mode`.
+* The DFlash2 card's draft-token animation is replaced by a bar per recent verify cycle (accepted / rejected); the output stream shows the decode rate of the current or last run; the memory panel shows the latest request's context. MTP-era labels and the flying PLE dots are gone.
+* Fixed: returning to the Advanced view after another view no longer leaves its telemetry poll stopped; a slow poll can no longer be overtaken and replay events out of order; Standard Live's footer no longer says router and PLE activity are unreported on a runtime that reports them.
+
 ## 1.0.0 — 2026-11-13
 
 The first tagged release: the Splash-m1 workstation as validated on an M1 Max (64 GiB), hardened to be reproducible, recoverable and checkable. No inference behaviour changed in the hardening work; the runtime, models, profiles and benchmarks are those of the ds2 promotion.

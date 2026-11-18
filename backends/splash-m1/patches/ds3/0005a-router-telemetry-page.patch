@@ -1,0 +1,157 @@
+diff --git a/runtime/ops/MoeTelemetry.hpp b/runtime/ops/MoeTelemetry.hpp
+new file mode 100644
+index 0000000..b08aa25
+--- /dev/null
++++ b/runtime/ops/MoeTelemetry.hpp
+@@ -0,0 +1,151 @@
++#pragma once
++
++// DwarfStar ds3 router telemetry: a small host-visible page the MoE grouping kernel adds to.
++//
++// The grouping kernel (moe_group_routes*) already counts, per expert, the routes a step selected:
++// one thread owns one expert. With a page bound and its mode word non-zero, that thread adds its
++// count to a [phase][layer][expert] histogram, and in the sampled modes the threads that own a
++// row's routes copy row 0's selected experts into a slot of a small ring. Nothing is recomputed,
++// nothing is read back by a command, and no command waits: the page is Shared storage, so the host
++// reads it whenever a telemetry poll asks, a little behind the GPU. Counters only ever grow, a
++// reader takes differences, and a torn read costs one interval's accuracy, never correctness.
++//
++// With no page (SPLASH_ROUTER_TELEMETRY=off, or a model past the page's bounds) every grouping
++// passes telemetry id 0 and the kernel tests one parameter word. With a page and mode 0, each
++// thread reads the mode word once and does nothing else.
++
++#include "metal/MetalBackend.hpp"
++#include "metal/abi/MoE.h"
++#include "ops/MoE.hpp"
++
++#include <atomic>
++#include <cstdlib>
++#include <cstring>
++#include <mutex>
++#include <vector>
++
++namespace splash::ops {
++
++class MoeTelemetryPage final {
++public:
++  // One page per process: the engine serves one model.
++  static MoeTelemetryPage &instance() noexcept {
++    static MoeTelemetryPage *page = new MoeTelemetryPage; // never destroyed: the backend owns the memory
++    return *page;
++  }
++
++  // The telemetry id of a block's grouping (MoeGroupParams::telemetry), 0 when the page cannot
++  // describe it. Allocates the page on first use.
++  [[nodiscard]] uint32_t id(metal::MetalBackend &backend, const MoeShape &shape, uint32_t layer, uint32_t layers,
++                            bool prefill) noexcept {
++    if (disabled_.load(std::memory_order_relaxed) || layer >= layers || layers > MOE_TM_MAX_LAYERS ||
++        shape.experts > MOE_TM_SLOTS || shape.expertsPerToken > MOE_TM_TOPK)
++      return 0;
++    const uint32_t id = 1u + layer + (prefill ? 1u << 16 : 0u);
++    // The graph is built every step: once the page describes this model, no lock and no store.
++    if (words_.load(std::memory_order_acquire) && layers_ == layers && experts_ == shape.experts &&
++        topK_ == shape.expertsPerToken)
++      return id;
++    const std::lock_guard<std::mutex> lock(mutex_);
++    if (!words_.load(std::memory_order_relaxed)) {
++      try {
++        buffer_ = backend.allocateBuffer(uint64_t{MOE_TM_WORDS} * sizeof(uint32_t), metal::BufferStorage::Shared,
++                                         "MoE router telemetry");
++      } catch (...) {
++        disabled_.store(true, std::memory_order_relaxed);
++        return 0;
++      }
++      auto *words = static_cast<uint32_t *>(buffer_.contents());
++      if (!words) {
++        disabled_.store(true, std::memory_order_relaxed);
++        return 0;
++      }
++      std::memset(words, 0, uint64_t{MOE_TM_WORDS} * sizeof(uint32_t));
++      words[MOE_TM_MAGIC_WORD] = MOE_TM_MAGIC;
++      words[MOE_TM_VERSION_WORD] = 1;
++      words[MOE_TM_SAMPLE_EVERY] = forcedMode_ == 3u ? 1u : sampleEvery_;
++      words[MOE_TM_MODE] = forcedMode_; // a benchmark's fixed mode; 0 in production, where polls set it
++      words_.store(words, std::memory_order_release);
++    }
++    uint32_t *words = words_.load(std::memory_order_relaxed);
++    words[MOE_TM_LAYERS_WORD] = layers_ = layers;
++    words[MOE_TM_EXPERTS_WORD] = experts_ = shape.experts;
++    words[MOE_TM_TOPK_WORD] = topK_ = shape.expertsPerToken;
++    return id;
++  }
++
++  // The buffer a grouping binds; empty without a page. buffer_ is set once, before words_ is
++  // published, and never changes after, so a reader that sees the page needs no lock.
++  [[nodiscard]] metal::MetalBuffer buffer() const {
++    if (words_.load(std::memory_order_acquire))
++      return buffer_;
++    return {};
++  }
++
++  [[nodiscard]] bool available() const noexcept { return words_.load(std::memory_order_acquire) != nullptr; }
++  [[nodiscard]] uint32_t layers() const noexcept { return layers_; }
++  [[nodiscard]] uint32_t experts() const noexcept { return experts_; }
++  [[nodiscard]] uint32_t topK() const noexcept { return topK_; }
++  [[nodiscard]] uint32_t defaultSampleEvery() const noexcept { return sampleEvery_; }
++  [[nodiscard]] uint32_t forcedMode() const noexcept { return forcedMode_; }
++
++  // 0 off, 1 aggregate, 2 sampled (every `every` decode steps), 3 exact (every step). One or two
++  // plain stores into Shared memory: the kernels read the words when they next run.
++  void setMode(uint32_t mode, uint32_t every) const noexcept {
++    if (forcedMode_)
++      return;
++    if (uint32_t *words = words_.load(std::memory_order_acquire)) {
++      words[MOE_TM_SAMPLE_EVERY] = every ? every : 1u;
++      words[MOE_TM_MODE] = mode;
++    }
++  }
++
++  // The mode and sampling period the kernels read now (0 and the default without a page).
++  [[nodiscard]] uint32_t liveMode() const noexcept {
++    const uint32_t *words = words_.load(std::memory_order_acquire);
++    return words ? words[MOE_TM_MODE] : 0u;
++  }
++  [[nodiscard]] uint32_t liveSampleEvery() const noexcept {
++    const uint32_t *words = words_.load(std::memory_order_acquire);
++    return words ? words[MOE_TM_SAMPLE_EVERY] : sampleEvery_;
++  }
++
++  // A copy of the page as it is now (the header and histograms; the sample ring too when asked);
++  // false without a page. No GPU work: a memcpy of Shared memory.
++  [[nodiscard]] bool snapshot(std::vector<uint32_t> &out, bool samples) const {
++    const uint32_t *words = words_.load(std::memory_order_acquire);
++    if (!words)
++      return false;
++    out.resize(MOE_TM_WORDS);
++    const uint32_t count = samples ? MOE_TM_WORDS : MOE_TM_SAMPLES;
++    std::memcpy(out.data(), words, uint64_t{count} * sizeof(uint32_t));
++    return true;
++  }
++
++private:
++  MoeTelemetryPage() {
++    if (const char *value = std::getenv("SPLASH_ROUTER_TELEMETRY"))
++      disabled_.store(std::strcmp(value, "off") == 0 || std::strcmp(value, "0") == 0, std::memory_order_relaxed);
++    // Research only: hold a mode from the start with nobody polling, to measure the kernel's cost alone.
++    if (const char *value = std::getenv("SPLASH_ROUTER_TELEMETRY_FORCE")) {
++      const long mode = std::strtol(value, nullptr, 10);
++      if (mode >= 0 && mode <= 3)
++        forcedMode_ = static_cast<uint32_t>(mode);
++    }
++    if (const char *value = std::getenv("SPLASH_ROUTER_SAMPLE_EVERY")) {
++      const long every = std::strtol(value, nullptr, 10);
++      if (every >= 1 && every <= 4096)
++        sampleEvery_ = static_cast<uint32_t>(every);
++    }
++  }
++
++  mutable std::mutex mutex_;
++  metal::MetalBuffer buffer_;
++  std::atomic<uint32_t *> words_{nullptr};
++  std::atomic<bool> disabled_{false};
++  // Written under mutex_ (one model per process: in practice once); read unlocked by id()'s fast path.
++  std::atomic<uint32_t> layers_{0}, experts_{0}, topK_{0};
++  uint32_t sampleEvery_ = 8, forcedMode_ = 0;
++};
++
++} // namespace splash::ops

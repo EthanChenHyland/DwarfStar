@@ -454,7 +454,9 @@ function renderLive() {
         <div class="panel"><h2>Processor</h2><canvas class="spark" id="spark-gpu"></canvas><div class="legend" id="gpu-legend"></div></div>
         <div class="panel"><h2>Tool activity</h2><div class="timeline" id="live-tools"></div></div>
       </div>
-      <p class="faint small section">Not reported by Splash: router selections, expert activity and PLE reads. The Advanced view labels these regions instead of drawing estimates.</p>`;
+      <p class="faint small section">${(model?.backend?.telemetry?.routing || "unavailable") !== "unavailable"
+        ? "Router and expert activity and PLE row reads are reported as aggregates (sampled selections on request) in the Advanced view."
+        : "Not reported by Splash: router selections, expert activity and PLE reads. The Advanced view labels these regions instead of drawing estimates."}</p>`;
   }
   const metric = (label, value, sub = "") => `<div class="metric"><div class="label">${label}</div><div class="value">${value}</div><div class="sub">${sub}</div></div>`;
   const ms = (v) => v == null ? NA : v >= 1000 ? (v / 1000).toFixed(2) + "<small>s</small>" : Math.round(v) + "<small>ms</small>";

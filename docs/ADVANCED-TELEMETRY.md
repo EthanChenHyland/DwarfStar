@@ -1,6 +1,6 @@
-# Advanced telemetry (the ds2 runtime)
+# Advanced telemetry (the ds2 runtime, and the base of ds3)
 
-DwarfStar's production runtime is **`splash-m1-1.6.1-ds2-telemetry`** (ds2): the ds1 build plus a bounded in-engine telemetry channel that restores a per-verify-cycle view of speculative decoding, without changing inference. This page documents what it reports, how it is built, and the overhead that was measured before it was promoted. The earlier ds1 build remains pinned as the rollback.
+**`splash-m1-1.6.1-ds2-telemetry`** (ds2) was DwarfStar's production runtime until ds3 ([DS3-GPU-TELEMETRY.md](DS3-GPU-TELEMETRY.md)), which keeps everything here and adds GPU router and PLE aggregates; ds2 is now the rollback. ds2 is the ds1 build plus a bounded in-engine telemetry channel that restores a per-verify-cycle view of speculative decoding, without changing inference. This page documents what it reports, how it is built, and the overhead that was measured before it was promoted. The earlier ds1 build remains pinned behind it.
 
 ## What it adds
 
@@ -23,6 +23,8 @@ The runtime declares what it can report; the Visualizer renders only these and l
 ## Why not router/expert
 
 This was the primary target of the restoration experiment, and it was investigated at the source level and declined. In Splash, a decode step's `selectedExperts` buffer is scratch that every one of the 48 layers overwrites in turn, and it is GPU-private. By the time the engine's CPU-side completion handler runs, the buffer holds only the last layer's selection. Capturing all layers would require adding per-layer GPU→host copy commands to every decode step — work on the critical path, on a small GPU — which is what the retired native runtime did and what this experiment's hard rule forbids: telemetry must never slow inference. A sampled variant would need the same hot-path machinery, invoked occasionally. The honest outcome is that router/expert telemetry is not available on Splash within the zero-overhead constraint; the panel says so.
+
+**Follow-up (ds3 experiment).** The copy-out approach above stays declined. ds3 instead aggregates *inside* the MoE grouping kernel that already counts each step's routes per expert, into a small host-visible page the engine reads on a poll with no command and no wait — see [DS3-GPU-TELEMETRY.md](DS3-GPU-TELEMETRY.md). ds2 remains the production runtime unless ds3 is promoted.
 
 ## Measured overhead
 
