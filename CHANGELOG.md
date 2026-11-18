@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.1.1 — 2026-11-18
+
+A patch release: bug fixes and maintenance cleanup in the Workstation's telemetry internals. **ds3 stays the production runtime; the engine, its patches and inference behaviour are unchanged.** No persistent-data schema changed; chats, folders, settings and Zed entries carry over as they are.
+
+### Fixed
+
+* The Advanced view kept drawing after you left it; leaving now stops its drawing loop and telemetry poll (idle CPU after visiting Advanced: 4.2 % → 0.4 %; Standard: 4.3 % → 0.8 %).
+* PLE read state grew without bound on ds3 while the Advanced view was open.
+* The first frame before any telemetry, and the first frame after a replay, could throw and leave the processor blank.
+* The Advanced status read "idle · last run" while a prompt was prefilling; it now says "prefilling a prompt".
+* On ds1 and ds2 (and in a replay) Layer focus showed a layer picker with nothing to pick; it now follows the routing capability like the Sampled toggle.
+
+### Cleaned up
+
+* The retired native runtime's telemetry path: per-token `tick` events, hub router heat, `/api/heat` and per-subscriber detail levels. Splash never emitted them and no kept recording contains them.
+* The native router and PLE renderers, the dead Requests panel, old MTP naming and state, unused capability fields (`backend.telemetry` is now exactly `dflash`, `routing`, `routing_levels`, `ple`), and CSS nothing used.
+* The Workstation keeps one event stream for the window's life instead of reconnecting it at a different detail level on every view change.
+* Replays draw what a recording holds (tool actions and runtime events) and say "not in this recording" for the rest.
+
+### Telemetry export
+
+* Request export is **format 2**: it names the engine's telemetry schema and the runtime's capabilities, states the cycle semantics (DFlash2 verify cycles, exact) and adds the request's PLE totals. Every format-1 field is kept; nothing in DwarfStar reads export files back, so no migration is needed.
+
+See docs/GUI-TELEMETRY-AUDIT.md for the audit behind this release.
+
 ## 1.1.0 — 2026-11-18
 
 A backwards-compatible feature release: Splash ds3 restores the rich Advanced visualisation with telemetry aggregated on the GPU. No persistent-data schema changed; chats, folders, settings and Zed entries carry over as they are.
