@@ -372,7 +372,8 @@
   }
   function exportRequest(r) {
     // Format 2 (DwarfStar 1.1+): telemetry schema and capabilities named; cycles exact per verify cycle (DFlash2);
-    // router routes aggregate (optionally with sampled selections); PLE rows aggregate. Format 1 had no router or PLE.
+    // router routes aggregate (optionally with sampled selections); PLE rows aggregate. Format 1 (1.1.0) had the same
+    // fields without telemetry_schema, cycles_semantics and ple. Nothing in DwarfStar reads these files back.
     const document_ = {
       kind: "DwarfStar request telemetry", format: 2, name: r.label, model: r.model, profile: r.profile || null,
       started: new Date(r.wall).toISOString(), telemetry_schema: V.telemetrySchema ?? null, capabilities: caps(),
