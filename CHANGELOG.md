@@ -1,17 +1,43 @@
 # Changelog
 
-## Unreleased — ds3 GPU telemetry
+## 1.1.0 — 2026-11-18
 
-### Runtime
+A backwards-compatible feature release: Splash ds3 restores the rich Advanced visualisation with telemetry aggregated on the GPU. No persistent-data schema changed; chats, folders, settings and Zed entries carry over as they are.
 
-* **ds3 is the production runtime** (`splash-m1-1.6.1-ds3-gpu-telemetry`, engine `ae07f09a…`, shaders `1d9ae6f5…`): ds2 plus GPU-side router telemetry. The MoE grouping kernel adds the routes it already counts per layer and expert into a 0.5 MB host-visible page that the engine reads on a `/telemetry` poll with no GPU command and no wait; optional sampled selections (row 0 of one decode step in N); PLE row-store and expert-store aggregates. Overhead within noise of ds2 (OFF +0.36 % decode in an interleaved A/B). ds2 is the rollback (`config/runtime-policy.json`). `build_splash.sh --ds3` reproduces it byte for byte.
-* `/telemetry` schema 2: every consumer gets every event's detail (kept by sequence, 4 MiB); each telemetry level lapses on its own 3 s after its last poll.
+### Splash ds3
+
+* **Production runtime is now `splash-m1-1.6.1-ds3-gpu-telemetry`** (engine `ae07f09a…`, shaders `1d9ae6f5…`), built from the same pinned Splash-m1 1.6.1-m1 source with `scripts/backends/build_splash.sh --ds3`, which reproduces it byte for byte. **ds2 (`splash-m1-1.6.1-ds2-telemetry`) stays installed and pinned as the rollback**: set `config/runtime-policy.json` back to it, `dwarfstar generate`, restart.
+* Router telemetry is **aggregated on the GPU**: the MoE grouping kernel already counts each step's routes per expert and now adds those counts to a 0.5 MB host-visible page. The engine reads it when a telemetry consumer polls, with a memory copy — no GPU command, no fence and no GPU→CPU synchronisation was added to the decode path. With nobody polling, the counters switch off.
+* Optional **sampled selections** copy the experts row 0 of one decode step in N chose (N = 8 by default). Exact router weights are not available, and aggregates count routes executed (including speculative rows a later check rejects); nothing is presented as exact per-token routing.
+* **PLE telemetry** from the row store's own counters: rows requested, cache hits, SSD reads, bytes and read latency.
+* `GET /telemetry` schema 2: every consumer receives every event's detail (kept by sequence, bounded at 4 MiB), and each detail level lapses on its own 3 s after its last poll. ds2's exact per-verify-cycle DFlash2 records are unchanged.
+
+### Restored Advanced visualisation
+
+* Router activity per layer, a **layer × expert heatmap**, **Layer focus** (busiest experts with shares), **expert utilisation** and **routing concentration** (top-10 share, effective experts), **sampled expert selections**, and PLE activity and cache hits — alongside the existing exact DFlash2 verify-cycle telemetry.
+* About **90 % of the useful native-era visualisation** is back (docs/DS3-GPU-TELEMETRY.md §9).
 
 ### Workstation
 
-* **Advanced Live** draws router aggregates: per-layer recent routing, Layer focus (busiest experts, concentration), a layers × experts heatmap (session or request); the views follow the phase the model is in (prefill, then decode), shown in the badge, an AGGREGATE / SAMPLED 1 IN N badge and a *Sampled selections* switch; the PLE card shows read rate, cache hits and latency. Request export adds `router` with `router_mode`.
-* The DFlash2 card's draft-token animation is replaced by a bar per recent verify cycle (accepted / rejected); the output stream shows the decode rate of the current or last run; the memory panel shows the latest request's context. MTP-era labels and the flying PLE dots are gone.
-* Fixed: returning to the Advanced view after another view no longer leaves its telemetry poll stopped; a slow poll can no longer be overtaken and replay events out of order; Standard Live's footer no longer says router and PLE activity are unreported on a runtime that reports them.
+* The phase **follows the engine automatically**: prefill while a prompt is processed, decode while the model generates, on one display. There is no Decode/Prefill toggle any more.
+* A badge reports what is drawn and the phase: `AGGREGATE · DECODE`, `SAMPLED 1 IN 8 · PREFILL`.
+* The current **tok/s** displays correctly (the run being generated, else the last run), and the memory panel shows the latest request's context.
+* A bar per recent verify cycle (accepted / rejected drafts) replaces the old flying MTP-style draft pills; the PLE dots that crossed the panels and stale native labels ("Trunk + MTP") are gone.
+* Request export adds a `router` section with `router_mode: aggregate|sampled`.
+* Fixed: returning to the Advanced view after another view left its telemetry poll stopped; a slow poll could be overtaken and replay events out of order; Standard Live's footer said router and PLE activity were unreported on a runtime that reports them.
+
+### Performance
+
+Measured on Scope (M1 Max), per verify cycle and adjusted for draft length, against ds2 in the same session; ordinary run-to-run variation is about ±1 %:
+
+* ds3 with nobody watching (OFF): about **+0.36 %** decode (interleaved A/B), −0.01 % on short requests.
+* Aggregate router + PLE, with the view polling: about **+0.11 %** decode.
+* Sampled modes (1 in 16, 8 or 4): roughly **+0.12 to +0.36 %** decode.
+* Memory: about **+0.001 GiB** at peak. Time to first token, prefill rate and draft acceptance are unchanged.
+
+### Limitations
+
+Still unavailable: router gate weights; the exact expert selections of every speculative row (counted in the aggregates, not sampled); per-token PLE reads (reported per interval); per-request prompt rows where the runtime records none. These reduce granularity, not the main operational views.
 
 ## 1.0.0 — 2026-11-13
 

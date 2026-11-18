@@ -69,7 +69,7 @@ Chats, folders and settings are kept; the service migrates stored data when it n
 | [Reproducibility](docs/REPRODUCIBILITY.md) | Code → runtime → assets → data, pins, rebuilding |
 | [Development](docs/DEVELOPMENT.md) | Setup, validation, changing the catalog |
 | [Demo](docs/DEMO.md) | A ten-minute walkthrough |
-| [Changelog](CHANGELOG.md) · [Final audit](docs/FINAL-PRODUCT-AUDIT.md) | What 1.0.0 contains; the last audit, ranked remaining work |
+| [Changelog](CHANGELOG.md) · [Final audit](docs/FINAL-PRODUCT-AUDIT.md) | What each release contains (1.1.0: Splash ds3 GPU telemetry); the last audit, ranked remaining work |
 
 ## Status
 

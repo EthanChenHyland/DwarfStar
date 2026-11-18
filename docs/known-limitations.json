@@ -6,7 +6,7 @@
    "swift",
    "cyber"
   ],
-  "text": "Splash-m1 reports requests, time to first token, inter-token latency, prefill/decode rates, draft acceptance, prefix-cache hits, context, memory and thermal state via /status, and the production ds2 build adds a bounded per-verify-cycle speculative-decode channel (GET /telemetry) with no measurable inference cost. Per-token router selections, expert utilization and PLE reads are still not reported: Splash's per-step MoE scratch is GPU-private and reused across layers, so capturing it would need host copies on the decode hot path, which the zero-overhead rule forbids. The Advanced view labels those regions 'not reported' instead of estimating them. See docs/ADVANCED-TELEMETRY.md."
+  "text": "Splash-m1 reports requests, time to first token, inter-token latency, prefill/decode rates, draft acceptance, prefix-cache hits, context, memory and thermal state via /status; the production ds3 build adds per-verify-cycle speculative decoding (from ds2) and GPU-side router aggregates (routes per layer and expert, counted by the MoE grouping kernel and read without a GPU command or wait), optional sampled selections (row 0 of one decode step in 8) and PLE row-store aggregates, within run-to-run noise of ds2. About 90 % of the useful native-era visualisation is restored. Still unavailable: router gate weights, the expert selections of every speculative row (they are counted in the aggregates, not sampled), per-token PLE reads (reported per interval), and per-request prompt rows where the runtime records none. These reduce granularity, not the operational views; nothing is estimated."
  },
  {
   "id": "splash-dflash-draft",
@@ -101,7 +101,7 @@
    "swift",
    "cyber"
   ],
-  "text": "The Visualizer's request history is built from the ds2 per-cycle channel, which reports decode cycles, not request ids. A request there is one uninterrupted decode run, split after 400 ms with no cycle; agent turns always separate (tool time and prefill produce no cycles), but two clients decoding at once would share one entry. History lives in the window only (last 20 requests, first 4,096 cycles each) and is gone on reload."
+  "text": "The Visualizer's request history is built from the per-cycle channel (ds2 and later), which reports decode cycles, not request ids. A request there is one uninterrupted decode run, split after 400 ms with no cycle; agent turns always separate (tool time and prefill produce no cycles), but two clients decoding at once would share one entry. History lives in the window only (last 20 requests, first 4,096 cycles each) and is gone on reload. On ds3 a request's routing is assigned by engine time to the decode run it overlaps: exact inside the run, approximate at its first and last ~180 ms interval."
  },
  {
   "id": "older-builds-chat-schema",

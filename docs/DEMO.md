@@ -22,7 +22,7 @@ Full Auto approves workspace actions without prompts.
 
 Open **Live** while the agent works. The **Standard** view shows Splash's own measurements: the latest request, then running time to first token, inter-token latency, prefill and decode rates, draft acceptance, prefix-cache hits, context, memory and the tool activity.
 
-Toggle to **Advanced** (the data map). It shows where the model's data lives, the draft, context and memory, and the agent's actions on a timeline. Splash does not report per-token router selections or PLE reads, so those regions are labelled "not reported" rather than animated — nothing is estimated. (A replayed session recorded on the earlier native runtime does show its router and PLE detail.)
+Toggle to **Advanced** (the data map). It shows where the model's data lives, the draft, context and memory, and the agent's actions on a timeline. The processor region shows router activity from the GPU — routes per layer, a layer's busiest experts, the layers × experts heatmap — following the model from PREFILL to DECODE on its own, and the storage card shows the PLE table's read rate and cache hits. A badge says what is drawn (AGGREGATE, or SAMPLED 1 IN 8 with *Sampled selections* on); the DFlash2 card shows each recent verify cycle's accepted and rejected drafts. Router weights and per-token PLE reads are not reported, and nothing is estimated. (A replayed session recorded on the earlier native runtime shows its own router and PLE detail.)
 
 ## 5. Chat in the Workstation
 

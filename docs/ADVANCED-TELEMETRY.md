@@ -18,13 +18,13 @@ The runtime declares what it can report; the Visualizer renders only these and l
 |---|---|---|
 | DFlash speculative decode | **per cycle** | proposals/accepted/rejected per verify step, from the engine's own counters |
 | Requests, TTFT, latency, prefill/decode, prefix cache, memory, thermal, KV, PLE throughput | via `/status` | already reported; the UI takes deltas |
-| Router selections, expert utilization | **not reported** | Splash's per-step MoE scratch is reused across layers and GPU-private; capturing it needs host copies on the decode hot path, which the zero-overhead bar rules out (see below) |
+| Router selections, expert utilization | **not reported by ds2** (ds3 reports aggregates) | Splash's per-step MoE scratch is reused across layers and GPU-private; capturing it needs host copies on the decode hot path, which the zero-overhead bar rules out (see below) |
 
 ## Why not router/expert
 
 This was the primary target of the restoration experiment, and it was investigated at the source level and declined. In Splash, a decode step's `selectedExperts` buffer is scratch that every one of the 48 layers overwrites in turn, and it is GPU-private. By the time the engine's CPU-side completion handler runs, the buffer holds only the last layer's selection. Capturing all layers would require adding per-layer GPU→host copy commands to every decode step — work on the critical path, on a small GPU — which is what the retired native runtime did and what this experiment's hard rule forbids: telemetry must never slow inference. A sampled variant would need the same hot-path machinery, invoked occasionally. The honest outcome is that router/expert telemetry is not available on Splash within the zero-overhead constraint; the panel says so.
 
-**Follow-up (ds3 experiment).** The copy-out approach above stays declined. ds3 instead aggregates *inside* the MoE grouping kernel that already counts each step's routes per expert, into a small host-visible page the engine reads on a poll with no command and no wait — see [DS3-GPU-TELEMETRY.md](DS3-GPU-TELEMETRY.md). ds2 remains the production runtime unless ds3 is promoted.
+**Follow-up: ds3 (production from 1.1.0).** The copy-out approach above stays declined. ds3 instead aggregates *inside* the MoE grouping kernel that already counts each step's routes per expert, into a small host-visible page the engine reads on a poll with no command and no wait — see [DS3-GPU-TELEMETRY.md](DS3-GPU-TELEMETRY.md). ds2 remains the production runtime unless ds3 is promoted.
 
 ## Measured overhead
 
@@ -66,4 +66,4 @@ A clean rebuild reproduces the engine hash exactly. The ring header and endpoint
 
 ## Rollback
 
-ds1 is unchanged and still pinned in `config/runtimes.json`. To revert: set `config/runtime-policy.json` `model_defaults.runtime` back to `splash-m1-1.6.1-ds1`, `bin/dwarfstar generate`, restart the service, and verify a tiny Scope generation. The Advanced view then shows the aggregate draft acceptance and labels per-cycle drafts "not reported", exactly as before. Checkpoint tag: `checkpoint/pre-advanced-telemetry-20261113`.
+From ds3, roll back to ds2 (docs/DS3-GPU-TELEMETRY.md). From ds2: ds1 is unchanged and still pinned in `config/runtimes.json`. To revert: set `config/runtime-policy.json` `model_defaults.runtime` back to `splash-m1-1.6.1-ds1`, `bin/dwarfstar generate`, restart the service, and verify a tiny Scope generation. The Advanced view then shows the aggregate draft acceptance and labels per-cycle drafts "not reported", exactly as before. Checkpoint tag: `checkpoint/pre-advanced-telemetry-20261113`.
