@@ -598,7 +598,7 @@
   function drawOverview(px, py, pw, ph, ds3, layers, experts, recentLive, now) {
     const g = V.g, stripX = px + 62, stripW = pw - 62, rowH = ph / layers;
     if (recentLive) drawImageCells(heatImage("recent", ds3.recent, layers, experts, ds3.version, true), stripX, py, stripW, ph);
-    const sample = ds3.sample && now - ds3.sampleAt < 3000 && !V.viewing ? ds3.sample : null;
+    const sample = ds3 && ds3.sample && now - ds3.sampleAt < 3000 && !V.viewing ? ds3.sample : null;
     const every = Math.max(1, Math.ceil(layers / 8));
     for (let l = 0; l < layers; l++) {
       const ry = py + l * rowH;
