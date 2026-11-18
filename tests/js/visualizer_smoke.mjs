@@ -127,6 +127,10 @@ root.querySelector("#viz-pause").onclick(); await tick("replay ended (router not
 
 current = model(DS2); telemetry = ds2Batch();
 await modes("ds2 fallback");
+root.querySelector('[data-mode="layer"]').click(); await tick("ds2 layer focus");
+if (root.querySelector("#viz-layer-wrap").style.display !== "none") failures.push("ds2: the layer picker shows although routing is not reported");
+if (root.querySelector("#viz-sampled-wrap").style.display !== "none") failures.push("ds2: the Sampled toggle shows although routing is not reported");
+root.querySelector('[data-mode="overview"]').click();
 current = model(DS1); telemetry = { schema: 1, next: seq, dropped: 0, events: [] };
 await modes("ds1 (no cycles)");
 

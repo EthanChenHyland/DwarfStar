@@ -46,6 +46,8 @@
   function routing() { return V.replay ? "unavailable" : caps().routing || "unavailable"; }
   function pleReported() { return !V.replay && caps().ple === "aggregate"; }
   function hasRouting() { return routing() !== "unavailable"; }
+  // The layer picker means something only where routing is reported (not on ds2/ds1, not in a replay).
+  function syncLayerSlider() { V.root.querySelector("#viz-layer-wrap").style.display = V.mode === "layer" && hasRouting() ? "" : "none"; }
   function routerModeLabel() {
     const r = V.router;
     if (!r) return "aggregate";
@@ -91,7 +93,7 @@
     V.root.querySelectorAll("[data-mode]").forEach((b) => b.onclick = () => {
       V.mode = b.dataset.mode;
       V.root.querySelectorAll("[data-mode]").forEach((x) => x.classList.toggle("selected", x === b));
-      V.root.querySelector("#viz-layer-wrap").style.display = V.mode === "layer" ? "" : "none";
+      syncLayerSlider();
     });
     const layer = V.root.querySelector("#viz-layer");
     layer.oninput = () => { V.focusLayer = +layer.value; V.root.querySelector("#viz-layer-n").textContent = layer.value; };
@@ -806,6 +808,7 @@
     const key = m.id + (D.runningModel() || "") + routing() + (V.replay ? "r" : ""); if (factsFor === key) return; factsFor = key;
     const sampled = hasRouting() && (caps().routing_levels || []).includes("sampled");
     V.root.querySelector("#viz-sampled-wrap").style.display = sampled ? "" : "none";
+    syncLayerSlider();
     if (hasRouting()) {
       V.root.querySelector("#viz-facts").innerHTML = `
       <p><b>Storage.</b> Only the PLE n-gram table (${D.esc(m.quantization.ple.split(",")[0])}, ${(S.catalog.details[m.id].assets.ple.bytes / 2 ** 30).toFixed(1)} GiB) is read from disk while the model runs, a few rows per token; the row store reports its requests, cache hits and SSD reads, shown here per poll. The model, the draft model and the vision projector stay resident in unified memory.</p>
